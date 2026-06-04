@@ -1,5 +1,5 @@
 {
-  "name": "@monolith/config",
-  "version": "0.0.0",
-  "private": true
+	"name": "@whatsapp-flow/config",
+	"version": "0.0.0",
+	"private": true
 }

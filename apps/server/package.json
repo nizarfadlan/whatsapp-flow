@@ -1,30 +1,30 @@
 {
-  "name": "server",
-  "type": "module",
-  "main": "src/index.ts",
-  "scripts": {
-    "build": "tsdown",
-    "check-types": "tsc -b",
-    "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
-    "dev": "bun run --hot src/index.ts",
-    "start": "bun run dist/index.mjs"
-  },
-  "dependencies": {
-    "@hono/trpc-server": "^0.4.0",
-    "@monolith/api": "workspace:*",
-    "@monolith/auth": "workspace:*",
-    "@monolith/db": "workspace:*",
-    "@monolith/env": "workspace:*",
-    "@trpc/server": "catalog:",
-    "better-auth": "catalog:",
-    "dotenv": "catalog:",
-    "hono": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@monolith/config": "workspace:*",
-    "@types/bun": "catalog:",
-    "tsdown": "^0.21.9",
-    "typescript": "catalog:"
-  }
+	"name": "server",
+	"type": "module",
+	"main": "src/index.ts",
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc -b",
+		"compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
+		"dev": "bun run --hot src/index.ts",
+		"start": "bun run dist/index.mjs"
+	},
+	"dependencies": {
+		"@hono/trpc-server": "^0.4.0",
+		"@whatsapp-flow/api": "workspace:*",
+		"@whatsapp-flow/auth": "workspace:*",
+		"@whatsapp-flow/db": "workspace:*",
+		"@whatsapp-flow/env": "workspace:*",
+		"@trpc/server": "catalog:",
+		"better-auth": "catalog:",
+		"dotenv": "catalog:",
+		"hono": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@whatsapp-flow/config": "workspace:*",
+		"@types/bun": "catalog:",
+		"tsdown": "^0.21.9",
+		"typescript": "catalog:"
+	}
 }

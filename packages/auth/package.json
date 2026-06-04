@@ -1,24 +1,24 @@
 {
-  "name": "@monolith/auth",
-  "type": "module",
-  "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    },
-    "./*": {
-      "default": "./src/*.ts"
-    }
-  },
-  "scripts": {},
-  "dependencies": {
-    "@monolith/db": "workspace:*",
-    "@monolith/env": "workspace:*",
-    "better-auth": "catalog:",
-    "dotenv": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@monolith/config": "workspace:*",
-    "typescript": "catalog:"
-  }
+	"name": "@whatsapp-flow/auth",
+	"type": "module",
+	"exports": {
+		".": {
+			"default": "./src/index.ts"
+		},
+		"./*": {
+			"default": "./src/*.ts"
+		}
+	},
+	"scripts": {},
+	"dependencies": {
+		"@whatsapp-flow/db": "workspace:*",
+		"@whatsapp-flow/env": "workspace:*",
+		"better-auth": "catalog:",
+		"dotenv": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@whatsapp-flow/config": "workspace:*",
+		"typescript": "catalog:"
+	}
 }

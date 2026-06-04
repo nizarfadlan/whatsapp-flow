@@ -1,4 +1,4 @@
-# monolith
+# whatsapp-flow
 
 This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Start, Hono, TRPC, and more.
 
@@ -67,7 +67,7 @@ npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
 Import shared components like this:
 
 ```tsx
-import { Button } from "@monolith/ui/components/button";
+import { Button } from "@whatsapp-flow/ui/components/button";
 ```
 
 ### Add app-specific blocks
@@ -82,7 +82,7 @@ If you want to add app-specific blocks instead of shared primitives, run the sha
 ## Project Structure
 
 ```
-monolith/
+whatsapp-flow/
 ├── apps/
 │   ├── web/         # Frontend application (React + TanStack Start)
 │   └── server/      # Backend API (Hono, TRPC)

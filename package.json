@@ -1,63 +1,63 @@
 {
-  "name": "monolith",
-  "private": true,
-  "workspaces": {
-    "packages": [
-      "apps/*",
-      "packages/*"
-    ],
-    "catalog": {
-      "dotenv": "^17.2.2",
-      "zod": "^4.1.13",
-      "typescript": "^6",
-      "@types/bun": "^1.3.4",
-      "hono": "^4.8.2",
-      "@trpc/server": "^11.16.0",
-      "better-auth": "1.6.11",
-      "next-themes": "^0.4.6",
-      "react": "^19.2.6",
-      "react-dom": "^19.2.6",
-      "@trpc/client": "^11.16.0",
-      "@types/react": "^19.2.15",
-      "@types/react-dom": "^19.2.3"
-    }
-  },
-  "type": "module",
-  "scripts": {
-    "dev": "turbo dev",
-    "build": "turbo build",
-    "check-types": "turbo check-types",
-    "dev:web": "turbo -F web dev",
-    "dev:server": "turbo -F server dev",
-    "db:push": "turbo -F @monolith/db db:push",
-    "db:studio": "turbo -F @monolith/db db:studio",
-    "db:generate": "turbo -F @monolith/db db:generate",
-    "db:migrate": "turbo -F @monolith/db db:migrate",
-    "db:start": "turbo -F @monolith/db db:start",
-    "db:watch": "turbo -F @monolith/db db:watch",
-    "db:stop": "turbo -F @monolith/db db:stop",
-    "db:down": "turbo -F @monolith/db db:down",
-    "check": "biome check --write .",
-    "prepare": "husky"
-  },
-  "dependencies": {
-    "@monolith/env": "workspace:*",
-    "dotenv": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.2.0",
-    "@monolith/config": "workspace:*",
-    "@types/bun": "catalog:",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.1.2",
-    "turbo": "^2.8.12",
-    "typescript": "catalog:"
-  },
-  "lint-staged": {
-    "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": [
-      "biome check --write ."
-    ]
-  },
-  "packageManager": "bun@1.3.13"
+	"name": "whatsapp-flow",
+	"private": true,
+	"workspaces": {
+		"packages": [
+			"apps/*",
+			"packages/*"
+		],
+		"catalog": {
+			"dotenv": "^17.2.2",
+			"zod": "^4.1.13",
+			"typescript": "^6",
+			"@types/bun": "^1.3.4",
+			"hono": "^4.8.2",
+			"@trpc/server": "^11.16.0",
+			"better-auth": "1.6.11",
+			"next-themes": "^0.4.6",
+			"react": "^19.2.6",
+			"react-dom": "^19.2.6",
+			"@trpc/client": "^11.16.0",
+			"@types/react": "^19.2.15",
+			"@types/react-dom": "^19.2.3"
+		}
+	},
+	"type": "module",
+	"scripts": {
+		"dev": "turbo dev",
+		"build": "turbo build",
+		"check-types": "turbo check-types",
+		"dev:web": "turbo -F web dev",
+		"dev:server": "turbo -F server dev",
+		"db:push": "turbo -F @whatsapp-flow/db db:push",
+		"db:studio": "turbo -F @whatsapp-flow/db db:studio",
+		"db:generate": "turbo -F @whatsapp-flow/db db:generate",
+		"db:migrate": "turbo -F @whatsapp-flow/db db:migrate",
+		"db:start": "turbo -F @whatsapp-flow/db db:start",
+		"db:watch": "turbo -F @whatsapp-flow/db db:watch",
+		"db:stop": "turbo -F @whatsapp-flow/db db:stop",
+		"db:down": "turbo -F @whatsapp-flow/db db:down",
+		"check": "biome check --write .",
+		"prepare": "husky"
+	},
+	"dependencies": {
+		"@whatsapp-flow/env": "workspace:*",
+		"dotenv": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.0",
+		"@whatsapp-flow/config": "workspace:*",
+		"@types/bun": "catalog:",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.1.2",
+		"turbo": "^2.8.12",
+		"typescript": "catalog:"
+	},
+	"lint-staged": {
+		"*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": [
+			"biome check --write ."
+		]
+	},
+	"packageManager": "bun@1.3.13"
 }

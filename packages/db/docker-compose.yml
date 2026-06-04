@@ -1,17 +1,17 @@
-name: monolith
+name: whatsapp-flow
 
 services:
   postgres:
     image: postgres
-    container_name: monolith-postgres
+    container_name: whatsapp-flow-postgres
     environment:
-      POSTGRES_DB: monolith
+      POSTGRES_DB: whatsapp-flow
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
     ports:
       - "5432:5432"
     volumes:
-      - monolith_postgres_data:/var/lib/postgresql
+      - whatsapp-flow_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -20,4 +20,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  monolith_postgres_data:
+  whatsapp-flow_postgres_data:

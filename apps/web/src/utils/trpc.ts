@@ -1,4 +1,5 @@
-import type { AppRouter } from "@monolith/api/routers/index";
 import { createTRPCContext } from "@trpc/tanstack-react-query";
+import type { AppRouter } from "@whatsapp-flow/api/routers/index";
 
-export const { TRPCProvider, useTRPC, useTRPCClient } = createTRPCContext<AppRouter>();
+export const { TRPCProvider, useTRPC, useTRPCClient } =
+	createTRPCContext<AppRouter>();
