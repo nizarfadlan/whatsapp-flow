@@ -8,7 +8,7 @@ import {
 	fetchLatestBaileysVersion,
 	makeWASocket,
 	type WAMessage,
-} from "@whiskeysockets/baileys";
+} from "baileys";
 import { eq } from "drizzle-orm";
 import QRCode from "qrcode";
 import { clearDbAuthState, useDbAuthState } from "./auth-state";

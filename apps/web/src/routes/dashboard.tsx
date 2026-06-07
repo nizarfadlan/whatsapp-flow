@@ -1,7 +1,10 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
-import { Bot, Sparkles } from "lucide-react";
-import Sidebar from "@/components/sidebar";
+import { Separator } from "@whatsapp-flow/ui/components/separator";
+import { Activity, PanelLeft, Sparkles } from "lucide-react";
+
+import { DashboardSidebar, MobileSidebarTrigger } from "@/components/sidebar";
+import UserMenu from "@/components/user-menu";
 import { getUser } from "@/functions/get-user";
 
 export const Route = createFileRoute("/dashboard")({
@@ -18,41 +21,49 @@ export const Route = createFileRoute("/dashboard")({
 });
 
 function DashboardLayout() {
-	const { session } = Route.useRouteContext();
-
 	return (
-		<div className="flex h-full bg-muted/20">
-			<Sidebar />
-			<main className="min-w-0 flex-1 overflow-y-auto">
-				<div className="border-border/70 border-b bg-background/80 px-4 py-4 backdrop-blur md:px-6">
-					<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-						<div className="min-w-0">
-							<div className="mb-1 flex items-center gap-2">
-								<span className="flex size-7 items-center justify-center border bg-primary/10 text-primary">
-									<Bot className="size-3.5" />
-								</span>
-								<Badge variant="secondary" className="gap-1 text-[10px]">
-									<Sparkles className="size-3" />
-									Builder workspace
-								</Badge>
-							</div>
-							<h1 className="font-semibold text-xl tracking-tight">
-								Dashboard
-							</h1>
-							<p className="text-muted-foreground text-xs">
-								Manage devices, design flows, and monitor WhatsApp automation.
-							</p>
-						</div>
-						<div className="border bg-card px-3 py-2 text-right shadow-sm">
-							<p className="text-[10px] text-muted-foreground">Signed in as</p>
-							<p className="font-medium text-xs">{session?.user.name}</p>
-						</div>
+		<div className="flex h-svh overflow-hidden bg-background">
+			<DashboardSidebar />
+			<div className="flex min-w-0 flex-1 flex-col">
+				<header className="flex h-14 shrink-0 items-center gap-3 border-border/70 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/75 md:px-6">
+					<MobileSidebarTrigger />
+					<div className="hidden items-center gap-2 text-muted-foreground md:flex">
+						<PanelLeft className="size-4" />
+						<Separator orientation="vertical" className="h-4" />
 					</div>
-				</div>
-				<div className="p-4 md:p-6">
-					<Outlet />
-				</div>
-			</main>
+					<div className="min-w-0 flex-1">
+						<div className="flex items-center gap-2">
+							<h1 className="truncate font-medium text-sm">Dashboard</h1>
+							<Badge
+								variant="secondary"
+								className="hidden gap-1 text-[10px] sm:inline-flex"
+							>
+								<Sparkles className="size-3" />
+								Builder workspace
+							</Badge>
+						</div>
+						<p className="hidden text-[10px] text-muted-foreground sm:block">
+							Manage devices, flows, and WhatsApp automation logs.
+						</p>
+					</div>
+					<div className="flex items-center gap-2">
+						<Badge
+							variant="outline"
+							className="hidden gap-1 text-[10px] sm:inline-flex"
+						>
+							<Activity className="size-3" />
+							Runtime live
+						</Badge>
+						<UserMenu />
+					</div>
+				</header>
+
+				<main className="min-h-0 flex-1 overflow-y-auto bg-muted/20">
+					<div className="mx-auto w-full max-w-7xl p-4 md:p-6">
+						<Outlet />
+					</div>
+				</main>
+			</div>
 		</div>
 	);
 }

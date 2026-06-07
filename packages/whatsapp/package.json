@@ -15,7 +15,7 @@
 	"dependencies": {
 		"@whatsapp-flow/db": "workspace:*",
 		"@whatsapp-flow/env": "workspace:*",
-		"@whiskeysockets/baileys": "7.0.0-rc13",
+		"baileys": "7.0.0-rc13",
 		"drizzle-orm": "^0.45.1",
 		"qrcode": "^1.5.4",
 		"zod": "catalog:"

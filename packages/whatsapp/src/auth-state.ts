@@ -8,7 +8,7 @@ import {
 	makeCacheableSignalKeyStore,
 	type SignalDataSet,
 	type SignalDataTypeMap,
-} from "@whiskeysockets/baileys";
+} from "baileys";
 import { eq } from "drizzle-orm";
 
 type StoredAuthState = {

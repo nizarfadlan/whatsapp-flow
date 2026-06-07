@@ -11,8 +11,6 @@ import type { TRPCOptionsProxy } from "@trpc/tanstack-react-query";
 import type { AppRouter } from "@whatsapp-flow/api/routers/index";
 import { Toaster } from "@whatsapp-flow/ui/components/sonner";
 
-import Header from "../components/header";
-
 import appCss from "../index.css?url";
 export interface RouterAppContext {
 	trpc: TRPCOptionsProxy<AppRouter>;
@@ -51,8 +49,7 @@ function RootDocument() {
 				<HeadContent />
 			</head>
 			<body>
-				<div className="grid h-svh grid-rows-[auto_1fr]">
-					<Header />
+				<div className="min-h-svh">
 					<Outlet />
 				</div>
 				<Toaster richColors />

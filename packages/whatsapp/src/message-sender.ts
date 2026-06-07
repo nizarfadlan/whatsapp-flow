@@ -1,4 +1,4 @@
-import type { WAMessageKey, WASocket } from "@whiskeysockets/baileys";
+import type { WAMessageKey, WASocket } from "baileys";
 
 export type OutgoingMessage =
 	| { type: "text"; text: string }

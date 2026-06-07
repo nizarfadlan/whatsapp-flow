@@ -1,20 +1,23 @@
 import { Link, useLocation } from "@tanstack/react-router";
+import { Button } from "@whatsapp-flow/ui/components/button";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
-import { Bot, Home, LayoutDashboard } from "lucide-react";
+import { Bot, LayoutDashboard } from "lucide-react";
 import UserMenu from "./user-menu";
 
 const links = [
-	{ to: "/", label: "Home", icon: Home },
-	{ to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+	{ href: "#features", label: "Features" },
+	{ href: "#workflow", label: "Workflow" },
+	{ href: "#runtime", label: "Runtime" },
 ] as const;
 
 export default function Header() {
 	const location = useLocation();
+	const isHome = location.pathname === "/";
 
 	return (
-		<header className="border-border/70 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-			<div className="flex h-14 items-center justify-between px-4">
-				<div className="flex items-center gap-6">
+		<header className="sticky top-0 z-40 border-border/70 border-b bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+			<div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 md:px-6">
+				<div className="flex items-center gap-8">
 					<Link
 						to="/"
 						className="flex items-center gap-2 font-semibold text-sm"
@@ -24,31 +27,32 @@ export default function Header() {
 						</span>
 						<span>WhatsApp Flow</span>
 					</Link>
-					<nav className="hidden items-center gap-1 md:flex">
-						{links.map(({ to, label, icon: Icon }) => {
-							const active =
-								to === "/dashboard"
-									? location.pathname.startsWith(to)
-									: location.pathname === to;
-							return (
-								<Link
-									key={to}
-									to={to}
+					{isHome && (
+						<nav className="hidden items-center gap-1 md:flex">
+							{links.map((link) => (
+								<a
+									key={link.href}
+									href={link.href}
 									className={cn(
-										"flex h-8 items-center gap-1.5 px-2.5 font-medium text-xs transition-colors",
-										active
-											? "bg-muted text-foreground"
-											: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+										"px-2.5 py-1.5 font-medium text-muted-foreground text-xs transition-colors",
+										"hover:bg-muted hover:text-foreground",
 									)}
 								>
-									{Icon && <Icon className="size-3.5" />}
-									{label}
-								</Link>
-							);
-						})}
-					</nav>
+									{link.label}
+								</a>
+							))}
+						</nav>
+					)}
 				</div>
-				<UserMenu />
+				<div className="flex items-center gap-2">
+					<Link to="/dashboard" className="hidden sm:block">
+						<Button variant="outline" size="sm">
+							<LayoutDashboard className="size-3.5" />
+							Dashboard
+						</Button>
+					</Link>
+					<UserMenu />
+				</div>
 			</div>
 		</header>
 	);

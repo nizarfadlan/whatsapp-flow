@@ -20,10 +20,12 @@ function SheetClose({ ...props }: DrawerPrimitive.Close.Props) {
 function SheetContent({
 	className,
 	children,
+	childrenClassName,
 	side = "right",
 	...props
 }: DrawerPrimitive.Popup.Props & {
 	side?: "top" | "right" | "bottom" | "left";
+	childrenClassName?: string;
 }) {
 	const sideClasses = {
 		top: "top-0 left-0 right-0 max-h-[90dvh] max-w-none data-closed:slide-out-to-top data-open:slide-in-from-top",
@@ -56,7 +58,12 @@ function SheetContent({
 					>
 						<XIcon className="size-4" />
 					</DrawerPrimitive.Close>
-					<div className="flex flex-1 flex-col gap-4 overflow-y-auto p-6">
+					<div
+						className={cn(
+							"flex flex-1 flex-col gap-4 overflow-y-auto p-6",
+							childrenClassName,
+						)}
+					>
 						{children}
 					</div>
 				</div>
