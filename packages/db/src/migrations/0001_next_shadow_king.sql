@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "flow_session_active_contact_unique_idx" ON "flow_session" USING btree ("device_id","contact_number") WHERE "flow_session"."status" in ('waiting', 'running');

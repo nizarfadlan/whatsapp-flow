@@ -1,5 +1,5 @@
-import { flowExecutionLog } from "@whatsapp-flow/db/schema/device";
-import { desc, eq } from "drizzle-orm";
+import { flow, flowExecutionLog } from "@whatsapp-flow/db/schema/device";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
 
@@ -13,31 +13,38 @@ export const flowLogRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const conditions = [];
+			const conditions = [eq(flow.userId, ctx.session.user.id)];
 			if (input.flowId)
 				conditions.push(eq(flowExecutionLog.flowId, input.flowId));
 			if (input.deviceId)
 				conditions.push(eq(flowExecutionLog.deviceId, input.deviceId));
 
-			const query = ctx.db
-				.select()
+			const rows = await ctx.db
+				.select({ log: flowExecutionLog })
 				.from(flowExecutionLog)
-				.where(conditions.length > 0 ? conditions[0] : undefined)
+				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
+				.where(and(...conditions))
 				.orderBy(desc(flowExecutionLog.startedAt))
 				.limit(input.limit);
 
-			return query;
+			return rows.map((row) => row.log);
 		}),
 
 	getById: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
 			const rows = await ctx.db
-				.select()
+				.select({ log: flowExecutionLog })
 				.from(flowExecutionLog)
-				.where(eq(flowExecutionLog.id, input.id))
+				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
+				.where(
+					and(
+						eq(flowExecutionLog.id, input.id),
+						eq(flow.userId, ctx.session.user.id),
+					),
+				)
 				.limit(1);
 
-			return rows[0] ?? null;
+			return rows[0]?.log ?? null;
 		}),
 });

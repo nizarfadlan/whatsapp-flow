@@ -20,6 +20,20 @@ type StoredAuthState = {
 
 type KeyStore = NonNullable<StoredAuthState["keys"]>;
 
+const authStateWriteQueues = new Map<string, Promise<void>>();
+
+function enqueueAuthStateWrite(deviceId: string, write: () => Promise<void>) {
+	const previous = authStateWriteQueues.get(deviceId) ?? Promise.resolve();
+	const next = previous.catch(() => undefined).then(write);
+	authStateWriteQueues.set(deviceId, next);
+
+	return next.finally(() => {
+		if (authStateWriteQueues.get(deviceId) === next) {
+			authStateWriteQueues.delete(deviceId);
+		}
+	});
+}
+
 function serialize<T>(value: T): unknown {
 	return JSON.parse(JSON.stringify(value, BufferJSON.replacer));
 }
@@ -39,10 +53,21 @@ async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
 }
 
 async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
-	await db
-		.update(device)
-		.set({ sessionData: state, updatedAt: new Date() })
-		.where(eq(device.id, deviceId));
+	await enqueueAuthStateWrite(deviceId, async () => {
+		await db
+			.update(device)
+			.set({ sessionData: state, updatedAt: new Date() })
+			.where(eq(device.id, deviceId));
+	});
+}
+
+export async function clearDbAuthState(deviceId: string) {
+	await enqueueAuthStateWrite(deviceId, async () => {
+		await db
+			.update(device)
+			.set({ sessionData: null, updatedAt: new Date() })
+			.where(eq(device.id, deviceId));
+	});
 }
 
 export async function useDbAuthState(deviceId: string): Promise<{

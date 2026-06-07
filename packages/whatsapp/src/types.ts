@@ -21,7 +21,7 @@ export interface ConnectionManagerEvents {
 	"device:qr": { deviceId: string; qr: string };
 	"device:message": {
 		deviceId: string;
-		contact: { number: string; name?: string };
+		contact: { jid: string; number: string; name?: string };
 		message: { text?: string; type: string; raw: unknown };
 	};
 }

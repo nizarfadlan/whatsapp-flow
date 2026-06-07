@@ -24,6 +24,7 @@ import {
 	MiniMap,
 	type Node,
 	ReactFlow,
+	type ReactFlowInstance,
 	useEdgesState,
 	useNodesState,
 } from "@xyflow/react";
@@ -34,9 +35,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	createNode,
+	createStartNode,
 	type FlowNodeData,
-	type NodeTypeName,
 	nodeTypes,
+	type PaletteNodeTypeName,
 	paletteCategories,
 	resetNodeIdCounter,
 } from "@/components/flow-nodes";
@@ -47,8 +49,16 @@ export const Route = createFileRoute("/dashboard/flows/$flowId")({
 	component: FlowEditor,
 });
 
+function isTriggerType(type: string | undefined) {
+	return type?.startsWith("trigger-") ?? false;
+}
+
+function hasTriggerNode(nodes: Node[]) {
+	return nodes.some((node) => isTriggerType(node.type));
+}
+
 function getTriggerPayload(nodes: Node[]) {
-	const triggerNode = nodes.find((node) => node.type?.startsWith("trigger-"));
+	const triggerNode = nodes.find((node) => isTriggerType(node.type));
 	const data = triggerNode?.data as FlowNodeData | undefined;
 
 	switch (data?.nodeType) {
@@ -65,7 +75,7 @@ function getTriggerPayload(nodes: Node[]) {
 			return {
 				triggerType: "webhook" as const,
 				triggerConfig: {
-					webhookUrl: "webhookUrl" in data ? (data.webhookUrl ?? "") : "",
+					webhookToken: "webhookToken" in data ? (data.webhookToken ?? "") : "",
 				},
 			};
 		case "trigger-schedule":
@@ -74,11 +84,35 @@ function getTriggerPayload(nodes: Node[]) {
 				triggerConfig: {
 					cronExpression:
 						"cronExpression" in data ? (data.cronExpression ?? "") : "",
+					contactNumber:
+						"contactNumber" in data ? (data.contactNumber ?? "") : "",
 				},
 			};
 		default:
-			return { triggerType: "keyword" as const, triggerConfig: null };
+			return null;
 	}
+}
+
+function ensureStartNode(nodes: Node[]) {
+	const withoutDuplicateStart = nodes.filter(
+		(node, index) =>
+			node.id !== "start" || index === nodes.findIndex((n) => n.id === "start"),
+	);
+	const existing = withoutDuplicateStart.find((node) => node.id === "start");
+	if (existing) {
+		return withoutDuplicateStart.map((node) =>
+			node.id === "start"
+				? {
+						...node,
+						type: "start",
+						deletable: false,
+						data: createStartNode().data,
+					}
+				: node,
+		);
+	}
+
+	return [createStartNode(), ...withoutDuplicateStart];
 }
 
 function FlowEditor() {
@@ -89,13 +123,15 @@ function FlowEditor() {
 	);
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(
-		(flow.nodes as Node[]) ?? [],
+		ensureStartNode((flow.nodes as Node[]) ?? []),
 	);
 	const [edges, setEdges, onEdgesChange] = useEdgesState(
 		(flow.edges as Edge[]) ?? [],
 	);
 
 	const initialized = useRef(false);
+	const [reactFlowInstance, setReactFlowInstance] =
+		useState<ReactFlowInstance | null>(null);
 
 	const pushHistory = useEditorStore((s) => s.pushHistory);
 	const undo = useEditorStore((s) => s.undo);
@@ -165,6 +201,7 @@ function FlowEditor() {
 
 	const deleteNode = useCallback(
 		(id: string) => {
+			if (id === "start") return;
 			setNodes((nds) => {
 				const nextNodes = nds.filter((n) => n.id !== id);
 				setEdges((eds) => {
@@ -199,19 +236,64 @@ function FlowEditor() {
 			id: flowId,
 			nodes: nodes as unknown as Record<string, unknown>[],
 			edges: edges as unknown as Record<string, unknown>[],
-			triggerType: triggerPayload.triggerType,
-			triggerConfig: triggerPayload.triggerConfig,
+			...(triggerPayload && {
+				triggerType: triggerPayload.triggerType,
+				triggerConfig: triggerPayload.triggerConfig,
+			}),
 		});
 	};
 
-	const handleAddNode = (type: NodeTypeName) => {
+	const handleAddNode = (type: PaletteNodeTypeName) => {
+		if (isTriggerType(type) && hasTriggerNode(nodes)) {
+			toast.error("Only one trigger node allowed per flow");
+			return;
+		}
 		const yOffset = Math.random() * 200 + 50;
 		setNodes((nds) => {
-			const next = [...nds, createNode(type, 300, yOffset)];
+			const next = [...nds, createNode(type, 320, yOffset)];
 			pushHistory(next, edges);
 			return next;
 		});
 	};
+
+	const handlePaletteDragStart = (
+		e: React.DragEvent,
+		type: PaletteNodeTypeName,
+	) => {
+		e.dataTransfer.setData("application/whatsapp-flow-node", type);
+		e.dataTransfer.effectAllowed = "move";
+	};
+
+	const handleCanvasDragOver = useCallback((e: React.DragEvent) => {
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "move";
+	}, []);
+
+	const handleCanvasDrop = useCallback(
+		(e: React.DragEvent) => {
+			e.preventDefault();
+			const type = e.dataTransfer.getData(
+				"application/whatsapp-flow-node",
+			) as PaletteNodeTypeName;
+			if (!type || !reactFlowInstance) return;
+
+			if (isTriggerType(type) && hasTriggerNode(nodes)) {
+				toast.error("Only one trigger node allowed per flow");
+				return;
+			}
+
+			const position = reactFlowInstance.screenToFlowPosition({
+				x: e.clientX,
+				y: e.clientY,
+			});
+			setNodes((nds) => {
+				const next = [...nds, createNode(type, position.x, position.y)];
+				pushHistory(next, edges);
+				return next;
+			});
+		},
+		[reactFlowInstance, setNodes, pushHistory, edges, nodes],
+	);
 
 	const handleUndo = useCallback(() => {
 		const entry = undo();
@@ -360,6 +442,8 @@ function FlowEditor() {
 											"flex items-center gap-1.5 border-2 px-2 py-1 text-[10px] transition-colors hover:opacity-80",
 											colorMap[item.category],
 										)}
+										draggable
+										onDragStart={(e) => handlePaletteDragStart(e, item.type)}
 										onClick={() => handleAddNode(item.type)}
 									>
 										<item.icon className="size-3" />
@@ -381,6 +465,9 @@ function FlowEditor() {
 						onConnect={onConnect}
 						onNodeClick={onNodeClick}
 						onPaneClick={onPaneClick}
+						onInit={setReactFlowInstance}
+						onDrop={handleCanvasDrop}
+						onDragOver={handleCanvasDragOver}
 						nodeTypes={nodeTypes}
 						fitView
 						deleteKeyCode={null}
@@ -395,6 +482,7 @@ function FlowEditor() {
 				<div className="w-56 shrink-0 overflow-y-auto border-l">
 					<NodeConfigPanel
 						node={selectedNode}
+						flowId={flowId}
 						onUpdate={updateNodeData}
 						onDelete={deleteNode}
 					/>
@@ -425,7 +513,7 @@ function DeployDialog({
 				setOpen(false);
 				toast.success(`"${flowName}" deployed`);
 			},
-			onError: () => toast.error("Deploy failed"),
+			onError: (err) => toast.error(err.message ?? "Deploy failed"),
 		}),
 	);
 

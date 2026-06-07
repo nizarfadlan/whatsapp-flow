@@ -11,7 +11,7 @@ import {
 } from "@whiskeysockets/baileys";
 import { eq } from "drizzle-orm";
 import QRCode from "qrcode";
-import { useDbAuthState } from "./auth-state";
+import { clearDbAuthState, useDbAuthState } from "./auth-state";
 import type {
 	ConnectionManagerEvents,
 	DeviceConnection,
@@ -37,12 +37,18 @@ function extractMessageType(message: WAMessage) {
 }
 
 function normalizeContactNumber(jid: string) {
-	return jid.split("@")[0] ?? jid;
+	return jid.split("@")[0]?.split(":")[0] ?? jid;
 }
+
+const INITIAL_RECONNECT_DELAY_MS = 1_000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 export class ConnectionManager extends EventEmitter {
 	private connections = new Map<string, DeviceConnection>();
+	private connectPromises = new Map<string, Promise<DeviceConnection>>();
 	private intentionalDisconnects = new Set<string>();
+	private reconnectAttempts = new Map<string, number>();
+	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	on<T extends keyof ConnectionManagerEvents>(
 		eventName: T,
@@ -72,6 +78,20 @@ export class ConnectionManager extends EventEmitter {
 			return existing;
 		}
 
+		const pending = this.connectPromises.get(deviceId);
+		if (pending) return pending;
+
+		this.clearReconnectTimer(deviceId);
+		this.intentionalDisconnects.delete(deviceId);
+
+		const promise = this.createConnection(deviceId).finally(() => {
+			this.connectPromises.delete(deviceId);
+		});
+		this.connectPromises.set(deviceId, promise);
+		return promise;
+	}
+
+	private async createConnection(deviceId: string) {
 		await this.updateDeviceStatus(deviceId, "connecting");
 
 		const { state, saveCreds } = await useDbAuthState(deviceId);
@@ -93,7 +113,16 @@ export class ConnectionManager extends EventEmitter {
 		};
 
 		this.connections.set(deviceId, connection);
-		socket.ev.on("creds.update", saveCreds);
+		socket.ev.on("creds.update", () => {
+			void saveCreds().then(() => {
+				if (socket.authState.creds.registered) {
+					const phoneNumber = socket.user?.id
+						? normalizeContactNumber(socket.user.id)
+						: undefined;
+					void this.updateDeviceStatus(deviceId, "connected", phoneNumber);
+				}
+			});
+		});
 		socket.ev.on("connection.update", (update) => {
 			void this.handleConnectionUpdate(deviceId, update);
 		});
@@ -120,6 +149,8 @@ export class ConnectionManager extends EventEmitter {
 
 	async disconnect(deviceId: string) {
 		this.intentionalDisconnects.add(deviceId);
+		this.clearReconnectTimer(deviceId);
+		this.reconnectAttempts.delete(deviceId);
 		const connection = this.connections.get(deviceId);
 		if (connection) {
 			await connection.socket.end(undefined);
@@ -131,23 +162,15 @@ export class ConnectionManager extends EventEmitter {
 
 	async logout(deviceId: string) {
 		this.intentionalDisconnects.add(deviceId);
+		this.clearReconnectTimer(deviceId);
+		this.reconnectAttempts.delete(deviceId);
 		const connection = this.connections.get(deviceId);
 		if (connection) {
 			await connection.socket.logout();
 			this.connections.delete(deviceId);
 		}
 
-		await db
-			.update(device)
-			.set({
-				phoneNumber: null,
-				sessionData: null,
-				status: "disconnected",
-				updatedAt: new Date(),
-			})
-			.where(eq(device.id, deviceId));
-
-		this.emit("device:status", { deviceId, status: "disconnected" });
+		await this.resetDeviceAuth(deviceId);
 	}
 
 	private async handleConnectionUpdate(
@@ -166,6 +189,8 @@ export class ConnectionManager extends EventEmitter {
 		}
 
 		if (update.connection === "open") {
+			this.reconnectAttempts.delete(deviceId);
+			this.clearReconnectTimer(deviceId);
 			const phoneNumber = connection.socket.user?.id
 				? normalizeContactNumber(connection.socket.user.id)
 				: undefined;
@@ -189,12 +214,47 @@ export class ConnectionManager extends EventEmitter {
 			const intentional = this.intentionalDisconnects.delete(deviceId);
 
 			this.connections.delete(deviceId);
-			await this.updateDeviceStatus(deviceId, "disconnected");
+			if (loggedOut) {
+				await this.resetDeviceAuth(deviceId);
+			} else {
+				await this.updateDeviceStatus(deviceId, "disconnected");
+			}
 
 			if (!loggedOut && !intentional) {
-				void this.connect(deviceId);
+				this.scheduleReconnect(deviceId);
+			} else {
+				this.reconnectAttempts.delete(deviceId);
+				this.clearReconnectTimer(deviceId);
 			}
 		}
+	}
+
+	private scheduleReconnect(deviceId: string) {
+		if (this.reconnectTimers.has(deviceId)) return;
+
+		const attempt = (this.reconnectAttempts.get(deviceId) ?? 0) + 1;
+		this.reconnectAttempts.set(deviceId, attempt);
+
+		const delay = Math.min(
+			INITIAL_RECONNECT_DELAY_MS * 2 ** (attempt - 1),
+			MAX_RECONNECT_DELAY_MS,
+		);
+		const timer = setTimeout(() => {
+			this.reconnectTimers.delete(deviceId);
+			void this.connect(deviceId).catch(() => {
+				this.scheduleReconnect(deviceId);
+			});
+		}, delay);
+
+		this.reconnectTimers.set(deviceId, timer);
+	}
+
+	private clearReconnectTimer(deviceId: string) {
+		const timer = this.reconnectTimers.get(deviceId);
+		if (!timer) return;
+
+		clearTimeout(timer);
+		this.reconnectTimers.delete(deviceId);
 	}
 
 	private async handleMessagesUpsert(
@@ -210,10 +270,12 @@ export class ConnectionManager extends EventEmitter {
 				continue;
 			}
 
-			const contactNumber = normalizeContactNumber(message.key.remoteJid);
+			const contactJid = message.key.remoteJid;
+			const contactNumber = normalizeContactNumber(contactJid);
 			this.emit("device:message", {
 				deviceId,
 				contact: {
+					jid: contactJid,
 					number: contactNumber,
 					name: message.pushName ?? undefined,
 				},
@@ -224,6 +286,20 @@ export class ConnectionManager extends EventEmitter {
 				},
 			});
 		}
+	}
+
+	private async resetDeviceAuth(deviceId: string) {
+		await clearDbAuthState(deviceId);
+		await db
+			.update(device)
+			.set({
+				phoneNumber: null,
+				status: "disconnected",
+				updatedAt: new Date(),
+			})
+			.where(eq(device.id, deviceId));
+
+		this.emit("device:status", { deviceId, status: "disconnected" });
 	}
 
 	private async updateDeviceStatus(

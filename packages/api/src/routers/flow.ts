@@ -3,6 +3,7 @@ import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { validateCronExpression } from "../engine/cron";
 import { protectedProcedure, router } from "../index";
 
 const jsonSchema = z.unknown();
@@ -34,12 +35,15 @@ function getTriggerPayload(nodes: FlowNode[]) {
 		case "trigger-webhook":
 			return {
 				triggerType: "webhook" as const,
-				triggerConfig: { webhookUrl: String(data.webhookUrl ?? "") },
+				triggerConfig: { webhookToken: String(data.webhookToken ?? "") },
 			};
 		case "trigger-schedule":
 			return {
 				triggerType: "schedule" as const,
-				triggerConfig: { cronExpression: String(data.cronExpression ?? "") },
+				triggerConfig: {
+					cronExpression: String(data.cronExpression ?? ""),
+					contactNumber: String(data.contactNumber ?? ""),
+				},
 			};
 		default:
 			return null;
@@ -50,24 +54,47 @@ function nonEmpty(value: unknown) {
 	return typeof value === "string" && value.trim().length > 0;
 }
 
+function normalizeNumber(value: unknown) {
+	return typeof value === "string" ? value.replace(/[^\d]/g, "") : "";
+}
+
 function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	if (nodes.length === 0) return "Flow has no nodes";
 
-	const trigger = nodes.find((node) => node.type?.startsWith("trigger-"));
-	if (!trigger) return "Flow needs a trigger node";
-	if (!edges.some((edge) => edge.source === trigger.id))
+	const triggers = nodes.filter((node) => node.type?.startsWith("trigger-"));
+	if (triggers.length === 0) return "Flow needs exactly one trigger node";
+	if (triggers.length > 1) return "Flow can only have one trigger node";
+
+	const trigger = triggers[0];
+	if (!trigger) return "Flow needs exactly one trigger node";
+	if (!edges.some((edge) => edge.source === trigger.id)) {
 		return "Trigger node must connect to another node";
+	}
 
 	const triggerData = trigger.data ?? {};
-	if (trigger.type === "trigger-keyword" && !nonEmpty(triggerData.keyword))
+	if (trigger.type === "trigger-keyword" && !nonEmpty(triggerData.keyword)) {
 		return "Keyword trigger needs a keyword";
-	if (trigger.type === "trigger-webhook" && !nonEmpty(triggerData.webhookUrl))
-		return "Webhook trigger needs a URL";
+	}
 	if (
-		trigger.type === "trigger-schedule" &&
-		!nonEmpty(triggerData.cronExpression)
-	)
-		return "Schedule trigger needs a cron expression";
+		trigger.type === "trigger-webhook" &&
+		!nonEmpty(triggerData.webhookToken)
+	) {
+		return "Webhook trigger needs a secret token";
+	}
+	if (trigger.type === "trigger-schedule") {
+		if (!nonEmpty(triggerData.cronExpression)) {
+			return "Schedule trigger needs a cron expression";
+		}
+		const cronValidation = validateCronExpression(
+			String(triggerData.cronExpression),
+		);
+		if (!cronValidation.ok) {
+			return cronValidation.message;
+		}
+		if (!normalizeNumber(triggerData.contactNumber)) {
+			return "Schedule trigger needs a recipient number";
+		}
+	}
 
 	for (const node of nodes) {
 		const data = node.data ?? {};
@@ -79,31 +106,50 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 			case "send-video":
 			case "send-audio":
 			case "send-document":
-				if (!nonEmpty(data.mediaUrl))
+				if (!nonEmpty(data.mediaUrl)) {
 					return `${node.type} node needs media URL`;
+				}
 				break;
 			case "condition":
-				if (!nonEmpty(data.field) || !nonEmpty(data.value))
+				if (!nonEmpty(data.field) || !nonEmpty(data.value)) {
 					return "Condition node needs field and value";
+				}
 				if (
 					!edges.some(
 						(edge) => edge.source === node.id && edge.sourceHandle === "true",
 					)
-				)
+				) {
 					return "Condition node needs a true branch";
+				}
 				if (
 					!edges.some(
 						(edge) => edge.source === node.id && edge.sourceHandle === "false",
 					)
-				)
+				) {
 					return "Condition node needs a false branch";
+				}
 				break;
+			case "wait-for-reply": {
+				if (!nonEmpty(data.variableName)) {
+					return "Wait for Reply node needs a variable name";
+				}
+				const timeoutMinutes = Number(data.timeoutMinutes ?? 1440);
+				if (
+					!Number.isInteger(timeoutMinutes) ||
+					timeoutMinutes < 1 ||
+					timeoutMinutes > 10_080
+				) {
+					return "Wait for Reply timeout must be between 1 and 10080 minutes";
+				}
+				break;
+			}
 			case "webhook-call":
 				if (!nonEmpty(data.webhookUrl)) return "Webhook Call node needs a URL";
 				break;
 			case "forward":
-				if (!nonEmpty(data.targetNumber))
+				if (!nonEmpty(data.targetNumber)) {
 					return "Forward node needs a target number";
+				}
 				break;
 		}
 	}
@@ -125,6 +171,25 @@ async function requireFlowOwnership(
 	const found = rows[0];
 	if (!found) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
+	}
+
+	return found;
+}
+
+async function requireDeviceOwnership(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	deviceId: string,
+	userId: string,
+) {
+	const rows = await db
+		.select({ id: device.id, status: device.status })
+		.from(device)
+		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
+		.limit(1);
+
+	const found = rows[0];
+	if (!found) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 	}
 
 	return found;
@@ -206,8 +271,21 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			await requireFlowOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireFlowOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			if (input.deviceId) {
+				await requireDeviceOwnership(
+					ctx.db,
+					input.deviceId,
+					ctx.session.user.id,
+				);
+			}
 			const { id, ...updates } = input;
+			delete updates.triggerType;
+			delete updates.triggerConfig;
 
 			if (Array.isArray(input.nodes)) {
 				const triggerPayload = getTriggerPayload(input.nodes as FlowNode[]);
@@ -216,6 +294,8 @@ export const flowRouter = router({
 					updates.triggerConfig = triggerPayload.triggerConfig;
 				}
 			}
+
+			if (Object.keys(updates).length === 0) return found;
 
 			const rows = await ctx.db
 				.update(flow)
@@ -270,14 +350,14 @@ export const flowRouter = router({
 					});
 				}
 
-				const [targetDevice] = await ctx.db
-					.select({ id: device.id, status: device.status })
-					.from(device)
-					.where(eq(device.id, found.deviceId))
-					.limit(1);
+				const targetDevice = await requireDeviceOwnership(
+					ctx.db,
+					found.deviceId,
+					ctx.session.user.id,
+				);
 				const liveStatus =
 					connectionManager.getConnection(found.deviceId)?.status ??
-					targetDevice?.status;
+					targetDevice.status;
 				if (liveStatus !== "connected") {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
@@ -319,15 +399,11 @@ export const flowRouter = router({
 				throw new TRPCError({ code: "BAD_REQUEST", message: validationError });
 			}
 
-			const [targetDevice] = await ctx.db
-				.select({ id: device.id, status: device.status })
-				.from(device)
-				.where(eq(device.id, input.deviceId))
-				.limit(1);
-
-			if (!targetDevice) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
-			}
+			const targetDevice = await requireDeviceOwnership(
+				ctx.db,
+				input.deviceId,
+				ctx.session.user.id,
+			);
 
 			const liveStatus =
 				connectionManager.getConnection(input.deviceId)?.status ??

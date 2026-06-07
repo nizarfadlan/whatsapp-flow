@@ -2,7 +2,7 @@ import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { Separator } from "@whatsapp-flow/ui/components/separator";
 import type { Node } from "@xyflow/react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Copy, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import type {
 	ActionNodeData,
 	FlowNodeData,
@@ -14,6 +14,7 @@ import type {
 
 interface NodeConfigPanelProps {
 	node: Node | null;
+	flowId: string;
 	onUpdate: (id: string, data: Partial<FlowNodeData>) => void;
 	onDelete: (id: string) => void;
 }
@@ -59,20 +60,50 @@ function TriggerKeywordConfig({
 
 function TriggerWebhookConfig({
 	data,
+	flowId,
 	onUpdate,
 }: {
 	data: TriggerNodeData;
+	flowId: string;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const token = data.webhookToken ?? "";
+	const endpoint = `/api/flows/${flowId}/webhook?token=${token || "WEBHOOK_TOKEN"}`;
+	const regenerateToken = () => onUpdate({ webhookToken: crypto.randomUUID() });
+	const copyEndpoint = () => navigator.clipboard.writeText(endpoint);
+
 	return (
-		<Field label="Webhook URL">
-			<Input
-				className="h-7 text-xs"
-				placeholder="https://..."
-				value={data.webhookUrl ?? ""}
-				onChange={(e) => onUpdate({ webhookUrl: e.target.value })}
-			/>
-		</Field>
+		<div className="flex flex-col gap-2">
+			<Field label="Webhook Endpoint">
+				<div className="flex gap-1">
+					<Input className="h-7 text-xs" readOnly value={endpoint} />
+					<Button
+						className="h-7 px-2"
+						size="sm"
+						variant="outline"
+						onClick={copyEndpoint}
+					>
+						<Copy className="size-3" />
+					</Button>
+				</div>
+			</Field>
+			<Field label="Secret Token">
+				<div className="flex gap-1">
+					<Input className="h-7 text-xs" readOnly value={token} />
+					<Button
+						className="h-7 px-2"
+						size="sm"
+						variant="outline"
+						onClick={regenerateToken}
+					>
+						<RefreshCw className="size-3" />
+					</Button>
+				</div>
+			</Field>
+			<p className="text-[10px] text-muted-foreground">
+				Send POST JSON with contactNumber and optional text/message fields.
+			</p>
+		</div>
 	);
 }
 
@@ -84,14 +115,28 @@ function TriggerScheduleConfig({
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
 	return (
-		<Field label="Cron Expression">
-			<Input
-				className="h-7 text-xs"
-				placeholder="*/5 * * * *"
-				value={data.cronExpression ?? ""}
-				onChange={(e) => onUpdate({ cronExpression: e.target.value })}
-			/>
-		</Field>
+		<>
+			<Field label="Cron Expression">
+				<Input
+					className="h-7 text-xs"
+					placeholder="*/5 * * * *"
+					value={data.cronExpression ?? ""}
+					onChange={(e) => onUpdate({ cronExpression: e.target.value })}
+				/>
+				<p className="text-[10px] text-muted-foreground">
+					Use 5 fields: minute hour day month weekday. Supports *, lists,
+					ranges, and steps.
+				</p>
+			</Field>
+			<Field label="Recipient Number">
+				<Input
+					className="h-7 text-xs"
+					placeholder="6281234567890"
+					value={data.contactNumber ?? ""}
+					onChange={(e) => onUpdate({ contactNumber: e.target.value })}
+				/>
+			</Field>
+		</>
 	);
 }
 
@@ -611,6 +656,44 @@ function SetVariableConfig({
 	);
 }
 
+function WaitForReplyConfig({
+	data,
+	onUpdate,
+}: {
+	data: LogicNodeData;
+	onUpdate: (d: Partial<FlowNodeData>) => void;
+}) {
+	return (
+		<>
+			<Field label="Variable Name">
+				<Input
+					className="h-7 text-xs"
+					placeholder="reply"
+					value={data.variableName ?? "reply"}
+					onChange={(e) => onUpdate({ variableName: e.target.value })}
+				/>
+			</Field>
+			<Field label="Timeout (minutes)">
+				<Input
+					className="h-7 text-xs"
+					min={1}
+					max={10_080}
+					type="number"
+					value={data.timeoutMinutes ?? 1440}
+					onChange={(e) =>
+						onUpdate({
+							timeoutMinutes: Number.parseInt(e.target.value, 10) || 1,
+						})
+					}
+				/>
+				<p className="text-[10px] text-muted-foreground">
+					Pauses only for the same WhatsApp contact on the same device.
+				</p>
+			</Field>
+		</>
+	);
+}
+
 // Action configs
 function ForwardConfig({
 	data,
@@ -669,16 +752,20 @@ function WebhookCallConfig({
 
 function TriggerConfigForm({
 	data,
+	flowId,
 	onUpdate,
 }: {
 	data: TriggerNodeData;
+	flowId: string;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
 	switch (data.nodeType) {
 		case "trigger-keyword":
 			return <TriggerKeywordConfig data={data} onUpdate={onUpdate} />;
 		case "trigger-webhook":
-			return <TriggerWebhookConfig data={data} onUpdate={onUpdate} />;
+			return (
+				<TriggerWebhookConfig data={data} flowId={flowId} onUpdate={onUpdate} />
+			);
 		case "trigger-schedule":
 			return <TriggerScheduleConfig data={data} onUpdate={onUpdate} />;
 		default:
@@ -748,6 +835,8 @@ function LogicConfigForm({
 			return <DelayConfig data={data} onUpdate={onUpdate} />;
 		case "set-variable":
 			return <SetVariableConfig data={data} onUpdate={onUpdate} />;
+		case "wait-for-reply":
+			return <WaitForReplyConfig data={data} onUpdate={onUpdate} />;
 		default:
 			return (
 				<p className="text-[10px] text-muted-foreground">
@@ -780,6 +869,7 @@ function ActionConfigForm({
 
 export function NodeConfigPanel({
 	node,
+	flowId,
 	onUpdate,
 	onDelete,
 }: NodeConfigPanelProps) {
@@ -791,7 +881,8 @@ export function NodeConfigPanel({
 		);
 	}
 
-	const data = node.data as FlowNodeData;
+	const data = node.data as unknown as FlowNodeData;
+	const isStartNode = data.category === "start";
 
 	const handleUpdate = (partial: Partial<FlowNodeData>) => {
 		onUpdate(node.id, partial);
@@ -803,6 +894,7 @@ export function NodeConfigPanel({
 			configForm = (
 				<TriggerConfigForm
 					data={data as TriggerNodeData}
+					flowId={flowId}
 					onUpdate={handleUpdate}
 				/>
 			);
@@ -837,6 +929,14 @@ export function NodeConfigPanel({
 				/>
 			);
 			break;
+		case "start":
+			configForm = (
+				<p className="text-[10px] text-muted-foreground">
+					Static starting point. Connect it to the first trigger to make the
+					flow easier to read.
+				</p>
+			);
+			break;
 		default:
 			configForm = null;
 	}
@@ -844,25 +944,31 @@ export function NodeConfigPanel({
 	return (
 		<div className="flex flex-col gap-3 p-3">
 			<SectionTitle>Node Properties</SectionTitle>
-			<Field label="Label">
-				<Input
-					className="h-7 text-xs"
-					value={data.label}
-					onChange={(e) => handleUpdate({ label: e.target.value })}
-				/>
-			</Field>
-			<Separator />
+			{!isStartNode && (
+				<Field label="Label">
+					<Input
+						className="h-7 text-xs"
+						value={data.label}
+						onChange={(e) => handleUpdate({ label: e.target.value })}
+					/>
+				</Field>
+			)}
+			{!isStartNode && <Separator />}
 			{configForm}
-			<Separator />
-			<Button
-				variant="outline"
-				size="sm"
-				className="mt-1 h-7 text-destructive text-xs"
-				onClick={() => onDelete(node.id)}
-			>
-				<Trash2 className="size-3" />
-				Delete Node
-			</Button>
+			{!isStartNode && (
+				<>
+					<Separator />
+					<Button
+						variant="outline"
+						size="sm"
+						className="mt-1 h-7 text-destructive text-xs"
+						onClick={() => onDelete(node.id)}
+					>
+						<Trash2 className="size-3" />
+						Delete Node
+					</Button>
+				</>
+			)}
 		</div>
 	);
 }

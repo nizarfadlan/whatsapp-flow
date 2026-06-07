@@ -24,11 +24,13 @@ import { Input } from "@whatsapp-flow/ui/components/input";
 import { Skeleton } from "@whatsapp-flow/ui/components/skeleton";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import {
+	LogOut,
 	MoreHorizontal,
 	Plus,
 	Power,
 	PowerOff,
 	QrCode,
+	Smartphone,
 	Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -124,10 +126,12 @@ function QrModal({
 	deviceId,
 	open,
 	onOpenChange,
+	onStatusChange,
 }: {
 	deviceId: string;
 	open: boolean;
 	onOpenChange: (v: boolean) => void;
+	onStatusChange?: () => void;
 }) {
 	const trpc = useTRPC();
 	const [qrCode, setQrCode] = useState<string | null>(null);
@@ -162,6 +166,7 @@ function QrModal({
 			}
 			if (data.type === "status") {
 				setStatus(data.status);
+				onStatusChange?.();
 			}
 		});
 
@@ -170,7 +175,7 @@ function QrModal({
 		};
 
 		return () => es.close();
-	}, [deviceId, open]);
+	}, [deviceId, onStatusChange, open]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -263,6 +268,15 @@ function DevicesPage() {
 		}),
 	);
 
+	const logoutMut = useMutation(
+		trpc.device.logout.mutationOptions({
+			onSuccess: () => {
+				refetch();
+				toast.success("Session reset");
+			},
+		}),
+	);
+
 	const deleteMut = useMutation(
 		trpc.device.delete.mutationOptions({
 			onSuccess: () => {
@@ -290,7 +304,7 @@ function DevicesPage() {
 				<CardContent className="p-0">
 					{devices.length === 0 ? (
 						<div className="flex flex-col items-center gap-3 py-12">
-							<SmartphoneIcon className="size-10 text-muted-foreground/50" />
+							<Smartphone className="size-10 text-muted-foreground/50" />
 							<p className="text-muted-foreground text-sm">No devices yet</p>
 							<AddDeviceDialog onAdded={() => refetch()} />
 						</div>
@@ -353,6 +367,13 @@ function DevicesPage() {
 													)}
 													<DropdownMenuItem
 														className="text-destructive"
+														onClick={() => logoutMut.mutate({ id: d.id })}
+													>
+														<LogOut className="size-3.5" />
+														Reset session
+													</DropdownMenuItem>
+													<DropdownMenuItem
+														className="text-destructive"
 														onClick={() => deleteMut.mutate({ id: d.id })}
 													>
 														<Trash2 className="size-3.5" />
@@ -376,27 +397,9 @@ function DevicesPage() {
 					onOpenChange={(v) => {
 						if (!v) setQrDeviceId(null);
 					}}
+					onStatusChange={() => refetch()}
 				/>
 			)}
 		</div>
-	);
-}
-
-function SmartphoneIcon({ className }: { className?: string }) {
-	return (
-		<svg
-			xmlns="http://www.w3.org/2000/svg"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			className={className}
-			aria-hidden="true"
-		>
-			<rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
-			<path d="M12 18h.01" />
-		</svg>
 	);
 }

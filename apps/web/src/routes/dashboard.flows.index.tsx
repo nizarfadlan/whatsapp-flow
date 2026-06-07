@@ -22,7 +22,15 @@ import {
 } from "@whatsapp-flow/ui/components/dropdown-menu";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
-import { Copy, MoreHorizontal, Pause, Play, Plus, Trash2 } from "lucide-react";
+import {
+	Copy,
+	MessageSquare,
+	MoreHorizontal,
+	Pause,
+	Play,
+	Plus,
+	Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/utils/trpc";
@@ -155,7 +163,7 @@ function FlowsPage() {
 				<CardContent className="p-0">
 					{flows.length === 0 ? (
 						<div className="flex flex-col items-center gap-3 py-12">
-							<MessageSquareIcon className="size-10 text-muted-foreground/50" />
+							<MessageSquare className="size-10 text-muted-foreground/50" />
 							<p className="text-muted-foreground text-sm">No flows yet</p>
 							<CreateFlowDialog onCreated={() => refetch()} />
 						</div>
@@ -250,23 +258,5 @@ function FlowsPage() {
 				</CardContent>
 			</Card>
 		</div>
-	);
-}
-
-function MessageSquareIcon({ className }: { className?: string }) {
-	return (
-		<svg
-			xmlns="http://www.w3.org/2000/svg"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			className={className}
-			aria-hidden="true"
-		>
-			<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-		</svg>
 	);
 }

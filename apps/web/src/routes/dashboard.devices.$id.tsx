@@ -73,10 +73,12 @@ function QrModal({
 	deviceId,
 	open,
 	onOpenChange,
+	onStatusChange,
 }: {
 	deviceId: string;
 	open: boolean;
 	onOpenChange: (v: boolean) => void;
+	onStatusChange?: () => void;
 }) {
 	const trpc = useTRPC();
 	const [qrCode, setQrCode] = useState<string | null>(null);
@@ -107,13 +109,16 @@ function QrModal({
 		es.addEventListener("message", (e) => {
 			const data = JSON.parse(e.data);
 			if (data.type === "qr") setQrCode(data.qr);
-			if (data.type === "status") setStatus(data.status);
+			if (data.type === "status") {
+				setStatus(data.status);
+				onStatusChange?.();
+			}
 		});
 
 		es.onerror = () => es.close();
 
 		return () => es.close();
-	}, [deviceId, open]);
+	}, [deviceId, onStatusChange, open]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -310,18 +315,18 @@ function DeviceDetailPage() {
 								Show QR
 							</Button>
 						)}
-						<Button
-							size="sm"
-							variant="outline"
-							className="h-7 text-destructive text-xs"
-							onClick={() => logoutMut.mutate({ id })}
-							disabled={logoutMut.isPending}
-						>
-							<LogOut className="size-3.5" />
-							Logout
-						</Button>
 					</>
 				)}
+				<Button
+					size="sm"
+					variant="outline"
+					className="h-7 text-destructive text-xs"
+					onClick={() => logoutMut.mutate({ id })}
+					disabled={logoutMut.isPending}
+				>
+					<LogOut className="size-3.5" />
+					Reset session
+				</Button>
 			</div>
 
 			<Separator />
@@ -365,6 +370,7 @@ function DeviceDetailPage() {
 					onOpenChange={(v) => {
 						if (!v) setQrOpen(false);
 					}}
+					onStatusChange={() => refetch()}
 				/>
 			)}
 		</div>

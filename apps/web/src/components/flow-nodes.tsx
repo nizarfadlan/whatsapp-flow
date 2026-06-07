@@ -1,6 +1,7 @@
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import {
+	CirclePlay,
 	Clock,
 	File,
 	Forward,
@@ -12,6 +13,7 @@ import {
 	List,
 	type LucideIcon,
 	MapPin,
+	MessageCircleReply,
 	MessageSquare,
 	Music,
 	Reply,
@@ -27,12 +29,20 @@ import {
 // ── Node Data Types ──────────────────────────────────────────────
 
 export type NodeCategory =
+	| "start"
 	| "trigger"
 	| "message"
 	| "media"
 	| "interactive"
 	| "logic"
 	| "action";
+
+export interface StartNodeData {
+	id: "start";
+	nodeType: "start";
+	label: string;
+	category: "start";
+}
 
 export interface TriggerNodeData {
 	id: string;
@@ -44,8 +54,9 @@ export interface TriggerNodeData {
 	label: string;
 	category: "trigger";
 	keyword?: string;
-	webhookUrl?: string;
+	webhookToken?: string;
 	cronExpression?: string;
+	contactNumber?: string;
 }
 
 export interface MessageNodeData {
@@ -86,7 +97,12 @@ export interface InteractiveNodeData {
 
 export interface LogicNodeData {
 	id: string;
-	nodeType: "condition" | "delay" | "set-variable" | "random";
+	nodeType:
+		| "condition"
+		| "delay"
+		| "set-variable"
+		| "wait-for-reply"
+		| "random";
 	label: string;
 	category: "logic";
 	field?: string;
@@ -95,6 +111,7 @@ export interface LogicNodeData {
 	delaySeconds?: number;
 	variableName?: string;
 	variableValue?: string;
+	timeoutMinutes?: number;
 }
 
 export interface ActionNodeData {
@@ -109,6 +126,7 @@ export interface ActionNodeData {
 }
 
 export type FlowNodeData =
+	| StartNodeData
 	| TriggerNodeData
 	| MessageNodeData
 	| InteractiveNodeData
@@ -121,6 +139,11 @@ const categoryColors: Record<
 	NodeCategory,
 	{ border: string; bg: string; icon: string }
 > = {
+	start: {
+		border: "border-primary",
+		bg: "bg-primary/10",
+		icon: "text-primary",
+	},
 	trigger: {
 		border: "border-green-500",
 		bg: "bg-green-50 dark:bg-green-950",
@@ -167,7 +190,7 @@ function BaseFlowNode({
 	children?: React.ReactNode;
 }) {
 	const c = categoryColors[category];
-	const isTrigger = data.category === "trigger";
+	const isStart = data.category === "start";
 	const isCondition = data.nodeType === "condition";
 	const isEnd = data.nodeType === "end";
 
@@ -180,7 +203,7 @@ function BaseFlowNode({
 				selected && "ring-2 ring-primary",
 			)}
 		>
-			{!isTrigger && <Handle type="target" position={Position.Left} />}
+			{!isStart && <Handle type="target" position={Position.Left} />}
 			<div className="flex items-center gap-2 font-medium">
 				<Icon className={cn("size-4", c.icon)} />
 				{data.label}
@@ -211,6 +234,22 @@ function BaseFlowNode({
 				!isEnd && <Handle type="source" position={Position.Right} />
 			)}
 		</div>
+	);
+}
+
+export function StartNode({ data, selected }: NodeProps) {
+	const d = data as unknown as StartNodeData;
+	return (
+		<BaseFlowNode
+			data={d}
+			selected={selected}
+			icon={CirclePlay}
+			category="start"
+		>
+			<span className="text-[10px] text-muted-foreground">
+				Flow starts here
+			</span>
+		</BaseFlowNode>
 	);
 }
 
@@ -246,11 +285,9 @@ export function TriggerWebhookNode({ data, selected }: NodeProps) {
 	const d = data as unknown as TriggerNodeData;
 	return (
 		<BaseFlowNode data={d} selected={selected} icon={Globe} category="trigger">
-			{d.webhookUrl && (
-				<span className="max-w-44 truncate text-[10px] text-muted-foreground">
-					{d.webhookUrl}
-				</span>
-			)}
+			<span className="text-[10px] text-muted-foreground">
+				{d.webhookToken ? "Secured webhook" : "Webhook trigger"}
+			</span>
 		</BaseFlowNode>
 	);
 }
@@ -447,6 +484,22 @@ export function SetVariableNode({ data, selected }: NodeProps) {
 	);
 }
 
+export function WaitForReplyNode({ data, selected }: NodeProps) {
+	const d = data as unknown as LogicNodeData;
+	return (
+		<BaseFlowNode
+			data={d}
+			selected={selected}
+			icon={MessageCircleReply}
+			category="logic"
+		>
+			<span className="text-[10px] text-muted-foreground">
+				{d.variableName ?? "reply"} · {d.timeoutMinutes ?? 1440}m
+			</span>
+		</BaseFlowNode>
+	);
+}
+
 export function RandomNode({ data, selected }: NodeProps) {
 	const d = data as unknown as LogicNodeData;
 	return (
@@ -500,6 +553,7 @@ export function EndNode({ data, selected }: NodeProps) {
 // ── Node Type Registry ───────────────────────────────────────────
 
 export const nodeTypes = {
+	start: StartNode,
 	"trigger-keyword": TriggerKeywordNode,
 	"trigger-any": TriggerAnyNode,
 	"trigger-webhook": TriggerWebhookNode,
@@ -517,6 +571,7 @@ export const nodeTypes = {
 	condition: ConditionNode,
 	delay: DelayNode,
 	"set-variable": SetVariableNode,
+	"wait-for-reply": WaitForReplyNode,
 	random: RandomNode,
 	forward: ForwardNode,
 	"webhook-call": WebhookCallNode,
@@ -524,6 +579,7 @@ export const nodeTypes = {
 };
 
 export type NodeTypeName = keyof typeof nodeTypes;
+export type PaletteNodeTypeName = Exclude<NodeTypeName, "start">;
 
 // ── Palette Definition ───────────────────────────────────────────
 
@@ -533,7 +589,7 @@ export interface PaletteCategory {
 }
 
 export interface PaletteItem {
-	type: NodeTypeName;
+	type: PaletteNodeTypeName;
 	label: string;
 	icon: LucideIcon;
 	category: NodeCategory;
@@ -635,6 +691,12 @@ export const paletteCategories: PaletteCategory[] = [
 				icon: Variable,
 				category: "logic",
 			},
+			{
+				type: "wait-for-reply",
+				label: "Wait for Reply",
+				icon: MessageCircleReply,
+				category: "logic",
+			},
 			{ type: "random", label: "Random", icon: Shuffle, category: "logic" },
 		],
 	},
@@ -665,6 +727,7 @@ function nextNodeId() {
 }
 
 const defaultLabels: Record<NodeTypeName, string> = {
+	start: "Start",
 	"trigger-keyword": "Keyword Match",
 	"trigger-any": "Any Message",
 	"trigger-webhook": "Webhook",
@@ -682,13 +745,24 @@ const defaultLabels: Record<NodeTypeName, string> = {
 	condition: "Condition",
 	delay: "Delay",
 	"set-variable": "Set Variable",
+	"wait-for-reply": "Wait for Reply",
 	random: "Random",
 	forward: "Forward",
 	"webhook-call": "Webhook Call",
 	end: "End",
 };
 
-export function createNode(type: NodeTypeName, x = 300, y = 50): Node {
+export function createStartNode(): Node {
+	return {
+		id: "start",
+		type: "start",
+		position: { x: 40, y: 120 },
+		deletable: false,
+		data: { id: "start", nodeType: "start", label: "Start", category: "start" },
+	};
+}
+
+export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 	const id = nextNodeId();
 	const item = paletteCategories
 		.flatMap((c) => c.items)
@@ -706,9 +780,15 @@ export function createNode(type: NodeTypeName, x = 300, y = 50): Node {
 		case "trigger-keyword":
 			return { ...base, data: { ...base.data, keyword: "" } };
 		case "trigger-webhook":
-			return { ...base, data: { ...base.data, webhookUrl: "" } };
+			return {
+				...base,
+				data: { ...base.data, webhookToken: crypto.randomUUID() },
+			};
 		case "trigger-schedule":
-			return { ...base, data: { ...base.data, cronExpression: "" } };
+			return {
+				...base,
+				data: { ...base.data, cronExpression: "", contactNumber: "" },
+			};
 		case "send-text":
 			return { ...base, data: { ...base.data, text: "" } };
 		case "send-image":
@@ -758,6 +838,11 @@ export function createNode(type: NodeTypeName, x = 300, y = 50): Node {
 			return {
 				...base,
 				data: { ...base.data, variableName: "", variableValue: "" },
+			};
+		case "wait-for-reply":
+			return {
+				...base,
+				data: { ...base.data, variableName: "reply", timeoutMinutes: 1440 },
 			};
 		case "forward":
 			return { ...base, data: { ...base.data, targetNumber: "" } };

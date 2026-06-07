@@ -6,27 +6,150 @@ import {
 	matchesKeywordTrigger,
 } from "@whatsapp-flow/whatsapp";
 import { and, eq } from "drizzle-orm";
-import { executeFlow } from "./flow-executor";
+import { matchesCronExpression } from "./cron";
+import { executeFlow, resumeWaitingSession } from "./flow-executor";
+
+type DispatcherState = {
+	messageStarted: boolean;
+	scheduleStarted: boolean;
+	scheduleTimer: ReturnType<typeof setInterval> | null;
+	lastScheduleMinute: string | null;
+	scheduleRunning: boolean;
+};
+
+type ScheduleTriggerConfig = {
+	cronExpression?: string;
+	contactNumber?: string;
+};
+
+const globalDispatcherState = globalThis as typeof globalThis & {
+	__whatsappFlowDispatcher?: DispatcherState;
+};
+
+if (!globalDispatcherState.__whatsappFlowDispatcher) {
+	globalDispatcherState.__whatsappFlowDispatcher = {
+		messageStarted: false,
+		scheduleStarted: false,
+		scheduleTimer: null,
+		lastScheduleMinute: null,
+		scheduleRunning: false,
+	};
+}
+
+const dispatcherState = globalDispatcherState.__whatsappFlowDispatcher;
 
 export function startFlowDispatcher(): void {
+	if (dispatcherState.messageStarted) return;
+	dispatcherState.messageStarted = true;
+
 	connectionManager.on("device:message", async (event: IncomingMessage) => {
 		const { deviceId, message, contact } = event;
+		const text = message.text ?? "";
 
 		try {
+			const resumed = await resumeWaitingSession(
+				deviceId,
+				contact.number,
+				text,
+				contact.jid,
+			);
+			if (resumed) return;
+
 			const flows = await db
 				.select()
 				.from(flow)
 				.where(and(eq(flow.deviceId, deviceId), eq(flow.status, "active")));
 
 			for (const flowRow of flows) {
-				if (matchesFlowTrigger(flowRow, message.text ?? "")) {
-					void executeFlow(flowRow, contact.number, message.text ?? "");
+				if (!matchesFlowTrigger(flowRow, text)) continue;
+
+				const result = await executeFlow(flowRow, contact.number, text, {
+					replyJid: contact.jid,
+					triggerSource: "message",
+				});
+				if (result.status === "failed") {
+					console.error("Message flow execution failed", {
+						flowId: flowRow.id,
+						deviceId,
+						contactNumber: contact.number,
+						logId: result.logId,
+						error: result.error,
+					});
 				}
+				if (result.status === "waiting") return;
 			}
-		} catch {
-			// Don't crash the connection on dispatch errors
+		} catch (error) {
+			console.error("Failed to dispatch incoming WhatsApp message", {
+				deviceId,
+				contactNumber: contact.number,
+				error,
+			});
 		}
 	});
+}
+
+export function startScheduleDispatcher(): void {
+	if (dispatcherState.scheduleStarted) return;
+	dispatcherState.scheduleStarted = true;
+
+	const tick = async () => {
+		if (dispatcherState.scheduleRunning) return;
+
+		const now = new Date();
+		const minuteKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+		if (dispatcherState.lastScheduleMinute === minuteKey) return;
+
+		dispatcherState.lastScheduleMinute = minuteKey;
+		dispatcherState.scheduleRunning = true;
+
+		try {
+			const flows = await db
+				.select()
+				.from(flow)
+				.where(
+					and(eq(flow.status, "active"), eq(flow.triggerType, "schedule")),
+				);
+
+			for (const flowRow of flows) {
+				const config = flowRow.triggerConfig as ScheduleTriggerConfig | null;
+				const cronExpression = config?.cronExpression?.trim();
+				const contactNumber = normalizeNumber(config?.contactNumber ?? "");
+
+				if (!cronExpression || !contactNumber) continue;
+				if (!matchesCronExpression(cronExpression, now)) continue;
+
+				const result = await executeFlow(flowRow, contactNumber, "", {
+					triggerSource: "schedule",
+				});
+				if (result.status === "skipped") {
+					console.warn("Scheduled flow execution skipped", {
+						flowId: flowRow.id,
+						deviceId: flowRow.deviceId,
+						contactNumber,
+						error: result.error,
+					});
+				}
+				if (result.status === "failed") {
+					console.error("Scheduled flow execution failed", {
+						flowId: flowRow.id,
+						deviceId: flowRow.deviceId,
+						contactNumber,
+						logId: result.logId,
+						error: result.error,
+					});
+				}
+			}
+		} catch (error) {
+			console.error("Failed to dispatch scheduled flows", { error });
+		} finally {
+			dispatcherState.scheduleRunning = false;
+		}
+	};
+
+	void tick();
+	dispatcherState.scheduleTimer = setInterval(() => {
+		void tick();
+	}, 60_000);
 }
 
 function matchesFlowTrigger(
@@ -47,4 +170,8 @@ function matchesFlowTrigger(
 		default:
 			return false;
 	}
+}
+
+function normalizeNumber(value: string) {
+	return value.replace(/[^\d]/g, "");
 }
