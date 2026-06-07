@@ -16,6 +16,7 @@ import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
 import { Route as DashboardDevicesRouteImport } from './routes/dashboard.devices'
+import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flows.index'
 import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.new'
 import { Route as DashboardFlowsFlowIdRouteImport } from './routes/dashboard.flows.$flowId'
 import { Route as DashboardDevicesIdRouteImport } from './routes/dashboard.devices.$id'
@@ -56,6 +57,11 @@ const DashboardDevicesRoute = DashboardDevicesRouteImport.update({
   path: '/devices',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardFlowsIndexRoute = DashboardFlowsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DashboardFlowsRoute,
+} as any)
 const DashboardFlowsNewRoute = DashboardFlowsNewRouteImport.update({
   id: '/new',
   path: '/new',
@@ -89,18 +95,19 @@ export interface FileRoutesByFullPath {
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
+  '/dashboard/flows/': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
-  '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
+  '/dashboard/flows': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
 }
 export interface FileRoutesById {
@@ -115,6 +122,7 @@ export interface FileRoutesById {
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
+  '/dashboard/flows/': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
 }
 export interface FileRouteTypes {
@@ -130,18 +138,19 @@ export interface FileRouteTypes {
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
+    | '/dashboard/flows/'
     | '/dashboard/flows/$flowId/logs'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
     | '/dashboard/devices'
-    | '/dashboard/flows'
     | '/dashboard/logs'
     | '/dashboard'
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
+    | '/dashboard/flows'
     | '/dashboard/flows/$flowId/logs'
   id:
     | '__root__'
@@ -155,6 +164,7 @@ export interface FileRouteTypes {
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
+    | '/dashboard/flows/'
     | '/dashboard/flows/$flowId/logs'
   fileRoutesById: FileRoutesById
 }
@@ -215,6 +225,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardDevicesRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/flows/': {
+      id: '/dashboard/flows/'
+      path: '/'
+      fullPath: '/dashboard/flows/'
+      preLoaderRoute: typeof DashboardFlowsIndexRouteImport
+      parentRoute: typeof DashboardFlowsRoute
+    }
     '/dashboard/flows/new': {
       id: '/dashboard/flows/new'
       path: '/new'
@@ -271,11 +288,13 @@ const DashboardFlowsFlowIdRouteWithChildren =
 interface DashboardFlowsRouteChildren {
   DashboardFlowsFlowIdRoute: typeof DashboardFlowsFlowIdRouteWithChildren
   DashboardFlowsNewRoute: typeof DashboardFlowsNewRoute
+  DashboardFlowsIndexRoute: typeof DashboardFlowsIndexRoute
 }
 
 const DashboardFlowsRouteChildren: DashboardFlowsRouteChildren = {
   DashboardFlowsFlowIdRoute: DashboardFlowsFlowIdRouteWithChildren,
   DashboardFlowsNewRoute: DashboardFlowsNewRoute,
+  DashboardFlowsIndexRoute: DashboardFlowsIndexRoute,
 }
 
 const DashboardFlowsRouteWithChildren = DashboardFlowsRoute._addFileChildren(
