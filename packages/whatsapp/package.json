@@ -1,5 +1,5 @@
 {
-	"name": "@whatsapp-flow/api",
+	"name": "@whatsapp-flow/whatsapp",
 	"type": "module",
 	"exports": {
 		".": {
@@ -9,21 +9,20 @@
 			"default": "./src/*.ts"
 		}
 	},
-	"scripts": {},
+	"scripts": {
+		"check-types": "tsc --noEmit"
+	},
 	"dependencies": {
-		"@whatsapp-flow/auth": "workspace:*",
 		"@whatsapp-flow/db": "workspace:*",
 		"@whatsapp-flow/env": "workspace:*",
-		"@whatsapp-flow/whatsapp": "workspace:*",
-		"@trpc/client": "catalog:",
-		"@trpc/server": "catalog:",
-		"dotenv": "catalog:",
+		"@whiskeysockets/baileys": "7.0.0-rc13",
 		"drizzle-orm": "^0.45.1",
+		"qrcode": "^1.5.4",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@whatsapp-flow/config": "workspace:*",
-		"hono": "catalog:",
+		"@types/qrcode": "^1.5.6",
 		"typescript": "catalog:"
 	}
 }

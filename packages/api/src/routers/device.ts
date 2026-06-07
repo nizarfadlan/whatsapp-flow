@@ -1,0 +1,142 @@
+import { TRPCError } from "@trpc/server";
+import { device } from "@whatsapp-flow/db/schema/device";
+import { connectionManager } from "@whatsapp-flow/whatsapp";
+import { and, desc, eq } from "drizzle-orm";
+import { z } from "zod";
+import { protectedProcedure, router } from "../index";
+
+async function requireDeviceOwnership(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	deviceId: string,
+	userId: string,
+) {
+	const rows = await db
+		.select()
+		.from(device)
+		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
+		.limit(1);
+
+	const found = rows[0];
+	if (!found) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
+	}
+
+	return found;
+}
+
+export const deviceRouter = router({
+	list: protectedProcedure.query(async ({ ctx }) => {
+		return ctx.db
+			.select({
+				id: device.id,
+				name: device.name,
+				phoneNumber: device.phoneNumber,
+				status: device.status,
+				createdAt: device.createdAt,
+				updatedAt: device.updatedAt,
+			})
+			.from(device)
+			.where(eq(device.userId, ctx.session.user.id))
+			.orderBy(desc(device.updatedAt));
+	}),
+
+	create: protectedProcedure
+		.input(
+			z.object({
+				name: z.string().min(1),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const id = crypto.randomUUID();
+			const rows = await ctx.db
+				.insert(device)
+				.values({
+					id,
+					userId: ctx.session.user.id,
+					name: input.name,
+				})
+				.returning({
+					id: device.id,
+					name: device.name,
+					status: device.status,
+				});
+
+			return rows[0];
+		}),
+
+	delete: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await connectionManager.disconnect(input.id);
+			await ctx.db.delete(device).where(eq(device.id, input.id));
+			return { success: true };
+		}),
+
+	connect: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const connection = await connectionManager.connect(input.id);
+			return {
+				id: input.id,
+				status: connection.status,
+				qrCode: connection.qrCode,
+			};
+		}),
+
+	requestPairingCode: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				phoneNumber: z.string().min(6),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const code = await connectionManager.requestPairingCode(
+				input.id,
+				input.phoneNumber,
+			);
+			return { code };
+		}),
+
+	disconnect: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await connectionManager.disconnect(input.id);
+			return { success: true };
+		}),
+
+	logout: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await connectionManager.logout(input.id);
+			return { success: true };
+		}),
+
+	getQR: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			return { qrCode: connectionManager.getQrCode(input.id) };
+		}),
+
+	status: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			return {
+				id: found.id,
+				status:
+					connectionManager.getConnection(input.id)?.status ?? found.status,
+				phoneNumber: found.phoneNumber,
+			};
+		}),
+});

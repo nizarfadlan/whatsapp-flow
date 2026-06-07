@@ -8,9 +8,6 @@
 		"dev": "vite dev"
 	},
 	"dependencies": {
-		"@whatsapp-flow/api": "workspace:*",
-		"@whatsapp-flow/env": "workspace:*",
-		"@whatsapp-flow/ui": "workspace:*",
 		"@tailwindcss/vite": "^4.2.2",
 		"@tanstack/react-form": "^1.28.0",
 		"@tanstack/react-query": "^5.99.0",
@@ -20,6 +17,10 @@
 		"@trpc/client": "catalog:",
 		"@trpc/server": "catalog:",
 		"@trpc/tanstack-react-query": "^11.16.0",
+		"@whatsapp-flow/api": "workspace:*",
+		"@whatsapp-flow/env": "workspace:*",
+		"@whatsapp-flow/ui": "workspace:*",
+		"@xyflow/react": "^12.11.0",
 		"better-auth": "catalog:",
 		"dotenv": "catalog:",
 		"lucide-react": "^1.8.0",
@@ -28,7 +29,8 @@
 		"react-dom": "catalog:",
 		"sonner": "^2.0.7",
 		"tailwindcss": "^4.2.2",
-		"zod": "catalog:"
+		"zod": "catalog:",
+		"zustand": "^5.0.14"
 	},
 	"devDependencies": {
 		"@whatsapp-flow/config": "workspace:*",
