@@ -1,5 +1,12 @@
+import { Button } from "@whatsapp-flow/ui/components/button";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
-import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
+import {
+	Handle,
+	type Node,
+	type NodeProps,
+	Position,
+	useReactFlow,
+} from "@xyflow/react";
 import {
 	CirclePlay,
 	Clock,
@@ -21,6 +28,7 @@ import {
 	Shuffle,
 	StopCircle,
 	ThumbsUp,
+	Trash2,
 	Variable,
 	Video,
 	Webhook,
@@ -135,44 +143,44 @@ export type FlowNodeData =
 
 // ── Node Visual Components ───────────────────────────────────────
 
-const categoryColors: Record<
+export const categoryAccents: Record<
 	NodeCategory,
-	{ border: string; bg: string; icon: string }
+	{ accent: string; chip: string; icon: string }
 > = {
 	start: {
-		border: "border-primary",
-		bg: "bg-primary/10",
+		accent: "bg-primary",
+		chip: "bg-primary/10",
 		icon: "text-primary",
 	},
 	trigger: {
-		border: "border-green-500",
-		bg: "bg-green-50 dark:bg-green-950",
-		icon: "text-green-600",
+		accent: "bg-emerald-500/70",
+		chip: "bg-emerald-500/10",
+		icon: "text-emerald-600 dark:text-emerald-400",
 	},
 	message: {
-		border: "border-purple-500",
-		bg: "bg-purple-50 dark:bg-purple-950",
-		icon: "text-purple-600",
+		accent: "bg-violet-500/70",
+		chip: "bg-violet-500/10",
+		icon: "text-violet-600 dark:text-violet-400",
 	},
 	media: {
-		border: "border-fuchsia-500",
-		bg: "bg-fuchsia-50 dark:bg-fuchsia-950",
-		icon: "text-fuchsia-600",
+		accent: "bg-sky-500/70",
+		chip: "bg-sky-500/10",
+		icon: "text-sky-600 dark:text-sky-400",
 	},
 	interactive: {
-		border: "border-orange-500",
-		bg: "bg-orange-50 dark:bg-orange-950",
-		icon: "text-orange-600",
+		accent: "bg-amber-500/70",
+		chip: "bg-amber-500/10",
+		icon: "text-amber-600 dark:text-amber-400",
 	},
 	logic: {
-		border: "border-blue-500",
-		bg: "bg-blue-50 dark:bg-blue-950",
-		icon: "text-blue-600",
+		accent: "bg-blue-500/70",
+		chip: "bg-blue-500/10",
+		icon: "text-blue-600 dark:text-blue-400",
 	},
 	action: {
-		border: "border-red-500",
-		bg: "bg-red-50 dark:bg-red-950",
-		icon: "text-red-600",
+		accent: "bg-rose-500/70",
+		chip: "bg-rose-500/10",
+		icon: "text-rose-600 dark:text-rose-400",
 	},
 };
 
@@ -189,7 +197,8 @@ function BaseFlowNode({
 	category: NodeCategory;
 	children?: React.ReactNode;
 }) {
-	const c = categoryColors[category];
+	const c = categoryAccents[category];
+	const { deleteElements } = useReactFlow();
 	const isStart = data.category === "start";
 	const isCondition = data.nodeType === "condition";
 	const isEnd = data.nodeType === "end";
@@ -197,41 +206,87 @@ function BaseFlowNode({
 	return (
 		<div
 			className={cn(
-				"relative flex min-w-40 flex-col gap-1 rounded-none border-2 px-3 py-2 text-xs shadow-sm",
-				c.border,
-				c.bg,
-				selected && "ring-2 ring-primary",
+				"group relative flex min-w-56 flex-col overflow-visible rounded-2xl border border-border/80 bg-card text-card-foreground text-xs shadow-sm ring-1 ring-foreground/5 transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md",
+				selected && "border-primary/60 shadow-md ring-2 ring-primary/15",
 			)}
 		>
-			{!isStart && <Handle type="target" position={Position.Left} />}
-			<div className="flex items-center gap-2 font-medium">
-				<Icon className={cn("size-4", c.icon)} />
-				{data.label}
+			{!isStart && (
+				<Handle
+					type="target"
+					position={Position.Left}
+					className="flow-node-handle"
+				/>
+			)}
+
+			<div className="flex items-center gap-2 border-b bg-muted/20 px-2.5 py-2">
+				<span
+					className={cn(
+						"flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background shadow-xs",
+						c.chip,
+					)}
+				>
+					<Icon className={cn("size-3.5", c.icon)} />
+				</span>
+				<span className="min-w-0 flex-1 truncate font-medium">
+					{data.label}
+				</span>
+				{!isStart && (
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						className="nodrag size-6 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 data-[state=open]:opacity-100"
+						onClick={(event) => {
+							event.stopPropagation();
+							deleteElements({ nodes: [{ id: data.id }] });
+						}}
+						aria-label="Delete node"
+					>
+						<Trash2 className="size-3" />
+					</Button>
+				)}
 			</div>
-			{children}
+
+			<div className="flex min-h-9 flex-col gap-1.5 px-3 py-2.5">
+				{children ?? (
+					<span className="text-[10px] text-muted-foreground">
+						Configure this step from the inspector.
+					</span>
+				)}
+			</div>
+
+			<div className={cn("absolute inset-x-4 bottom-0 h-px", c.accent)} />
 			{isCondition ? (
 				<>
 					<Handle
 						id="true"
 						type="source"
 						position={Position.Right}
-						style={{ top: "35%" }}
+						style={{ top: "38%" }}
+						className="flow-node-handle"
 					/>
 					<Handle
 						id="false"
 						type="source"
 						position={Position.Right}
-						style={{ top: "65%" }}
+						style={{ top: "68%" }}
+						className="flow-node-handle"
 					/>
-					<span className="absolute top-[25%] -right-8 text-[9px] text-green-600">
+					<span className="absolute top-[30%] -right-9 rounded-md border bg-background px-1 text-[9px] text-muted-foreground shadow-xs">
 						true
 					</span>
-					<span className="absolute top-[55%] -right-9 text-[9px] text-red-600">
+					<span className="absolute top-[60%] -right-10 rounded-md border bg-background px-1 text-[9px] text-muted-foreground shadow-xs">
 						false
 					</span>
 				</>
 			) : (
-				!isEnd && <Handle type="source" position={Position.Right} />
+				!isEnd && (
+					<Handle
+						type="source"
+						position={Position.Right}
+						className="flow-node-handle"
+					/>
+				)
 			)}
 		</div>
 	);

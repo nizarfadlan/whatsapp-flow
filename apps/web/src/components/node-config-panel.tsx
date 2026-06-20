@@ -1,5 +1,12 @@
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@whatsapp-flow/ui/components/select";
 import { Separator } from "@whatsapp-flow/ui/components/separator";
 import type { Node } from "@xyflow/react";
 import { Copy, Plus, RefreshCw, Trash2, X } from "lucide-react";
@@ -330,13 +337,14 @@ function InteractiveButtonsConfig({
 						Buttons ({(data.buttons ?? []).length}/3)
 					</span>
 					{(data.buttons ?? []).length < 3 && (
-						<button
+						<Button
 							type="button"
-							className="text-muted-foreground hover:text-foreground"
+							variant="ghost"
+							size="icon-xs"
 							onClick={addButton}
 						>
 							<Plus className="size-3" />
-						</button>
+						</Button>
 					)}
 				</div>
 				{(data.buttons ?? []).map((btn, i) => (
@@ -347,13 +355,15 @@ function InteractiveButtonsConfig({
 							value={btn.text}
 							onChange={(e) => updateButton(i, e.target.value)}
 						/>
-						<button
+						<Button
 							type="button"
+							variant="ghost"
+							size="icon-xs"
 							className="text-muted-foreground hover:text-destructive"
 							onClick={() => removeButton(i)}
 						>
 							<X className="size-3" />
-						</button>
+						</Button>
 					</div>
 				))}
 			</div>
@@ -429,13 +439,14 @@ function InteractiveListConfig({
 			<div className="flex flex-col gap-1.5">
 				<div className="flex items-center justify-between">
 					<span className="text-[10px] text-muted-foreground">Sections</span>
-					<button
+					<Button
 						type="button"
-						className="text-muted-foreground hover:text-foreground"
+						variant="ghost"
+						size="icon-xs"
 						onClick={addSection}
 					>
 						<Plus className="size-3" />
-					</button>
+					</Button>
 				</div>
 				{(data.sections ?? []).map((section, si) => (
 					<div key={si} className="flex flex-col gap-1 border-l-2 pl-2">
@@ -446,13 +457,15 @@ function InteractiveListConfig({
 								value={section.title}
 								onChange={(e) => updateSectionTitle(si, e.target.value)}
 							/>
-							<button
+							<Button
 								type="button"
+								variant="ghost"
+								size="icon-xs"
 								className="text-muted-foreground hover:text-destructive"
 								onClick={() => removeSection(si)}
 							>
 								<X className="size-3" />
-							</button>
+							</Button>
 						</div>
 						{section.rows.map((row, ri) => (
 							<div key={row.id} className="flex flex-col gap-0.5 pl-2">
@@ -463,13 +476,15 @@ function InteractiveListConfig({
 										value={row.title}
 										onChange={(e) => updateRow(si, ri, "title", e.target.value)}
 									/>
-									<button
+									<Button
 										type="button"
+										variant="ghost"
+										size="icon-xs"
 										className="text-muted-foreground hover:text-destructive"
 										onClick={() => removeRow(si, ri)}
 									>
 										<X className="size-3" />
-									</button>
+									</Button>
 								</div>
 								<Input
 									className="h-6 text-[10px]"
@@ -481,13 +496,15 @@ function InteractiveListConfig({
 								/>
 							</div>
 						))}
-						<button
+						<Button
 							type="button"
-							className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+							variant="ghost"
+							size="xs"
+							className="h-6 w-fit gap-1 px-1.5 text-[10px]"
 							onClick={() => addRow(si)}
 						>
 							<Plus className="size-2.5" /> Row
-						</button>
+						</Button>
 					</div>
 				))}
 			</div>
@@ -531,13 +548,14 @@ function InteractiveQuickReplyConfig({
 			<div className="flex flex-col gap-1">
 				<div className="flex items-center justify-between">
 					<span className="text-[10px] text-muted-foreground">Options</span>
-					<button
+					<Button
 						type="button"
-						className="text-muted-foreground hover:text-foreground"
+						variant="ghost"
+						size="icon-xs"
 						onClick={addButton}
 					>
 						<Plus className="size-3" />
-					</button>
+					</Button>
 				</div>
 				{(data.buttons ?? []).map((btn, i) => (
 					<div key={btn.id} className="flex items-center gap-1">
@@ -547,13 +565,15 @@ function InteractiveQuickReplyConfig({
 							value={btn.text}
 							onChange={(e) => updateButton(i, e.target.value)}
 						/>
-						<button
+						<Button
 							type="button"
+							variant="ghost"
+							size="icon-xs"
 							className="text-muted-foreground hover:text-destructive"
 							onClick={() => removeButton(i)}
 						>
 							<X className="size-3" />
-						</button>
+						</Button>
 					</div>
 				))}
 			</div>
@@ -580,18 +600,22 @@ function ConditionConfig({
 				/>
 			</Field>
 			<Field label="Operator">
-				<select
-					className="h-7 w-full rounded-none border border-input bg-background px-2 text-xs"
+				<Select
 					value={data.operator ?? "contains"}
-					onChange={(e) =>
-						onUpdate({ operator: e.target.value as LogicNodeData["operator"] })
+					onValueChange={(value) =>
+						onUpdate({ operator: value as LogicNodeData["operator"] })
 					}
 				>
-					<option value="equals">equals</option>
-					<option value="contains">contains</option>
-					<option value="starts-with">starts with</option>
-					<option value="regex">regex</option>
-				</select>
+					<SelectTrigger className="h-7 w-full text-xs" size="sm">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="equals">equals</SelectItem>
+						<SelectItem value="contains">contains</SelectItem>
+						<SelectItem value="starts-with">starts with</SelectItem>
+						<SelectItem value="regex">regex</SelectItem>
+					</SelectContent>
+				</Select>
 			</Field>
 			<Field label="Value">
 				<Input
@@ -724,19 +748,23 @@ function WebhookCallConfig({
 	return (
 		<>
 			<Field label="Method">
-				<select
-					className="h-7 w-full rounded-none border border-input bg-background px-2 text-xs"
+				<Select
 					value={data.webhookMethod ?? "POST"}
-					onChange={(e) =>
+					onValueChange={(value) =>
 						onUpdate({
-							webhookMethod: e.target.value as ActionNodeData["webhookMethod"],
+							webhookMethod: value as ActionNodeData["webhookMethod"],
 						})
 					}
 				>
-					<option value="GET">GET</option>
-					<option value="POST">POST</option>
-					<option value="PUT">PUT</option>
-				</select>
+					<SelectTrigger className="h-7 w-full text-xs" size="sm">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="GET">GET</SelectItem>
+						<SelectItem value="POST">POST</SelectItem>
+						<SelectItem value="PUT">PUT</SelectItem>
+					</SelectContent>
+				</Select>
 			</Field>
 			<Field label="URL">
 				<Input

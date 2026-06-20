@@ -10,9 +10,10 @@ import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
+import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, eq, isNotNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -184,6 +185,62 @@ app.get("/", (c) => {
 });
 
 const db = createDb();
+
+// Persist incoming WhatsApp messages to inbox
+connectionManager.on("device:message", async (ev) => {
+	try {
+		const { deviceId, contact, message } = ev;
+
+		// Upsert thread
+		const threadId = crypto.randomUUID();
+		const existingThreads = await db
+			.select({ id: inboxThread.id })
+			.from(inboxThread)
+			.where(
+				and(
+					eq(inboxThread.deviceId, deviceId),
+					eq(inboxThread.contactNumber, contact.number),
+				),
+			)
+			.limit(1);
+
+		let threadId_: string = threadId;
+		if (existingThreads[0]) {
+			threadId_ = existingThreads[0].id;
+			await db
+				.update(inboxThread)
+				.set({
+					contactName: contact.name ?? null,
+					lastMessageText: message.text ?? null,
+					lastMessageAt: new Date(),
+					unreadCount: sql`${inboxThread.unreadCount} + 1`,
+				})
+				.where(eq(inboxThread.id, threadId_));
+		} else {
+			await db.insert(inboxThread).values({
+				id: threadId_,
+				deviceId,
+				contactNumber: contact.number,
+				contactName: contact.name ?? null,
+				lastMessageText: message.text ?? null,
+				lastMessageAt: new Date(),
+				unreadCount: 1,
+			});
+		}
+
+		// Insert message
+		await db.insert(inboxMessage).values({
+			id: crypto.randomUUID(),
+			threadId: threadId_,
+			direction: "inbound",
+			messageType: message.type,
+			text: message.text ?? null,
+			raw: message.raw as Record<string, unknown> | null,
+		});
+	} catch (err) {
+		console.error("Failed to persist inbox message", err);
+	}
+});
 
 async function reconnectDevices() {
 	const reconnectable = await db

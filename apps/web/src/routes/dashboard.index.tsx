@@ -11,32 +11,83 @@ import {
 	CardTitle,
 } from "@whatsapp-flow/ui/components/card";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
-import { Activity, Bot, MessageSquare, Plus, Smartphone } from "lucide-react";
+import {
+	Activity,
+	ArrowRight,
+	Bot,
+	MessageSquare,
+	Plus,
+	Smartphone,
+} from "lucide-react";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/")({
 	component: DashboardOverview,
 });
 
+const sections = [
+	{
+		icon: Smartphone,
+		title: "Devices",
+		description: "Register WhatsApp sessions and monitor connection status.",
+		to: "/dashboard/devices",
+	},
+	{
+		icon: MessageSquare,
+		title: "Flows",
+		description: "Compose triggers, messages, logic, and actions.",
+		to: "/dashboard/flows",
+	},
+	{
+		icon: Activity,
+		title: "Logs",
+		description: "Review executions and delivery behavior.",
+		to: "/dashboard/logs",
+	},
+] as const;
+
 function DashboardOverview() {
 	const trpc = useTRPC();
 	const { data } = useSuspenseQuery(trpc.healthCheck.queryOptions());
 
 	return (
-		<div className="space-y-4">
+		<div className="space-y-6">
+			<div className="space-y-1">
+				<h2 className="font-semibold text-2xl tracking-tight">Overview</h2>
+				<p className="text-muted-foreground text-sm">
+					Manage your WhatsApp automation workspace.
+				</p>
+			</div>
+
 			<div className="grid gap-4 md:grid-cols-3">
-				<Card className="border-primary/20 bg-primary/5 md:col-span-2">
+				{sections.map(({ icon: Icon, title, description, to }) => (
+					<Link key={title} to={to} className="group">
+						<Card className="h-full border bg-card shadow-sm transition-colors group-hover:bg-muted/40">
+							<CardHeader>
+								<div className="mb-2 flex size-9 items-center justify-center border bg-muted">
+									<Icon className="size-4 text-primary" />
+								</div>
+								<CardTitle>{title}</CardTitle>
+								<CardDescription>{description}</CardDescription>
+							</CardHeader>
+						</Card>
+					</Link>
+				))}
+			</div>
+
+			<div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+				<Card className="border bg-card shadow-sm">
 					<CardHeader>
 						<CardTitle className="flex items-center gap-2 text-base">
 							<Bot className="size-4 text-primary" />
 							Build WhatsApp automations visually
 						</CardTitle>
 						<CardDescription>
-							Connect a Baileys device, design the flow with nodes, then deploy
-							it to handle incoming messages.
+							Connect a device, design the flow with nodes, then deploy it to
+							handle incoming messages.
 						</CardDescription>
 						<CardAction>
-							<Badge variant="secondary" className="text-[10px]">
+							<Badge variant="secondary" className="text-xs">
 								Ready
 							</Badge>
 						</CardAction>
@@ -59,55 +110,26 @@ function DashboardOverview() {
 					</CardContent>
 				</Card>
 
-				<Card>
+				<Card className="border bg-card shadow-sm">
 					<CardHeader>
-						<CardTitle>Server Status</CardTitle>
-						<CardDescription>Current API health response.</CardDescription>
-						<CardAction>
-							<span className="flex size-8 items-center justify-center border bg-green-500/10 text-green-600">
-								<Activity className="size-4" />
-							</span>
-						</CardAction>
-					</CardHeader>
-					<CardContent>
-						<p className="font-medium text-sm">{data}</p>
-					</CardContent>
-				</Card>
-			</div>
-
-			<div className="grid gap-4 md:grid-cols-3">
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle className="flex items-center gap-2">
-							<Smartphone className="size-4 text-primary" />
-							Devices
-						</CardTitle>
-						<CardDescription>
-							Register WhatsApp sessions and monitor QR status.
-						</CardDescription>
-					</CardHeader>
-				</Card>
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle className="flex items-center gap-2">
-							<MessageSquare className="size-4 text-primary" />
-							Flows
-						</CardTitle>
-						<CardDescription>
-							Compose triggers, messages, logic, and actions.
-						</CardDescription>
-					</CardHeader>
-				</Card>
-				<Card size="sm">
-					<CardHeader>
-						<CardTitle className="flex items-center gap-2">
+						<CardTitle className="flex items-center gap-2 text-base">
 							<Activity className="size-4 text-primary" />
-							Logs
+							Server status
 						</CardTitle>
-						<CardDescription>
-							Review executions and delivery behavior.
-						</CardDescription>
+						<CardDescription>Current API health response.</CardDescription>
 					</CardHeader>
+					<CardContent className="space-y-3">
+						<div className="border bg-muted/30 px-3 py-2">
+							<p className="font-medium text-sm">{data}</p>
+						</div>
+						<Link
+							to="/dashboard/logs"
+							className="inline-flex items-center gap-1 text-muted-foreground text-sm hover:text-foreground"
+						>
+							View runtime logs
+							<ArrowRight className="size-3.5" />
+						</Link>
+					</CardContent>
 				</Card>
 			</div>
 		</div>

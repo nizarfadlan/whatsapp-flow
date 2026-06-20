@@ -1,15 +1,19 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { Button } from "@whatsapp-flow/ui/components/button";
+import {
+	createFileRoute,
+	Link,
+	Outlet,
+	useLocation,
+} from "@tanstack/react-router";
+import { Badge } from "@whatsapp-flow/ui/components/badge";
+import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
+import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
 import {
 	Dialog,
-	DialogCloseButton,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
 	DialogHeader,
-	DialogPopup,
-	DialogPortal,
 	DialogTitle,
 	DialogTrigger,
 } from "@whatsapp-flow/ui/components/dialog";
@@ -28,12 +32,19 @@ import {
 	useEdgesState,
 	useNodesState,
 } from "@xyflow/react";
-import { useTRPC } from "@/utils/trpc";
-import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Play, Redo2, Save, ScrollText, Undo2 } from "lucide-react";
+import {
+	ArrowLeft,
+	GripVertical,
+	Play,
+	Redo2,
+	Save,
+	ScrollText,
+	Undo2,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+	categoryAccents,
 	createNode,
 	createStartNode,
 	type FlowNodeData,
@@ -44,10 +55,21 @@ import {
 } from "@/components/flow-nodes";
 import { NodeConfigPanel } from "@/components/node-config-panel";
 import { useEditorStore } from "@/stores/editor-store";
+import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/flows/$flowId")({
-	component: FlowEditor,
+	component: FlowRoute,
 });
+
+function FlowRoute() {
+	const location = useLocation();
+
+	if (location.pathname.endsWith("/logs")) {
+		return <Outlet />;
+	}
+
+	return <FlowEditor />;
+}
 
 function isTriggerType(type: string | undefined) {
 	return type?.startsWith("trigger-") ?? false;
@@ -340,8 +362,8 @@ function FlowEditor() {
 	}, [handleDeleteKey]);
 
 	return (
-		<div className="flex h-[calc(100vh-8rem)] flex-col gap-3">
-			<div className="flex items-center justify-between">
+		<div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+			<div className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4">
 				<div className="flex items-center gap-3">
 					<Link
 						to="/dashboard/flows"
@@ -358,18 +380,18 @@ function FlowEditor() {
 							</span>
 						)}
 					</h1>
-					<span
-						className={cn(
-							"rounded-none px-1.5 py-0.5 text-[10px]",
+					<Badge
+						variant={
 							flow.status === "active"
-								? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-400"
+								? "default"
 								: flow.status === "paused"
-									? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-400"
-									: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-						)}
+									? "secondary"
+									: "outline"
+						}
+						className="h-4 px-1.5 text-[9px]"
 					>
 						{flow.status}
-					</span>
+					</Badge>
 					<Link
 						to="/dashboard/flows/$flowId/logs"
 						params={{ flowId }}
@@ -380,24 +402,24 @@ function FlowEditor() {
 					</Link>
 				</div>
 				<div className="flex items-center gap-2">
-					<button
-						type="button"
-						className="inline-flex size-7 items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
+					<Button
+						variant="ghost"
+						size="icon-sm"
 						disabled={!canUndo}
 						onClick={handleUndo}
 						title="Undo (Ctrl+Z)"
 					>
 						<Undo2 className="size-3.5" />
-					</button>
-					<button
-						type="button"
-						className="inline-flex size-7 items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30"
+					</Button>
+					<Button
+						variant="ghost"
+						size="icon-sm"
 						disabled={!canRedo}
 						onClick={handleRedo}
 						title="Redo (Ctrl+Shift+Z)"
 					>
 						<Redo2 className="size-3.5" />
-					</button>
+					</Button>
 					<DeployDialog
 						flowId={flowId}
 						flowName={flow.name}
@@ -415,78 +437,99 @@ function FlowEditor() {
 				</div>
 			</div>
 
-			<div className="flex flex-1 gap-3 overflow-hidden">
-				{/* Node Palette */}
-				<div className="flex w-40 shrink-0 flex-col gap-3 overflow-y-auto border-r pr-2">
-					<p className="text-[10px] text-muted-foreground">Add Nodes</p>
-					{paletteCategories.map((cat) => (
-						<div key={cat.label} className="flex flex-col gap-1">
-							<p className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">
-								{cat.label}
+			<div className="flex min-h-0 flex-1 overflow-hidden">
+				<Card className="w-64 shrink-0 overflow-y-auto rounded-none border-0 border-r bg-card/80">
+					<CardContent className="flex flex-col gap-4 p-4">
+						<div>
+							<p className="font-medium text-sm">Add Nodes</p>
+							<p className="text-muted-foreground text-xs">
+								Click or drag to canvas
 							</p>
-							{cat.items.map((item) => {
-								const colorMap: Record<string, string> = {
-									trigger: "border-green-500 bg-green-50 dark:bg-green-950",
-									message: "border-purple-500 bg-purple-50 dark:bg-purple-950",
-									media: "border-fuchsia-500 bg-fuchsia-50 dark:bg-fuchsia-950",
-									interactive:
-										"border-orange-500 bg-orange-50 dark:bg-orange-950",
-									logic: "border-blue-500 bg-blue-50 dark:bg-blue-950",
-									action: "border-red-500 bg-red-50 dark:bg-red-950",
-								};
-								return (
-									<button
-										key={item.type}
-										type="button"
-										className={cn(
-											"flex items-center gap-1.5 border-2 px-2 py-1 text-[10px] transition-colors hover:opacity-80",
-											colorMap[item.category],
-										)}
-										draggable
-										onDragStart={(e) => handlePaletteDragStart(e, item.type)}
-										onClick={() => handleAddNode(item.type)}
-									>
-										<item.icon className="size-3" />
-										{item.label}
-									</button>
-								);
-							})}
 						</div>
-					))}
-				</div>
+						{paletteCategories.map((cat) => (
+							<div key={cat.label} className="flex flex-col gap-1.5">
+								<p className="px-1 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
+									{cat.label}
+								</p>
+								{cat.items.map((item) => {
+									const accent = categoryAccents[item.category];
+									return (
+										<Button
+											key={item.type}
+											type="button"
+											variant="ghost"
+											className="group/palette h-9 justify-start gap-2 rounded-lg border border-border/70 bg-background/70 px-2.5 text-xs shadow-xs hover:bg-muted"
+											draggable
+											onDragStart={(e) => handlePaletteDragStart(e, item.type)}
+											onClick={() => handleAddNode(item.type)}
+										>
+											<GripVertical className="size-3.5 shrink-0 cursor-grab text-muted-foreground/30 group-hover/palette:text-muted-foreground/60" />
+											<span
+												className={cn(
+													"flex size-5 items-center justify-center rounded-md",
+													accent.chip,
+												)}
+											>
+												<item.icon className={cn("size-3", accent.icon)} />
+											</span>
+											<span className="truncate">{item.label}</span>
+										</Button>
+									);
+								})}
+							</div>
+						))}
+					</CardContent>
+				</Card>
 
-				{/* Flow Canvas */}
-				<div className="flex-1 border">
-					<ReactFlow
-						nodes={nodes}
-						edges={edges}
-						onNodesChange={onNodesChange}
-						onEdgesChange={onEdgesChange}
-						onConnect={onConnect}
-						onNodeClick={onNodeClick}
-						onPaneClick={onPaneClick}
-						onInit={setReactFlowInstance}
-						onDrop={handleCanvasDrop}
-						onDragOver={handleCanvasDragOver}
-						nodeTypes={nodeTypes}
-						fitView
-						deleteKeyCode={null}
-					>
-						<Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-						<Controls className="rounded-none" />
-						<MiniMap className="rounded-none" />
-					</ReactFlow>
-				</div>
+				<Card className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-muted/20">
+					<CardContent className="h-full min-h-0 flex-1 p-0">
+						<ReactFlow
+							className="size-full"
+							nodes={nodes}
+							edges={edges}
+							onNodesChange={onNodesChange}
+							onEdgesChange={onEdgesChange}
+							onConnect={onConnect}
+							onNodeClick={onNodeClick}
+							onPaneClick={onPaneClick}
+							onInit={setReactFlowInstance}
+							onDrop={handleCanvasDrop}
+							onDragOver={handleCanvasDragOver}
+							nodeTypes={nodeTypes}
+							fitView
+							fitViewOptions={{ padding: 0.2 }}
+							deleteKeyCode={null}
+							proOptions={{ hideAttribution: true }}
+						>
+							<Background variant={BackgroundVariant.Dots} gap={24} size={1} />
+							<Controls
+								position="bottom-left"
+								showInteractive={false}
+								className="flow-controls"
+							/>
+							<MiniMap
+								position="bottom-right"
+								pannable
+								zoomable
+								maskColor="rgb(0 0 0 / 0.08)"
+								nodeColor={() => "var(--primary)"}
+								nodeStrokeColor={() => "var(--background)"}
+								className="flow-minimap"
+							/>
+						</ReactFlow>
+					</CardContent>
+				</Card>
 
-				{/* Config Panel */}
-				<div className="w-56 shrink-0 overflow-y-auto border-l">
-					<NodeConfigPanel
-						node={selectedNode}
-						flowId={flowId}
-						onUpdate={updateNodeData}
-						onDelete={deleteNode}
-					/>
-				</div>
+				<Card className="w-80 shrink-0 overflow-y-auto rounded-none border-0 border-l bg-card/80">
+					<CardContent className="p-0">
+						<NodeConfigPanel
+							node={selectedNode}
+							flowId={flowId}
+							onUpdate={updateNodeData}
+							onDelete={deleteNode}
+						/>
+					</CardContent>
+				</Card>
 			</div>
 		</div>
 	);
@@ -527,62 +570,60 @@ function DeployDialog({
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger
 				disabled={disabled}
-				className="inline-flex items-center gap-1.5 rounded-none bg-green-600 px-2.5 py-1 font-medium text-white text-xs hover:bg-green-700 disabled:opacity-50"
+				className={cn(buttonVariants({ size: "sm" }), "h-7 text-xs")}
 			>
 				<Play className="size-3.5" />
 				Deploy
 			</DialogTrigger>
-			<DialogPortal>
-				<DialogPopup>
-					<DialogCloseButton />
-					<DialogHeader>
-						<DialogTitle>Deploy Flow</DialogTitle>
-						<DialogDescription>
-							Select device to run this flow on.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogContent>
-						{devices && devices.length > 0 ? (
-							<div className="flex flex-col gap-1">
-								{devices.map((d) => (
-									<button
-										key={d.id}
-										type="button"
-										className={cn(
-											"rounded-none border px-3 py-2 text-left text-xs transition-colors hover:bg-muted",
-											deviceId === d.id
-												? "border-primary bg-primary/10"
-												: "border-border",
-										)}
-										onClick={() => setDeviceId(d.id)}
-									>
-										<div className="font-medium">{d.name}</div>
-										<div className="text-[10px] text-muted-foreground">
-											{d.phoneNumber ?? "No phone"} · {d.status}
-										</div>
-									</button>
-								))}
-							</div>
-						) : (
-							<p className="text-muted-foreground text-xs">
-								No devices available. Add device first.
-							</p>
-						)}
-					</DialogContent>
-					<DialogFooter>
-						<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-							Cancel
-						</Button>
-						<Button
-							size="sm"
-							disabled={!deviceId || deployMut.isPending}
-							onClick={() => deployMut.mutate({ id: flowId, deviceId })}
-						>
-							{deployMut.isPending ? "Deploying..." : "Deploy"}
-						</Button>
-					</DialogFooter>
-				</DialogPopup>
-			</DialogPortal>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Deploy Flow</DialogTitle>
+					<DialogDescription>
+						Select device to run this flow on.
+					</DialogDescription>
+				</DialogHeader>
+				{devices && devices.length > 0 ? (
+					<div className="flex flex-col gap-1">
+						{devices.map((d) => (
+							<Button
+								key={d.id}
+								type="button"
+								variant="ghost"
+								className={cn(
+									"h-auto justify-start rounded-lg border px-3 py-2 text-left text-xs",
+									deviceId === d.id
+										? "border-primary bg-primary/10"
+										: "border-border hover:bg-muted",
+								)}
+								onClick={() => setDeviceId(d.id)}
+							>
+								<span className="flex flex-col items-start gap-0.5">
+									<span className="font-medium">{d.name}</span>
+									<span className="text-[10px] text-muted-foreground">
+										{d.phoneNumber ?? "No phone"} · {d.status}
+									</span>
+								</span>
+							</Button>
+						))}
+					</div>
+				) : (
+					<p className="text-muted-foreground text-xs">
+						No devices available. Add device first.
+					</p>
+				)}
+				<DialogFooter>
+					<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+						Cancel
+					</Button>
+					<Button
+						size="sm"
+						disabled={!deviceId || deployMut.isPending}
+						onClick={() => deployMut.mutate({ id: flowId, deviceId })}
+					>
+						{deployMut.isPending ? "Deploying..." : "Deploy"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
 		</Dialog>
 	);
 }

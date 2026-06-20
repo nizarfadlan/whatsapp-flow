@@ -1,16 +1,13 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Button } from "@whatsapp-flow/ui/components/button";
+import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
 import {
 	Dialog,
-	DialogCloseButton,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
 	DialogHeader,
-	DialogPopup,
-	DialogPortal,
 	DialogTitle,
 	DialogTrigger,
 } from "@whatsapp-flow/ui/components/dialog";
@@ -33,6 +30,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DataTable } from "@/components/data-table";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/flows/")({
@@ -77,42 +75,37 @@ function CreateFlowDialog({ onCreated }: { onCreated: () => void }) {
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger className="inline-flex items-center gap-1.5 rounded-none bg-primary px-2.5 py-1.5 font-medium text-primary-foreground text-xs hover:bg-primary/80">
+			<DialogTrigger className={cn(buttonVariants({ size: "sm" }), "text-xs")}>
 				<Plus className="size-3.5" />
 				New Flow
 			</DialogTrigger>
-			<DialogPortal>
-				<DialogPopup>
-					<DialogCloseButton />
-					<DialogHeader>
-						<DialogTitle>Create Flow</DialogTitle>
-						<DialogDescription>Name your automation flow.</DialogDescription>
-					</DialogHeader>
-					<DialogContent>
-						<Input
-							placeholder="Welcome Message"
-							value={name}
-							onChange={(e) => setName(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && name.trim()) {
-									create.mutate({ name: name.trim() });
-								}
-							}}
-						/>
-					</DialogContent>
-					<DialogFooter>
-						<Button variant="outline" onClick={() => setOpen(false)}>
-							Cancel
-						</Button>
-						<Button
-							disabled={!name.trim() || create.isPending}
-							onClick={() => create.mutate({ name: name.trim() })}
-						>
-							{create.isPending ? "Creating..." : "Create"}
-						</Button>
-					</DialogFooter>
-				</DialogPopup>
-			</DialogPortal>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Create Flow</DialogTitle>
+					<DialogDescription>Name your automation flow.</DialogDescription>
+				</DialogHeader>
+				<Input
+					placeholder="Welcome Message"
+					value={name}
+					onChange={(e) => setName(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && name.trim()) {
+							create.mutate({ name: name.trim() });
+						}
+					}}
+				/>
+				<DialogFooter>
+					<Button variant="outline" onClick={() => setOpen(false)}>
+						Cancel
+					</Button>
+					<Button
+						disabled={!name.trim() || create.isPending}
+						onClick={() => create.mutate({ name: name.trim() })}
+					>
+						{create.isPending ? "Creating..." : "Create"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
 		</Dialog>
 	);
 }
@@ -168,92 +161,93 @@ function FlowsPage() {
 							<CreateFlowDialog onCreated={() => refetch()} />
 						</div>
 					) : (
-						<table className="w-full">
-							<thead>
-								<tr className="border-border border-b text-left text-muted-foreground text-xs">
-									<th className="px-4 py-2 font-medium">Name</th>
-									<th className="px-4 py-2 font-medium">Trigger</th>
-									<th className="px-4 py-2 font-medium">Status</th>
-									<th className="px-4 py-2 font-medium">Updated</th>
-									<th className="w-10 px-4 py-2 font-medium" />
-								</tr>
-							</thead>
-							<tbody>
-								{flows.map((f) => (
-									<tr
-										key={f.id}
-										className="border-border border-b text-xs last:border-0"
-									>
-										<td className="px-4 py-2.5 font-medium">
-											<Link
-												to="/dashboard/flows/$flowId"
-												params={{ flowId: f.id }}
-												className="hover:text-primary hover:underline"
+						<DataTable
+							data={flows}
+							getRowKey={(flow) => flow.id}
+							columns={[
+								{
+									key: "name",
+									header: "Name",
+									className: "font-medium",
+									cell: (f) => (
+										<Link
+											to="/dashboard/flows/$flowId"
+											params={{ flowId: f.id }}
+											className="hover:text-primary hover:underline"
+										>
+											{f.name}
+										</Link>
+									),
+								},
+								{
+									key: "trigger",
+									header: "Trigger",
+									className: "text-muted-foreground",
+									cell: (f) => f.triggerType,
+								},
+								{
+									key: "status",
+									header: "Status",
+									cell: (f) => <FlowStatusBadge status={f.status} />,
+								},
+								{
+									key: "updated",
+									header: "Updated",
+									className: "text-muted-foreground",
+									cell: (f) => new Date(f.updatedAt).toLocaleDateString(),
+								},
+								{
+									key: "actions",
+									header: null,
+									headClassName: "w-10",
+									className: "w-10",
+									cell: (f) => (
+										<DropdownMenu>
+											<DropdownMenuTrigger
+												render={<Button variant="ghost" size="icon-sm" />}
 											>
-												{f.name}
-											</Link>
-										</td>
-										<td className="px-4 py-2.5 text-muted-foreground">
-											{f.triggerType}
-										</td>
-										<td className="px-4 py-2.5">
-											<FlowStatusBadge status={f.status} />
-										</td>
-										<td className="px-4 py-2.5 text-muted-foreground">
-											{new Date(f.updatedAt).toLocaleDateString()}
-										</td>
-										<td className="px-4 py-2.5">
-											<DropdownMenu>
-												<DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-none hover:bg-muted">
-													<MoreHorizontal className="size-4" />
-												</DropdownMenuTrigger>
-												<DropdownMenuContent>
+												<MoreHorizontal className="size-4" />
+											</DropdownMenuTrigger>
+											<DropdownMenuContent>
+												<DropdownMenuItem
+													onClick={() => duplicateMut.mutate({ id: f.id })}
+												>
+													<Copy className="size-3.5" />
+													Duplicate
+												</DropdownMenuItem>
+												{f.status !== "active" && (
 													<DropdownMenuItem
-														onClick={() => duplicateMut.mutate({ id: f.id })}
+														onClick={() =>
+															toggleMut.mutate({ id: f.id, status: "active" })
+														}
 													>
-														<Copy className="size-3.5" />
-														Duplicate
+														<Play className="size-3.5" />
+														Activate
 													</DropdownMenuItem>
-													{f.status !== "active" && (
-														<DropdownMenuItem
-															onClick={() =>
-																toggleMut.mutate({
-																	id: f.id,
-																	status: "active",
-																})
-															}
-														>
-															<Play className="size-3.5" />
-															Activate
-														</DropdownMenuItem>
-													)}
-													{f.status === "active" && (
-														<DropdownMenuItem
-															onClick={() =>
-																toggleMut.mutate({
-																	id: f.id,
-																	status: "paused",
-																})
-															}
-														>
-															<Pause className="size-3.5" />
-															Pause
-														</DropdownMenuItem>
-													)}
+												)}
+												{f.status === "active" && (
 													<DropdownMenuItem
-														className="text-destructive"
-														onClick={() => deleteMut.mutate({ id: f.id })}
+														onClick={() =>
+															toggleMut.mutate({ id: f.id, status: "paused" })
+														}
 													>
-														<Trash2 className="size-3.5" />
-														Delete
+														<Pause className="size-3.5" />
+														Pause
 													</DropdownMenuItem>
-												</DropdownMenuContent>
-											</DropdownMenu>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+												)}
+												<DropdownMenuItem
+													variant="destructive"
+													onClick={() => deleteMut.mutate({ id: f.id })}
+												>
+													<Trash2 className="size-3.5" />
+													Delete
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									),
+								},
+							]}
+						/>
 					)}
 				</CardContent>
 			</Card>

@@ -1,9 +1,17 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { Badge } from "@whatsapp-flow/ui/components/badge";
-import { Separator } from "@whatsapp-flow/ui/components/separator";
-import { Activity, PanelLeft, Sparkles } from "lucide-react";
+import {
+	createFileRoute,
+	Outlet,
+	redirect,
+	useLocation,
+} from "@tanstack/react-router";
+import {
+	SidebarInset,
+	SidebarProvider,
+	SidebarTrigger,
+} from "@whatsapp-flow/ui/components/sidebar";
+import { cn } from "@whatsapp-flow/ui/lib/utils";
 
-import { DashboardSidebar, MobileSidebarTrigger } from "@/components/sidebar";
+import { DashboardSidebar } from "@/components/sidebar";
 import UserMenu from "@/components/user-menu";
 import { getUser } from "@/functions/get-user";
 
@@ -21,49 +29,44 @@ export const Route = createFileRoute("/dashboard")({
 });
 
 function DashboardLayout() {
+	const location = useLocation();
+	const isFlowWorkspace = /^\/dashboard\/flows\/[^/]+$/.test(location.pathname);
+	const isInboxWorkspace = location.pathname === "/dashboard/inbox";
+	const isFixedWorkspace = isFlowWorkspace || isInboxWorkspace;
+
 	return (
-		<div className="flex h-svh overflow-hidden bg-background">
+		<SidebarProvider className="h-svh min-h-0 overflow-hidden bg-sidebar">
 			<DashboardSidebar />
-			<div className="flex min-w-0 flex-1 flex-col">
-				<header className="flex h-14 shrink-0 items-center gap-3 border-border/70 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/75 md:px-6">
-					<MobileSidebarTrigger />
-					<div className="hidden items-center gap-2 text-muted-foreground md:flex">
-						<PanelLeft className="size-4" />
-						<Separator orientation="vertical" className="h-4" />
-					</div>
+			<SidebarInset className="h-[calc(100svh-1rem)] min-h-0 min-w-0 overflow-hidden border bg-background md:m-2 md:rounded-xl md:shadow-xs">
+				<header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 md:px-5">
+					<SidebarTrigger />
 					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-2">
-							<h1 className="truncate font-medium text-sm">Dashboard</h1>
-							<Badge
-								variant="secondary"
-								className="hidden gap-1 text-[10px] sm:inline-flex"
-							>
-								<Sparkles className="size-3" />
-								Builder workspace
-							</Badge>
-						</div>
-						<p className="hidden text-[10px] text-muted-foreground sm:block">
-							Manage devices, flows, and WhatsApp automation logs.
+						<h1 className="truncate font-semibold text-sm">Dashboard</h1>
+						<p className="hidden text-muted-foreground text-xs sm:block">
+							Manage devices, flows, inbox, and automation logs.
 						</p>
 					</div>
-					<div className="flex items-center gap-2">
-						<Badge
-							variant="outline"
-							className="hidden gap-1 text-[10px] sm:inline-flex"
-						>
-							<Activity className="size-3" />
-							Runtime live
-						</Badge>
-						<UserMenu />
-					</div>
+					<UserMenu />
 				</header>
 
-				<main className="min-h-0 flex-1 overflow-y-auto bg-muted/20">
-					<div className="mx-auto w-full max-w-7xl p-4 md:p-6">
+				<main
+					className={cn(
+						"flex min-h-0 flex-1 bg-muted/40",
+						isFixedWorkspace ? "overflow-hidden" : "overflow-y-auto",
+					)}
+				>
+					<div
+						className={cn(
+							"w-full",
+							isFixedWorkspace
+								? "h-full min-h-0 overflow-hidden p-0"
+								: "mx-auto max-w-7xl p-4 md:p-6",
+						)}
+					>
 						<Outlet />
 					</div>
 				</main>
-			</div>
-		</div>
+			</SidebarInset>
+		</SidebarProvider>
 	);
 }

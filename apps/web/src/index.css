@@ -1,1 +1,102 @@
 @import "@whatsapp-flow/ui/globals.css";
+@import "@xyflow/react/dist/style.css";
+
+/* ---- Controls (pill glassmorphism) ---- */
+.react-flow__controls {
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: hsl(var(--card) / 0.85);
+	backdrop-filter: blur(12px);
+	box-shadow:
+		0 4px 12px rgb(0 0 0 / 0.06),
+		0 0 0 1px rgb(0 0 0 / 0.02);
+	padding: 3px;
+}
+
+.react-flow__controls-button {
+	width: 28px;
+	height: 28px;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--foreground);
+	transition: background 0.15s;
+}
+
+.react-flow__controls-button:hover {
+	background: hsl(var(--muted) / 0.7);
+}
+
+.react-flow__controls-button svg {
+	fill: currentColor;
+	color: var(--foreground);
+	stroke: currentColor;
+}
+
+/* ---- Minimap (glassmorphism) ---- */
+.react-flow__minimap {
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: hsl(var(--card) / 0.8);
+	backdrop-filter: blur(10px);
+	box-shadow:
+		0 4px 12px rgb(0 0 0 / 0.05),
+		0 0 0 1px rgb(0 0 0 / 0.02);
+	overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+	fill: rgb(0 0 0 / 0.06);
+}
+
+.react-flow__minimap-node {
+	fill: var(--primary);
+	stroke: var(--background);
+	stroke-width: 1.5;
+}
+
+.dark .react-flow__minimap-mask {
+	fill: rgb(255 255 255 / 0.08);
+}
+
+/* ---- Node handles ---- */
+.react-flow .react-flow__handle.flow-node-handle {
+	width: 10px;
+	height: 10px;
+	border: 2px solid var(--border);
+	border-radius: 999px;
+	background: var(--card);
+	box-shadow: 0 0 0 1px rgb(0 0 0 / 0.04);
+	transition:
+		border-color 0.15s,
+		background 0.15s,
+		transform 0.15s;
+}
+
+.react-flow .react-flow__handle.flow-node-handle:hover {
+	border-color: var(--primary);
+	background: var(--primary);
+	transform: scale(1.3);
+}
+
+/* ---- Edges ---- */
+.react-flow__edge-path {
+	stroke: var(--muted-foreground);
+	stroke-opacity: 0.45;
+	stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+	stroke: var(--primary);
+	stroke-opacity: 1;
+	stroke-width: 2.5;
+}
+
+/* ---- Drag handle sticky ---- */
+.drag-handle {
+	cursor: grab;
+}
+.drag-handle:active {
+	cursor: grabbing;
+}

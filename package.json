@@ -42,6 +42,7 @@
 	},
 	"dependencies": {
 		"@whatsapp-flow/env": "workspace:*",
+		"baileys": "npm:@oxidezap/baileyrs",
 		"dotenv": "catalog:",
 		"zod": "catalog:"
 	},

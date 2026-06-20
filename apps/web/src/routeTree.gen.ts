@@ -14,6 +14,7 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
+import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
 import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
 import { Route as DashboardDevicesRouteImport } from './routes/dashboard.devices'
 import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flows.index'
@@ -45,6 +46,11 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
 const DashboardLogsRoute = DashboardLogsRouteImport.update({
   id: '/logs',
   path: '/logs',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardInboxRoute = DashboardInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardFlowsRoute = DashboardFlowsRouteImport.update({
@@ -90,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
+  '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
+  '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
+  '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard/devices'
     | '/dashboard/flows'
+    | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard/'
     | '/dashboard/devices/$id'
@@ -145,6 +155,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard/devices'
+    | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard'
     | '/dashboard/devices/$id'
@@ -159,6 +170,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/dashboard/devices'
     | '/dashboard/flows'
+    | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard/'
     | '/dashboard/devices/$id'
@@ -209,6 +221,13 @@ declare module '@tanstack/react-router' {
       path: '/logs'
       fullPath: '/dashboard/logs'
       preLoaderRoute: typeof DashboardLogsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/inbox': {
+      id: '/dashboard/inbox'
+      path: '/inbox'
+      fullPath: '/dashboard/inbox'
+      preLoaderRoute: typeof DashboardInboxRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/flows': {
@@ -304,6 +323,7 @@ const DashboardFlowsRouteWithChildren = DashboardFlowsRoute._addFileChildren(
 interface DashboardRouteChildren {
   DashboardDevicesRoute: typeof DashboardDevicesRouteWithChildren
   DashboardFlowsRoute: typeof DashboardFlowsRouteWithChildren
+  DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardLogsRoute: typeof DashboardLogsRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
@@ -311,6 +331,7 @@ interface DashboardRouteChildren {
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardDevicesRoute: DashboardDevicesRouteWithChildren,
   DashboardFlowsRoute: DashboardFlowsRouteWithChildren,
+  DashboardInboxRoute: DashboardInboxRoute,
   DashboardLogsRoute: DashboardLogsRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }

@@ -24,7 +24,7 @@ const steps = [
 ] as const;
 
 function RouteComponent() {
-	const [showSignIn, setShowSignIn] = useState(false);
+	const [showSignIn, setShowSignIn] = useState(true);
 
 	return (
 		<div className="min-h-svh bg-background">

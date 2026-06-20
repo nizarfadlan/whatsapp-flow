@@ -1,16 +1,13 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Button } from "@whatsapp-flow/ui/components/button";
+import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
 import {
 	Dialog,
-	DialogCloseButton,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
 	DialogHeader,
-	DialogPopup,
-	DialogPortal,
 	DialogTitle,
 	DialogTrigger,
 } from "@whatsapp-flow/ui/components/dialog";
@@ -35,6 +32,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { DataTable } from "@/components/data-table";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/devices")({
@@ -80,44 +78,39 @@ function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger className="inline-flex items-center gap-1.5 rounded-none bg-primary px-2.5 py-1.5 font-medium text-primary-foreground text-xs hover:bg-primary/80">
+			<DialogTrigger className={cn(buttonVariants({ size: "sm" }), "text-xs")}>
 				<Plus className="size-3.5" />
 				Add Device
 			</DialogTrigger>
-			<DialogPortal>
-				<DialogPopup>
-					<DialogCloseButton />
-					<DialogHeader>
-						<DialogTitle>Add Device</DialogTitle>
-						<DialogDescription>
-							Give your WhatsApp device a name to identify it.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogContent>
-						<Input
-							placeholder="My Phone"
-							value={name}
-							onChange={(e) => setName(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && name.trim()) {
-									create.mutate({ name: name.trim() });
-								}
-							}}
-						/>
-					</DialogContent>
-					<DialogFooter>
-						<Button variant="outline" onClick={() => setOpen(false)}>
-							Cancel
-						</Button>
-						<Button
-							disabled={!name.trim() || create.isPending}
-							onClick={() => create.mutate({ name: name.trim() })}
-						>
-							{create.isPending ? "Creating..." : "Create"}
-						</Button>
-					</DialogFooter>
-				</DialogPopup>
-			</DialogPortal>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Add Device</DialogTitle>
+					<DialogDescription>
+						Give your WhatsApp device a name to identify it.
+					</DialogDescription>
+				</DialogHeader>
+				<Input
+					placeholder="My Phone"
+					value={name}
+					onChange={(e) => setName(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && name.trim()) {
+							create.mutate({ name: name.trim() });
+						}
+					}}
+				/>
+				<DialogFooter>
+					<Button variant="outline" onClick={() => setOpen(false)}>
+						Cancel
+					</Button>
+					<Button
+						disabled={!name.trim() || create.isPending}
+						onClick={() => create.mutate({ name: name.trim() })}
+					>
+						{create.isPending ? "Creating..." : "Create"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
 		</Dialog>
 	);
 }
@@ -179,66 +172,57 @@ function QrModal({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogPortal>
-				<DialogPopup>
-					<DialogCloseButton />
-					<DialogHeader>
-						<DialogTitle>Connect WhatsApp</DialogTitle>
-						<DialogDescription>
-							Scan the QR code or request a pairing code with your country-code
-							phone number.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogContent>
-						<div className="grid gap-4 md:grid-cols-[16rem_1fr]">
-							<div className="flex flex-col items-center gap-3">
-								{qrCode ? (
-									<img
-										src={qrCode}
-										alt="WhatsApp QR Code"
-										className="size-64"
-									/>
-								) : (
-									<Skeleton className="size-64" />
-								)}
-								<DeviceStatusBadge status={status} />
+			<DialogContent className="sm:max-w-2xl">
+				<DialogHeader>
+					<DialogTitle>Connect WhatsApp</DialogTitle>
+					<DialogDescription>
+						Scan the QR code or request a pairing code with your country-code
+						phone number.
+					</DialogDescription>
+				</DialogHeader>
+				<div className="grid gap-4 md:grid-cols-[16rem_1fr]">
+					<div className="flex flex-col items-center gap-3">
+						{qrCode ? (
+							<img src={qrCode} alt="WhatsApp QR Code" className="size-64" />
+						) : (
+							<Skeleton className="size-64" />
+						)}
+						<DeviceStatusBadge status={status} />
+					</div>
+					<div className="flex flex-col gap-2">
+						<p className="font-medium text-xs">Pairing code</p>
+						<Input
+							placeholder="6281234567890"
+							value={phoneNumber}
+							onChange={(e) => setPhoneNumber(e.target.value)}
+						/>
+						<Button
+							size="sm"
+							className="h-8 text-xs"
+							disabled={
+								phoneNumber.trim().length < 6 || pairingCodeMut.isPending
+							}
+							onClick={() =>
+								pairingCodeMut.mutate({
+									id: deviceId,
+									phoneNumber,
+								})
+							}
+						>
+							{pairingCodeMut.isPending ? "Requesting..." : "Get code"}
+						</Button>
+						{pairingCode && (
+							<div className="border bg-muted px-3 py-2 text-center font-mono text-lg tracking-widest">
+								{pairingCode}
 							</div>
-							<div className="flex flex-col gap-2">
-								<p className="font-medium text-xs">Pairing code</p>
-								<Input
-									placeholder="6281234567890"
-									value={phoneNumber}
-									onChange={(e) => setPhoneNumber(e.target.value)}
-								/>
-								<Button
-									size="sm"
-									className="h-8 text-xs"
-									disabled={
-										phoneNumber.trim().length < 6 || pairingCodeMut.isPending
-									}
-									onClick={() =>
-										pairingCodeMut.mutate({
-											id: deviceId,
-											phoneNumber,
-										})
-									}
-								>
-									{pairingCodeMut.isPending ? "Requesting..." : "Get code"}
-								</Button>
-								{pairingCode && (
-									<div className="border bg-muted px-3 py-2 text-center font-mono text-lg tracking-widest">
-										{pairingCode}
-									</div>
-								)}
-								<p className="text-[10px] text-muted-foreground">
-									Use WhatsApp Linked Devices, choose link with phone number,
-									then enter this code.
-								</p>
-							</div>
-						</div>
-					</DialogContent>
-				</DialogPopup>
-			</DialogPortal>
+						)}
+						<p className="text-[10px] text-muted-foreground">
+							Use WhatsApp Linked Devices, choose link with phone number, then
+							enter this code.
+						</p>
+					</div>
+				</div>
+			</DialogContent>
 		</Dialog>
 	);
 }
@@ -309,83 +293,86 @@ function DevicesPage() {
 							<AddDeviceDialog onAdded={() => refetch()} />
 						</div>
 					) : (
-						<table className="w-full">
-							<thead>
-								<tr className="border-border border-b text-left text-muted-foreground text-xs">
-									<th className="px-4 py-2 font-medium">Name</th>
-									<th className="px-4 py-2 font-medium">Phone</th>
-									<th className="px-4 py-2 font-medium">Status</th>
-									<th className="px-4 py-2 font-medium">Added</th>
-									<th className="w-10 px-4 py-2 font-medium" />
-								</tr>
-							</thead>
-							<tbody>
-								{devices.map((d) => (
-									<tr
-										key={d.id}
-										className="border-border border-b text-xs last:border-0"
-									>
-										<td className="px-4 py-2.5 font-medium">{d.name}</td>
-										<td className="px-4 py-2.5 text-muted-foreground">
-											{d.phoneNumber ?? "—"}
-										</td>
-										<td className="px-4 py-2.5">
-											<DeviceStatusBadge status={d.status} />
-										</td>
-										<td className="px-4 py-2.5 text-muted-foreground">
-											{new Date(d.createdAt).toLocaleDateString()}
-										</td>
-										<td className="px-4 py-2.5">
-											<DropdownMenu>
-												<DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-none hover:bg-muted">
-													<MoreHorizontal className="size-4" />
-												</DropdownMenuTrigger>
-												<DropdownMenuContent>
-													{d.status === "disconnected" && (
-														<DropdownMenuItem
-															onClick={() => handleConnect(d.id)}
-														>
-															<Power className="size-3.5" />
-															Connect
-														</DropdownMenuItem>
-													)}
-													{d.status !== "disconnected" && (
-														<DropdownMenuItem
-															onClick={() => disconnectMut.mutate({ id: d.id })}
-														>
-															<PowerOff className="size-3.5" />
-															Disconnect
-														</DropdownMenuItem>
-													)}
-													{d.status === "connecting" && (
-														<DropdownMenuItem
-															onClick={() => setQrDeviceId(d.id)}
-														>
-															<QrCode className="size-3.5" />
-															Show QR
-														</DropdownMenuItem>
-													)}
-													<DropdownMenuItem
-														className="text-destructive"
-														onClick={() => logoutMut.mutate({ id: d.id })}
-													>
-														<LogOut className="size-3.5" />
-														Reset session
+						<DataTable
+							data={devices}
+							getRowKey={(device) => device.id}
+							columns={[
+								{
+									key: "name",
+									header: "Name",
+									className: "font-medium",
+									cell: (d) => d.name,
+								},
+								{
+									key: "phone",
+									header: "Phone",
+									className: "text-muted-foreground",
+									cell: (d) => d.phoneNumber ?? "—",
+								},
+								{
+									key: "status",
+									header: "Status",
+									cell: (d) => <DeviceStatusBadge status={d.status} />,
+								},
+								{
+									key: "added",
+									header: "Added",
+									className: "text-muted-foreground",
+									cell: (d) => new Date(d.createdAt).toLocaleDateString(),
+								},
+								{
+									key: "actions",
+									header: null,
+									headClassName: "w-10",
+									className: "w-10",
+									cell: (d) => (
+										<DropdownMenu>
+											<DropdownMenuTrigger
+												render={<Button variant="ghost" size="icon-sm" />}
+											>
+												<MoreHorizontal className="size-4" />
+											</DropdownMenuTrigger>
+											<DropdownMenuContent>
+												{d.status === "disconnected" && (
+													<DropdownMenuItem onClick={() => handleConnect(d.id)}>
+														<Power className="size-3.5" />
+														Connect
 													</DropdownMenuItem>
+												)}
+												{d.status !== "disconnected" && (
 													<DropdownMenuItem
-														className="text-destructive"
-														onClick={() => deleteMut.mutate({ id: d.id })}
+														onClick={() => disconnectMut.mutate({ id: d.id })}
 													>
-														<Trash2 className="size-3.5" />
-														Delete
+														<PowerOff className="size-3.5" />
+														Disconnect
 													</DropdownMenuItem>
-												</DropdownMenuContent>
-											</DropdownMenu>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+												)}
+												{d.status === "connecting" && (
+													<DropdownMenuItem onClick={() => setQrDeviceId(d.id)}>
+														<QrCode className="size-3.5" />
+														Show QR
+													</DropdownMenuItem>
+												)}
+												<DropdownMenuItem
+													variant="destructive"
+													onClick={() => logoutMut.mutate({ id: d.id })}
+												>
+													<LogOut className="size-3.5" />
+													Reset session
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													variant="destructive"
+													onClick={() => deleteMut.mutate({ id: d.id })}
+												>
+													<Trash2 className="size-3.5" />
+													Delete
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									),
+								},
+							]}
+						/>
 					)}
 				</CardContent>
 			</Card>

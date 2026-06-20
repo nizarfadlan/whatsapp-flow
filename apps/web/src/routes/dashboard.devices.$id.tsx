@@ -1,7 +1,7 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
-import { Button } from "@whatsapp-flow/ui/components/button";
+import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import {
 	Card,
 	CardContent,
@@ -10,12 +10,9 @@ import {
 } from "@whatsapp-flow/ui/components/card";
 import {
 	Dialog,
-	DialogCloseButton,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
-	DialogPopup,
-	DialogPortal,
 	DialogTitle,
 } from "@whatsapp-flow/ui/components/dialog";
 import { Input } from "@whatsapp-flow/ui/components/input";
@@ -122,66 +119,56 @@ function QrModal({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogPortal>
-				<DialogPopup>
-					<DialogCloseButton />
-					<DialogHeader>
-						<DialogTitle>Connect WhatsApp</DialogTitle>
-						<DialogDescription>
-							Scan the QR code or request a pairing code with your country-code
-							phone number.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogContent>
-						<div className="grid gap-4 md:grid-cols-[16rem_1fr]">
-							<div className="flex flex-col items-center gap-3">
-								{qrCode ? (
-									<img
-										src={qrCode}
-										alt="WhatsApp QR Code"
-										className="size-64"
-									/>
-								) : (
-									<Skeleton className="size-64" />
-								)}
-								<DeviceStatusBadge status={status} />
+			<DialogContent className="sm:max-w-2xl">
+				<DialogHeader>
+					<DialogTitle>Connect WhatsApp</DialogTitle>
+					<DialogDescription>
+						Scan the QR code or request a pairing code with your country-code
+						phone number.
+					</DialogDescription>
+				</DialogHeader>
+				<div className="grid gap-4 md:grid-cols-[16rem_1fr]">
+					<div className="flex flex-col items-center gap-3">
+						{qrCode ? (
+							<img src={qrCode} alt="WhatsApp QR Code" className="size-64" />
+						) : (
+							<Skeleton className="size-64" />
+						)}
+						<DeviceStatusBadge status={status} />
+					</div>
+					<div className="flex flex-col gap-2">
+						<p className="font-medium text-sm">Pairing code</p>
+						<Input
+							placeholder="6281234567890"
+							value={phoneNumber}
+							onChange={(e) => setPhoneNumber(e.target.value)}
+						/>
+						<Button
+							size="sm"
+							disabled={
+								phoneNumber.trim().length < 6 || pairingCodeMut.isPending
+							}
+							onClick={() =>
+								pairingCodeMut.mutate({
+									id: deviceId,
+									phoneNumber,
+								})
+							}
+						>
+							{pairingCodeMut.isPending ? "Requesting..." : "Get code"}
+						</Button>
+						{pairingCode && (
+							<div className="rounded-md border bg-muted px-3 py-2 text-center font-mono text-lg tracking-widest">
+								{pairingCode}
 							</div>
-							<div className="flex flex-col gap-2">
-								<p className="font-medium text-xs">Pairing code</p>
-								<Input
-									placeholder="6281234567890"
-									value={phoneNumber}
-									onChange={(e) => setPhoneNumber(e.target.value)}
-								/>
-								<Button
-									size="sm"
-									className="h-8 text-xs"
-									disabled={
-										phoneNumber.trim().length < 6 || pairingCodeMut.isPending
-									}
-									onClick={() =>
-										pairingCodeMut.mutate({
-											id: deviceId,
-											phoneNumber,
-										})
-									}
-								>
-									{pairingCodeMut.isPending ? "Requesting..." : "Get code"}
-								</Button>
-								{pairingCode && (
-									<div className="border bg-muted px-3 py-2 text-center font-mono text-lg tracking-widest">
-										{pairingCode}
-									</div>
-								)}
-								<p className="text-[10px] text-muted-foreground">
-									Use WhatsApp Linked Devices, choose link with phone number,
-									then enter this code.
-								</p>
-							</div>
-						</div>
-					</DialogContent>
-				</DialogPopup>
-			</DialogPortal>
+						)}
+						<p className="text-muted-foreground text-xs">
+							Use WhatsApp Linked Devices, choose link with phone number, then
+							enter this code.
+						</p>
+					</div>
+				</div>
+			</DialogContent>
 		</Dialog>
 	);
 }
@@ -241,15 +228,16 @@ function DeviceDetailPage() {
 
 	return (
 		<div className="space-y-4">
-			<div className="flex items-center gap-3">
-				<Link
-					to="/dashboard/devices"
-					className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
-				>
-					<ArrowLeft className="size-3.5" />
-					Devices
-				</Link>
-			</div>
+			<Link
+				to="/dashboard/devices"
+				className={cn(
+					buttonVariants({ variant: "ghost", size: "sm" }),
+					"w-fit",
+				)}
+			>
+				<ArrowLeft className="size-3.5" />
+				Devices
+			</Link>
 
 			<div className="flex items-start justify-between">
 				<div className="flex items-center gap-3">
