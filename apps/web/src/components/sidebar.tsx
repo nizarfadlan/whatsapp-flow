@@ -50,12 +50,13 @@ function Brand() {
 				<SidebarMenuButton
 					size="lg"
 					render={<Link to="/" />}
-					className="h-12 gap-3 px-2"
+					className="h-12 gap-3 px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+					tooltip="WhatsApp Flow"
 				>
-					<span className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
+					<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
 						<Bot className="size-4" />
 					</span>
-					<span className="min-w-0 flex-1">
+					<span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
 						<span className="block truncate font-semibold text-sm">
 							WhatsApp Flow
 						</span>
