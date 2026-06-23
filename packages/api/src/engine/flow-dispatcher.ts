@@ -52,6 +52,7 @@ export function startFlowDispatcher(): void {
 				contact.number,
 				text,
 				contact.jid,
+				message.messageKey,
 			);
 			if (resumed) return;
 
@@ -66,6 +67,7 @@ export function startFlowDispatcher(): void {
 				const result = await executeFlow(flowRow, contact.number, text, {
 					replyJid: contact.jid,
 					triggerSource: "message",
+					triggerMessageKey: message.messageKey,
 				});
 				if (result.status === "failed") {
 					console.error("Message flow execution failed", {

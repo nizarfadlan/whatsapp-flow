@@ -22,6 +22,9 @@ import {
 	MessageSquare,
 	Plus,
 	Smartphone,
+	Users,
+	UsersRound,
+	Webhook,
 } from "lucide-react";
 
 const navItems = [
@@ -34,7 +37,10 @@ const navItems = [
 	},
 	{ to: "/dashboard/flows", label: "Flows", icon: MessageSquare, exact: false },
 	{ to: "/dashboard/inbox", label: "Inbox", icon: Inbox, exact: false },
+	{ to: "/dashboard/contacts", label: "Contacts", icon: Users, exact: false },
+	{ to: "/dashboard/groups", label: "Groups", icon: UsersRound, exact: false },
 	{ to: "/dashboard/logs", label: "Logs", icon: Activity, exact: false },
+	{ to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook, exact: false },
 ] as const;
 
 function Brand() {

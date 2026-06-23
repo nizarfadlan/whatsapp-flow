@@ -21,7 +21,8 @@
 		"dotenv": "catalog:",
 		"drizzle-orm": "^0.45.1",
 		"hono": "catalog:",
-		"zod": "catalog:"
+		"zod": "catalog:",
+		"@whatsapp-flow/storage": "workspace:*"
 	},
 	"devDependencies": {
 		"@whatsapp-flow/config": "workspace:*",

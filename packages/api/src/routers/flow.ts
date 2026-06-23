@@ -21,23 +21,24 @@ type FlowEdge = {
 };
 
 function getTriggerPayload(nodes: FlowNode[]) {
-	const trigger = nodes.find((node) => node.type?.startsWith("trigger-"));
-	const data = trigger?.data ?? {};
+	const trigger = nodes.find((node) => node.type === "trigger");
+	const data = (trigger?.data ?? {}) as Record<string, unknown>;
+	const kind = data.triggerKind;
 
-	switch (trigger?.type) {
-		case "trigger-keyword":
+	switch (kind) {
+		case "keyword":
 			return {
 				triggerType: "keyword" as const,
 				triggerConfig: { keyword: String(data.keyword ?? "") },
 			};
-		case "trigger-any":
+		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };
-		case "trigger-webhook":
+		case "webhook":
 			return {
 				triggerType: "webhook" as const,
 				triggerConfig: { webhookToken: String(data.webhookToken ?? "") },
 			};
-		case "trigger-schedule":
+		case "schedule":
 			return {
 				triggerType: "schedule" as const,
 				triggerConfig: {
@@ -61,7 +62,7 @@ function normalizeNumber(value: unknown) {
 function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	if (nodes.length === 0) return "Flow has no nodes";
 
-	const triggers = nodes.filter((node) => node.type?.startsWith("trigger-"));
+	const triggers = nodes.filter((node) => node.type === "trigger");
 	if (triggers.length === 0) return "Flow needs exactly one trigger node";
 	if (triggers.length > 1) return "Flow can only have one trigger node";
 
@@ -72,16 +73,14 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	}
 
 	const triggerData = trigger.data ?? {};
-	if (trigger.type === "trigger-keyword" && !nonEmpty(triggerData.keyword)) {
+	const triggerKind = triggerData.triggerKind;
+	if (triggerKind === "keyword" && !nonEmpty(triggerData.keyword)) {
 		return "Keyword trigger needs a keyword";
 	}
-	if (
-		trigger.type === "trigger-webhook" &&
-		!nonEmpty(triggerData.webhookToken)
-	) {
+	if (triggerKind === "webhook" && !nonEmpty(triggerData.webhookToken)) {
 		return "Webhook trigger needs a secret token";
 	}
-	if (trigger.type === "trigger-schedule") {
+	if (triggerKind === "schedule") {
 		if (!nonEmpty(triggerData.cronExpression)) {
 			return "Schedule trigger needs a cron expression";
 		}

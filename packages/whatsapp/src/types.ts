@@ -22,6 +22,34 @@ export interface ConnectionManagerEvents {
 	"device:message": {
 		deviceId: string;
 		contact: { jid: string; number: string; name?: string };
-		message: { text?: string; type: string; raw: unknown };
+		message: {
+			text?: string;
+			type: string;
+			raw: unknown;
+			messageKey?: import("baileys").WAMessageKey;
+		};
+	};
+	"device:contacts": {
+		deviceId: string;
+		contacts: {
+			jid: string;
+			phoneNumber?: string;
+			name?: string;
+			pushName?: string;
+			isWaContact?: boolean;
+			raw?: unknown;
+		}[];
+	};
+	"device:groups": {
+		deviceId: string;
+		groups: {
+			jid: string;
+			subject: string;
+			description?: string;
+			ownerJid?: string;
+			participantCount?: number;
+			isMember?: boolean;
+			raw?: unknown;
+		}[];
 	};
 }

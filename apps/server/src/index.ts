@@ -6,15 +6,22 @@ import {
 	startScheduleDispatcher,
 } from "@whatsapp-flow/api/engine/flow-dispatcher";
 import { executeFlow } from "@whatsapp-flow/api/engine/flow-executor";
+import { startWebhookDispatcher } from "@whatsapp-flow/api/engine/webhook-dispatcher";
 import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
+import {
+	chatGroup,
+	contact as contactTable,
+} from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
+import { storage } from "@whatsapp-flow/storage";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
+import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
@@ -26,7 +33,7 @@ app.use(
 	"/*",
 	cors({
 		origin: env.CORS_ORIGIN,
-		allowMethods: ["GET", "POST", "OPTIONS"],
+		allowMethods: ["GET", "POST", "PUT", "OPTIONS"],
 		allowHeaders: ["Content-Type", "Authorization"],
 		credentials: true,
 	}),
@@ -43,6 +50,29 @@ app.use(
 		},
 	}),
 );
+
+// Serve locally stored media files
+app.use(
+	"/uploads/*",
+	serveStatic({
+		root: env.LOCAL_UPLOAD_DIR ?? "uploads",
+		rewriteRequestPath: (p) => p.replace("/uploads", ""),
+	}),
+);
+
+// Local-driver direct upload endpoint (POST multipart or raw body)
+app.post("/api/uploads/local/:key{.+}", async (c) => {
+	const session = await auth.api.getSession({ headers: c.req.raw.headers });
+	if (!session) return c.text("Unauthorized", 401);
+
+	const key = c.req.param("key");
+	const contentType =
+		c.req.header("content-type") ?? "application/octet-stream";
+	const arrayBuffer = await c.req.arrayBuffer();
+	const data = new Uint8Array(arrayBuffer);
+	const result = await storage.put(key, data, contentType);
+	return c.json({ url: result.url, key: result.key });
+});
 
 app.post("/api/flows/:flowId/webhook", async (c) => {
 	const flowId = c.req.param("flowId");
@@ -162,7 +192,6 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 			}),
 		});
 
-		// Keep-alive ping every 30s
 		const ping = setInterval(() => {
 			stream.writeSSE({ data: JSON.stringify({ type: "ping" }) });
 		}, 30_000);
@@ -186,59 +215,180 @@ app.get("/", (c) => {
 
 const db = createDb();
 
-// Persist incoming WhatsApp messages to inbox
+// Persist incoming WhatsApp messages to contacts/groups + inbox
 connectionManager.on("device:message", async (ev) => {
 	try {
 		const { deviceId, contact, message } = ev;
+		let chatType: "private" | "group" | "channel" | "broadcast" = "private";
+		if (contact.jid.endsWith("@g.us")) {
+			chatType = "group";
+		} else if (contact.jid.endsWith("@newsletter")) {
+			chatType = "channel";
+		} else if (contact.jid.endsWith("@broadcast")) {
+			chatType = "broadcast";
+		}
+		const now = new Date();
+		let contactId: string | null = null;
+		let groupId: string | null = null;
 
-		// Upsert thread
-		const threadId = crypto.randomUUID();
-		const existingThreads = await db
-			.select({ id: inboxThread.id })
-			.from(inboxThread)
-			.where(
-				and(
-					eq(inboxThread.deviceId, deviceId),
-					eq(inboxThread.contactNumber, contact.number),
-				),
-			)
-			.limit(1);
-
-		let threadId_: string = threadId;
-		if (existingThreads[0]) {
-			threadId_ = existingThreads[0].id;
-			await db
-				.update(inboxThread)
-				.set({
-					contactName: contact.name ?? null,
-					lastMessageText: message.text ?? null,
-					lastMessageAt: new Date(),
-					unreadCount: sql`${inboxThread.unreadCount} + 1`,
+		if (chatType === "private") {
+			const [savedContact] = await db
+				.insert(contactTable)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId,
+					jid: contact.jid,
+					phoneNumber: contact.number,
+					name: contact.name ?? null,
+					pushName: contact.name ?? null,
+					source: "message",
 				})
-				.where(eq(inboxThread.id, threadId_));
-		} else {
-			await db.insert(inboxThread).values({
-				id: threadId_,
-				deviceId,
-				contactNumber: contact.number,
-				contactName: contact.name ?? null,
-				lastMessageText: message.text ?? null,
-				lastMessageAt: new Date(),
-				unreadCount: 1,
-			});
+				.onConflictDoUpdate({
+					target: [contactTable.deviceId, contactTable.jid],
+					set: {
+						phoneNumber: contact.number,
+						name: contact.name ?? null,
+						pushName: contact.name ?? null,
+						updatedAt: now,
+					},
+				})
+				.returning({ id: contactTable.id });
+			contactId = savedContact?.id ?? null;
+		} else if (chatType === "group") {
+			const [savedGroup] = await db
+				.insert(chatGroup)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId,
+					jid: contact.jid,
+					subject: contact.name ?? contact.jid,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [chatGroup.deviceId, chatGroup.jid],
+					set: {
+						subject: contact.name ?? contact.jid,
+						updatedAt: now,
+					},
+				})
+				.returning({ id: chatGroup.id });
+			groupId = savedGroup?.id ?? null;
 		}
 
-		// Insert message
-		await db.insert(inboxMessage).values({
-			id: crypto.randomUUID(),
-			threadId: threadId_,
-			direction: "inbound",
-			messageType: message.type,
-			text: message.text ?? null,
-			raw: message.raw as Record<string, unknown> | null,
-		});
+		const [savedThread] = await db
+			.insert(inboxThread)
+			.values({
+				id: crypto.randomUUID(),
+				deviceId,
+				chatType,
+				chatJid: contact.jid,
+				contactId,
+				groupId,
+				groupJid: chatType === "group" ? contact.jid : null,
+				contactNumber: chatType === "private" ? contact.number : null,
+				contactName: contact.name ?? null,
+				lastMessageText: message.text ?? null,
+				lastMessageAt: now,
+				unreadCount: 1,
+			})
+			.onConflictDoUpdate({
+				target: [inboxThread.deviceId, inboxThread.chatJid],
+				set: {
+					chatType,
+					contactId,
+					groupId,
+					groupJid: chatType === "group" ? contact.jid : null,
+					contactNumber: chatType === "private" ? contact.number : null,
+					contactName: Object.hasOwn(contact, "name")
+						? (contact.name ?? null)
+						: undefined, // undefined skips updating if not present in payload
+					lastMessageText: message.text ?? null,
+					lastMessageAt: now,
+					unreadCount: sql`${inboxThread.unreadCount} + 1`,
+				},
+			})
+			.returning({ id: inboxThread.id });
+
+		const threadId = savedThread?.id;
+
+		if (threadId) {
+			await db.insert(inboxMessage).values({
+				id: crypto.randomUUID(),
+				threadId,
+				direction: "inbound",
+				messageType: message.type,
+				text: message.text ?? null,
+				raw: message.raw as Record<string, unknown> | null,
+			});
+		}
 	} catch (err) {
 		console.error("Failed to persist inbox message", err);
+	}
+});
+
+connectionManager.on("device:contacts", async (ev) => {
+	try {
+		const now = new Date();
+		for (const item of ev.contacts) {
+			await db
+				.insert(contactTable)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ev.deviceId,
+					jid: item.jid,
+					phoneNumber: item.phoneNumber ?? null,
+					name: item.name ?? null,
+					pushName: item.pushName ?? null,
+					isWaContact: item.isWaContact ?? true,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [contactTable.deviceId, contactTable.jid],
+					set: {
+						phoneNumber: item.phoneNumber ?? null,
+						name: item.name ?? null,
+						pushName: item.pushName ?? null,
+						isWaContact: item.isWaContact ?? true,
+						updatedAt: now,
+					},
+				});
+		}
+	} catch (err) {
+		console.error("Failed to persist contacts sync", err);
+	}
+});
+
+connectionManager.on("device:groups", async (ev) => {
+	try {
+		const now = new Date();
+		for (const item of ev.groups) {
+			await db
+				.insert(chatGroup)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ev.deviceId,
+					jid: item.jid,
+					subject: item.subject,
+					description: item.description ?? null,
+					ownerJid: item.ownerJid ?? null,
+					participantCount: item.participantCount ?? 0,
+					isMember: item.isMember ?? true,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [chatGroup.deviceId, chatGroup.jid],
+					set: {
+						subject: item.subject,
+						description: item.description ?? null,
+						ownerJid: item.ownerJid ?? null,
+						participantCount: item.participantCount ?? 0,
+						isMember: item.isMember ?? true,
+						updatedAt: now,
+					},
+				});
+		}
+	} catch (err) {
+		console.error("Failed to persist groups sync", err);
 	}
 });
 
@@ -288,5 +438,6 @@ function isValidWebhookToken(triggerConfig: unknown, token: string) {
 void reconnectDevices();
 startFlowDispatcher();
 startScheduleDispatcher();
+startWebhookDispatcher();
 
 export default app;

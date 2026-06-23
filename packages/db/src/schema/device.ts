@@ -9,6 +9,7 @@ import {
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
+import { webhookEndpoint } from "./webhook";
 
 export const deviceStatusEnum = pgEnum("device_status", [
 	"disconnected",
@@ -189,6 +190,7 @@ export const flowExecutionLogRelations = relations(
 			references: [device.id],
 		}),
 		sessions: many(flowSession),
+		webhookEndpoints: many(webhookEndpoint),
 	}),
 );
 

@@ -101,7 +101,10 @@ export class ConnectionManager extends EventEmitter {
 			auth: state,
 			version,
 			markOnlineOnConnect: true,
-			shouldSyncHistoryMessage: () => false,
+			// Let Baileys provide initial chats/contacts/groups so the app can build
+			// contact/group pickers and conversation history. Persistence is handled
+			// by server-side event listeners.
+			shouldSyncHistoryMessage: () => true,
 			getMessage: async () => undefined,
 			cachedGroupMetadata: async () => undefined,
 		});
@@ -128,6 +131,18 @@ export class ConnectionManager extends EventEmitter {
 		});
 		socket.ev.on("messages.upsert", (upsert) => {
 			void this.handleMessagesUpsert(deviceId, upsert);
+		});
+		socket.ev.on("contacts.upsert", (contacts) => {
+			this.handleContactsUpsert(deviceId, contacts);
+		});
+		socket.ev.on("contacts.update", (contacts) => {
+			this.handleContactsUpsert(deviceId, contacts);
+		});
+		socket.ev.on("groups.upsert", (groups) => {
+			this.handleGroupsUpsert(deviceId, groups);
+		});
+		socket.ev.on("groups.update", (groups) => {
+			this.handleGroupsUpsert(deviceId, groups);
 		});
 
 		return connection;
@@ -283,8 +298,67 @@ export class ConnectionManager extends EventEmitter {
 					text: extractMessageText(message),
 					type: extractMessageType(message),
 					raw: message,
+					messageKey: message.key,
 				},
 			});
+		}
+	}
+
+	private handleContactsUpsert(
+		deviceId: string,
+		contacts: {
+			id?: string;
+			name?: string;
+			notify?: string;
+			verifiedName?: string;
+		}[],
+	) {
+		const mapped = contacts
+			.map((item) => {
+				const jid = item.id;
+				if (!jid || jid.endsWith("@g.us")) return null;
+				return {
+					jid,
+					phoneNumber: normalizeContactNumber(jid),
+					name: item.name ?? item.verifiedName ?? item.notify,
+					pushName: item.notify,
+					isWaContact: true,
+					raw: item,
+				};
+			})
+			.filter((item): item is NonNullable<typeof item> => item != null);
+		if (mapped.length > 0) {
+			this.emit("device:contacts", { deviceId, contacts: mapped });
+		}
+	}
+
+	private handleGroupsUpsert(
+		deviceId: string,
+		groups: {
+			id?: string;
+			subject?: string;
+			desc?: string;
+			owner?: string;
+			participants?: unknown[];
+		}[],
+	) {
+		const mapped = groups
+			.map((item) => {
+				const jid = item.id;
+				if (!jid?.endsWith("@g.us")) return null;
+				return {
+					jid,
+					subject: item.subject ?? jid,
+					description: item.desc,
+					ownerJid: item.owner,
+					participantCount: item.participants?.length ?? 0,
+					isMember: true,
+					raw: item,
+				};
+			})
+			.filter((item): item is NonNullable<typeof item> => item != null);
+		if (mapped.length > 0) {
+			this.emit("device:groups", { deviceId, groups: mapped });
 		}
 	}
 

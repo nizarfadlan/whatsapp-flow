@@ -1,5 +1,10 @@
+import { TRPCError } from "@trpc/server";
 import { device } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
+import {
+	connectionManager,
+	sendWhatsAppMessage,
+} from "@whatsapp-flow/whatsapp";
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
@@ -22,6 +27,11 @@ export const inboxRouter = router({
 				.select({
 					id: inboxThread.id,
 					deviceId: inboxThread.deviceId,
+					chatType: inboxThread.chatType,
+					chatJid: inboxThread.chatJid,
+					contactId: inboxThread.contactId,
+					groupId: inboxThread.groupId,
+					groupJid: inboxThread.groupJid,
 					contactNumber: inboxThread.contactNumber,
 					contactName: inboxThread.contactName,
 					lastMessageText: inboxThread.lastMessageText,
@@ -44,6 +54,11 @@ export const inboxRouter = router({
 				.select({
 					id: inboxThread.id,
 					deviceId: inboxThread.deviceId,
+					chatType: inboxThread.chatType,
+					chatJid: inboxThread.chatJid,
+					contactId: inboxThread.contactId,
+					groupId: inboxThread.groupId,
+					groupJid: inboxThread.groupJid,
 					contactNumber: inboxThread.contactNumber,
 					contactName: inboxThread.contactName,
 					lastMessageText: inboxThread.lastMessageText,
@@ -98,6 +113,70 @@ export const inboxRouter = router({
 				.where(and(...conditions))
 				.orderBy(asc(inboxMessage.createdAt))
 				.limit(input.limit);
+		}),
+
+	sendMessage: protectedProcedure
+		.input(
+			z.object({
+				threadId: z.string().min(1),
+				text: z.string().min(1),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const rows = await ctx.db
+				.select({
+					id: inboxThread.id,
+					deviceId: inboxThread.deviceId,
+					chatJid: inboxThread.chatJid,
+					contactNumber: inboxThread.contactNumber,
+				})
+				.from(inboxThread)
+				.innerJoin(device, eq(inboxThread.deviceId, device.id))
+				.where(
+					and(
+						eq(inboxThread.id, input.threadId),
+						eq(device.userId, ctx.session.user.id),
+					),
+				)
+				.limit(1);
+
+			const thread = rows[0];
+			if (!thread) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+			}
+
+			const jid = thread.chatJid ?? `${thread.contactNumber}@s.whatsapp.net`;
+			const connection = connectionManager.getConnection(thread.deviceId);
+			if (!connection?.socket) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Device is not connected",
+				});
+			}
+
+			await sendWhatsAppMessage(connection.socket, jid, {
+				type: "text",
+				text: input.text,
+			});
+
+			const now = new Date();
+			const [message] = await ctx.db
+				.insert(inboxMessage)
+				.values({
+					id: crypto.randomUUID(),
+					threadId: thread.id,
+					direction: "outbound",
+					messageType: "text",
+					text: input.text,
+				})
+				.returning();
+
+			await ctx.db
+				.update(inboxThread)
+				.set({ lastMessageText: input.text, lastMessageAt: now })
+				.where(eq(inboxThread.id, thread.id));
+
+			return message;
 		}),
 
 	markRead: protectedProcedure

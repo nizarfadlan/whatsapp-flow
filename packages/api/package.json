@@ -19,7 +19,8 @@
 		"@trpc/server": "catalog:",
 		"dotenv": "catalog:",
 		"drizzle-orm": "^0.45.1",
-		"zod": "catalog:"
+		"zod": "catalog:",
+		"@whatsapp-flow/storage": "workspace:*"
 	},
 	"devDependencies": {
 		"@whatsapp-flow/config": "workspace:*",

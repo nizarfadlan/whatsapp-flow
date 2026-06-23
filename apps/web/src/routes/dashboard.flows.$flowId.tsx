@@ -46,11 +46,13 @@ import { toast } from "sonner";
 import {
 	categoryAccents,
 	createNode,
-	createStartNode,
+	createTriggerNode,
 	type FlowNodeData,
+	migrateLegacyNodes,
 	nodeTypes,
 	type PaletteNodeTypeName,
 	paletteCategories,
+	remapLegacyEdges,
 	resetNodeIdCounter,
 } from "@/components/flow-nodes";
 import { NodeConfigPanel } from "@/components/node-config-panel";
@@ -72,7 +74,7 @@ function FlowRoute() {
 }
 
 function isTriggerType(type: string | undefined) {
-	return type?.startsWith("trigger-") ?? false;
+	return type === "trigger";
 }
 
 function hasTriggerNode(nodes: Node[]) {
@@ -82,32 +84,27 @@ function hasTriggerNode(nodes: Node[]) {
 function getTriggerPayload(nodes: Node[]) {
 	const triggerNode = nodes.find((node) => isTriggerType(node.type));
 	const data = triggerNode?.data as FlowNodeData | undefined;
+	if (data?.nodeType !== "trigger") return null;
 
-	switch (data?.nodeType) {
-		case "trigger-keyword":
+	switch (data.triggerKind) {
+		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: {
-					keyword: "keyword" in data ? (data.keyword ?? "") : "",
-				},
+				triggerConfig: { keyword: data.keyword ?? "" },
 			};
-		case "trigger-any":
+		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };
-		case "trigger-webhook":
+		case "webhook":
 			return {
 				triggerType: "webhook" as const,
-				triggerConfig: {
-					webhookToken: "webhookToken" in data ? (data.webhookToken ?? "") : "",
-				},
+				triggerConfig: { webhookToken: data.webhookToken ?? "" },
 			};
-		case "trigger-schedule":
+		case "schedule":
 			return {
 				triggerType: "schedule" as const,
 				triggerConfig: {
-					cronExpression:
-						"cronExpression" in data ? (data.cronExpression ?? "") : "",
-					contactNumber:
-						"contactNumber" in data ? (data.contactNumber ?? "") : "",
+					cronExpression: data.cronExpression ?? "",
+					contactNumber: data.contactNumber ?? "",
 				},
 			};
 		default:
@@ -115,26 +112,24 @@ function getTriggerPayload(nodes: Node[]) {
 	}
 }
 
-function ensureStartNode(nodes: Node[]) {
-	const withoutDuplicateStart = nodes.filter(
-		(node, index) =>
-			node.id !== "start" || index === nodes.findIndex((n) => n.id === "start"),
-	);
-	const existing = withoutDuplicateStart.find((node) => node.id === "start");
+function ensureTriggerNode(nodes: Node[]) {
+	// Migrate legacy start/trigger-* nodes onto the unified trigger node.
+	const migrated = migrateLegacyNodes(nodes);
+	const existing = migrated.find((node) => node.id === "trigger");
 	if (existing) {
-		return withoutDuplicateStart.map((node) =>
-			node.id === "start"
+		return migrated.map((node) =>
+			node.id === "trigger"
 				? {
 						...node,
-						type: "start",
+						type: "trigger",
 						deletable: false,
-						data: createStartNode().data,
+						data: { ...createTriggerNode().data, ...(node.data as object) },
 					}
 				: node,
 		);
 	}
 
-	return [createStartNode(), ...withoutDuplicateStart];
+	return [createTriggerNode(), ...migrated];
 }
 
 function FlowEditor() {
@@ -145,10 +140,13 @@ function FlowEditor() {
 	);
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(
-		ensureStartNode((flow.nodes as Node[]) ?? []),
+		ensureTriggerNode((flow.nodes as Node[]) ?? []),
 	);
 	const [edges, setEdges, onEdgesChange] = useEdgesState(
-		(flow.edges as Edge[]) ?? [],
+		remapLegacyEdges(
+			(flow.edges as Edge[]) ?? [],
+			(flow.nodes as Node[]) ?? [],
+		),
 	);
 
 	const initialized = useRef(false);
@@ -223,7 +221,7 @@ function FlowEditor() {
 
 	const deleteNode = useCallback(
 		(id: string) => {
-			if (id === "start") return;
+			if (id === "trigger") return;
 			setNodes((nds) => {
 				const nextNodes = nds.filter((n) => n.id !== id);
 				setEdges((eds) => {
@@ -266,10 +264,6 @@ function FlowEditor() {
 	};
 
 	const handleAddNode = (type: PaletteNodeTypeName) => {
-		if (isTriggerType(type) && hasTriggerNode(nodes)) {
-			toast.error("Only one trigger node allowed per flow");
-			return;
-		}
 		const yOffset = Math.random() * 200 + 50;
 		setNodes((nds) => {
 			const next = [...nds, createNode(type, 320, yOffset)];

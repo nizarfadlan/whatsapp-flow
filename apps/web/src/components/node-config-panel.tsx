@@ -8,8 +8,10 @@ import {
 	SelectValue,
 } from "@whatsapp-flow/ui/components/select";
 import { Separator } from "@whatsapp-flow/ui/components/separator";
+import { Textarea } from "@whatsapp-flow/ui/components/textarea";
 import type { Node } from "@xyflow/react";
 import { Copy, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ContactCombobox } from "./contact-combobox";
 import type {
 	ActionNodeData,
 	FlowNodeData,
@@ -18,6 +20,7 @@ import type {
 	MessageNodeData,
 	TriggerNodeData,
 } from "./flow-nodes";
+import { MediaUpload } from "./media-upload";
 
 interface NodeConfigPanelProps {
 	node: Node | null;
@@ -157,12 +160,17 @@ function SendTextConfig({
 }) {
 	return (
 		<Field label="Message Text">
-			<Input
-				className="h-7 text-xs"
-				placeholder="e.g. Hello! How can I help?"
+			<Textarea
+				className="min-h-[64px] text-xs"
+				placeholder="e.g. Hello! How can I help?
+
+Supports {{variables}}"
 				value={data.text ?? ""}
 				onChange={(e) => onUpdate({ text: e.target.value })}
 			/>
+			<p className="text-[10px] text-muted-foreground">
+				Use {"{{variable}}"} to insert context values.
+			</p>
 		</Field>
 	);
 }
@@ -174,14 +182,24 @@ function MediaConfig({
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const nodeType = data.nodeType;
+	const accept =
+		nodeType === "send-image"
+			? "image/*"
+			: nodeType === "send-video"
+				? "video/*"
+				: "audio/*";
 	return (
 		<>
-			<Field label="Media URL">
-				<Input
-					className="h-7 text-xs"
-					placeholder="https://..."
+			<Field label="Media">
+				<MediaUpload
+					accept={accept}
+					label="Upload or paste URL"
 					value={data.mediaUrl ?? ""}
-					onChange={(e) => onUpdate({ mediaUrl: e.target.value })}
+					onUploaded={(m) =>
+						onUpdate({ mediaUrl: m.url, caption: data.caption })
+					}
+					onUrlChange={(url) => onUpdate({ mediaUrl: url })}
 				/>
 			</Field>
 			<Field label="Caption (optional)">
@@ -205,12 +223,15 @@ function DocumentConfig({
 }) {
 	return (
 		<>
-			<Field label="File URL">
-				<Input
-					className="h-7 text-xs"
-					placeholder="https://..."
+			<Field label="Document">
+				<MediaUpload
+					accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,application/*,text/*"
+					label="Upload or paste URL"
 					value={data.mediaUrl ?? ""}
-					onChange={(e) => onUpdate({ mediaUrl: e.target.value })}
+					onUploaded={(m) =>
+						onUpdate({ mediaUrl: m.url, fileName: m.fileName })
+					}
+					onUrlChange={(url) => onUpdate({ mediaUrl: url })}
 				/>
 			</Field>
 			<Field label="File Name">
@@ -727,14 +748,39 @@ function ForwardConfig({
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
 	return (
-		<Field label="Target Number">
-			<Input
-				className="h-7 text-xs"
-				placeholder="+1234567890"
-				value={data.targetNumber ?? ""}
-				onChange={(e) => onUpdate({ targetNumber: e.target.value })}
-			/>
-		</Field>
+		<>
+			<Field label="Forward To">
+				<ContactCombobox
+					value={data.targetNumber ?? ""}
+					onChange={(jid) => onUpdate({ targetNumber: jid })}
+					includeGroups={false}
+					placeholder="Select contact..."
+				/>
+			</Field>
+			<Field label="Or enter number manually">
+				<Input
+					className="h-7 text-xs"
+					placeholder="6281234567890"
+					value={data.targetNumber ?? ""}
+					onChange={(e) => onUpdate({ targetNumber: e.target.value })}
+				/>
+			</Field>
+			<Field label="Message Template (optional)">
+				<Textarea
+					className="min-h-[48px] text-xs"
+					placeholder="Leave empty to forward the original message"
+					value={
+						((data as Record<string, unknown>).messageTemplate as string) ?? ""
+					}
+					onChange={(e) =>
+						onUpdate({
+							...data,
+							messageTemplate: e.target.value,
+						} as Partial<ActionNodeData>)
+					}
+				/>
+			</Field>
+		</>
 	);
 }
 
@@ -787,22 +833,43 @@ function TriggerConfigForm({
 	flowId: string;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
-	switch (data.nodeType) {
-		case "trigger-keyword":
-			return <TriggerKeywordConfig data={data} onUpdate={onUpdate} />;
-		case "trigger-webhook":
-			return (
+	const kind = data.triggerKind ?? "keyword";
+	return (
+		<div className="flex flex-col gap-3">
+			<Field label="Trigger Type">
+				<Select
+					value={kind}
+					onValueChange={(value) =>
+						onUpdate({ triggerKind: value as TriggerNodeData["triggerKind"] })
+					}
+				>
+					<SelectTrigger className="h-7 w-full text-xs" size="sm">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="keyword">Keyword Match</SelectItem>
+						<SelectItem value="any_message">Any Message</SelectItem>
+						<SelectItem value="webhook">Webhook</SelectItem>
+						<SelectItem value="schedule">Schedule</SelectItem>
+					</SelectContent>
+				</Select>
+			</Field>
+			{kind === "keyword" && (
+				<TriggerKeywordConfig data={data} onUpdate={onUpdate} />
+			)}
+			{kind === "webhook" && (
 				<TriggerWebhookConfig data={data} flowId={flowId} onUpdate={onUpdate} />
-			);
-		case "trigger-schedule":
-			return <TriggerScheduleConfig data={data} onUpdate={onUpdate} />;
-		default:
-			return (
+			)}
+			{kind === "schedule" && (
+				<TriggerScheduleConfig data={data} onUpdate={onUpdate} />
+			)}
+			{kind === "any_message" && (
 				<p className="text-[10px] text-muted-foreground">
-					No configuration needed
+					Fires on every incoming message from any contact.
 				</p>
-			);
-	}
+			)}
+		</div>
+	);
 }
 
 function MessageConfigForm({
@@ -910,7 +977,7 @@ export function NodeConfigPanel({
 	}
 
 	const data = node.data as unknown as FlowNodeData;
-	const isStartNode = data.category === "start";
+	const isTriggerNode = data.category === "trigger";
 
 	const handleUpdate = (partial: Partial<FlowNodeData>) => {
 		onUpdate(node.id, partial);
@@ -957,14 +1024,6 @@ export function NodeConfigPanel({
 				/>
 			);
 			break;
-		case "start":
-			configForm = (
-				<p className="text-[10px] text-muted-foreground">
-					Static starting point. Connect it to the first trigger to make the
-					flow easier to read.
-				</p>
-			);
-			break;
 		default:
 			configForm = null;
 	}
@@ -972,7 +1031,7 @@ export function NodeConfigPanel({
 	return (
 		<div className="flex flex-col gap-3 p-3">
 			<SectionTitle>Node Properties</SectionTitle>
-			{!isStartNode && (
+			{!isTriggerNode && (
 				<Field label="Label">
 					<Input
 						className="h-7 text-xs"
@@ -981,9 +1040,9 @@ export function NodeConfigPanel({
 					/>
 				</Field>
 			)}
-			{!isStartNode && <Separator />}
+			{!isTriggerNode && <Separator />}
 			{configForm}
-			{!isStartNode && (
+			{!isTriggerNode && (
 				<>
 					<Separator />
 					<Button

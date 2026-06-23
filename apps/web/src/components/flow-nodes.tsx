@@ -1,6 +1,7 @@
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import {
+	type Edge,
 	Handle,
 	type Node,
 	type NodeProps,
@@ -8,7 +9,6 @@ import {
 	useReactFlow,
 } from "@xyflow/react";
 import {
-	CirclePlay,
 	Clock,
 	File,
 	Forward,
@@ -37,7 +37,6 @@ import {
 // ── Node Data Types ──────────────────────────────────────────────
 
 export type NodeCategory =
-	| "start"
 	| "trigger"
 	| "message"
 	| "media"
@@ -45,22 +44,14 @@ export type NodeCategory =
 	| "logic"
 	| "action";
 
-export interface StartNodeData {
-	id: "start";
-	nodeType: "start";
-	label: string;
-	category: "start";
-}
+export type TriggerKind = "keyword" | "any_message" | "webhook" | "schedule";
 
 export interface TriggerNodeData {
-	id: string;
-	nodeType:
-		| "trigger-keyword"
-		| "trigger-any"
-		| "trigger-webhook"
-		| "trigger-schedule";
+	id: "trigger";
+	nodeType: "trigger";
 	label: string;
 	category: "trigger";
+	triggerKind: TriggerKind;
 	keyword?: string;
 	webhookToken?: string;
 	cronExpression?: string;
@@ -134,7 +125,6 @@ export interface ActionNodeData {
 }
 
 export type FlowNodeData =
-	| StartNodeData
 	| TriggerNodeData
 	| MessageNodeData
 	| InteractiveNodeData
@@ -147,15 +137,10 @@ export const categoryAccents: Record<
 	NodeCategory,
 	{ accent: string; chip: string; icon: string }
 > = {
-	start: {
+	trigger: {
 		accent: "bg-primary",
 		chip: "bg-primary/10",
 		icon: "text-primary",
-	},
-	trigger: {
-		accent: "bg-emerald-500/70",
-		chip: "bg-emerald-500/10",
-		icon: "text-emerald-600 dark:text-emerald-400",
 	},
 	message: {
 		accent: "bg-violet-500/70",
@@ -199,7 +184,7 @@ function BaseFlowNode({
 }) {
 	const c = categoryAccents[category];
 	const { deleteElements } = useReactFlow();
-	const isStart = data.category === "start";
+	const isTrigger = data.category === "trigger";
 	const isCondition = data.nodeType === "condition";
 	const isEnd = data.nodeType === "end";
 
@@ -210,7 +195,7 @@ function BaseFlowNode({
 				selected && "border-primary/60 shadow-md ring-2 ring-primary/15",
 			)}
 		>
-			{!isStart && (
+			{!isTrigger && (
 				<Handle
 					type="target"
 					position={Position.Left}
@@ -230,7 +215,7 @@ function BaseFlowNode({
 				<span className="min-w-0 flex-1 truncate font-medium">
 					{data.label}
 				</span>
-				{!isStart && (
+				{!isTrigger && (
 					<Button
 						type="button"
 						variant="ghost"
@@ -292,70 +277,41 @@ function BaseFlowNode({
 	);
 }
 
-export function StartNode({ data, selected }: NodeProps) {
-	const d = data as unknown as StartNodeData;
+export function TriggerNode({ data, selected }: NodeProps) {
+	const d = data as unknown as TriggerNodeData;
+	const triggerKind = d.triggerKind ?? "keyword";
+	const summary = () => {
+		switch (triggerKind) {
+			case "keyword":
+				return d.keyword ? `Keyword: "${d.keyword}"` : "Set keyword below";
+			case "any_message":
+				return "Any incoming message";
+			case "webhook":
+				return d.webhookToken ? "Secured webhook" : "Webhook trigger";
+			case "schedule":
+				return d.cronExpression ?? "Set schedule below";
+		}
+	};
+	const triggerIcon = () => {
+		switch (triggerKind) {
+			case "keyword":
+				return Hash;
+			case "any_message":
+				return MessageSquare;
+			case "webhook":
+				return Globe;
+			case "schedule":
+				return Clock;
+		}
+	};
 	return (
 		<BaseFlowNode
 			data={d}
 			selected={selected}
-			icon={CirclePlay}
-			category="start"
-		>
-			<span className="text-[10px] text-muted-foreground">
-				Flow starts here
-			</span>
-		</BaseFlowNode>
-	);
-}
-
-// Trigger nodes
-export function TriggerKeywordNode({ data, selected }: NodeProps) {
-	const d = data as unknown as TriggerNodeData;
-	return (
-		<BaseFlowNode data={d} selected={selected} icon={Hash} category="trigger">
-			{d.keyword && (
-				<span className="text-[10px] text-muted-foreground">
-					Keyword: "{d.keyword}"
-				</span>
-			)}
-		</BaseFlowNode>
-	);
-}
-
-export function TriggerAnyNode({ data, selected }: NodeProps) {
-	const d = data as unknown as TriggerNodeData;
-	return (
-		<BaseFlowNode
-			data={d}
-			selected={selected}
-			icon={MessageSquare}
+			icon={triggerIcon()}
 			category="trigger"
 		>
-			<span className="text-[10px] text-muted-foreground">Any message</span>
-		</BaseFlowNode>
-	);
-}
-
-export function TriggerWebhookNode({ data, selected }: NodeProps) {
-	const d = data as unknown as TriggerNodeData;
-	return (
-		<BaseFlowNode data={d} selected={selected} icon={Globe} category="trigger">
-			<span className="text-[10px] text-muted-foreground">
-				{d.webhookToken ? "Secured webhook" : "Webhook trigger"}
-			</span>
-		</BaseFlowNode>
-	);
-}
-
-export function TriggerScheduleNode({ data, selected }: NodeProps) {
-	const d = data as unknown as TriggerNodeData;
-	return (
-		<BaseFlowNode data={d} selected={selected} icon={Clock} category="trigger">
-			{d.cronExpression && (
-				<span className="text-[10px] text-muted-foreground">
-					{d.cronExpression}
-				</span>
-			)}
+			<span className="text-[10px] text-muted-foreground">{summary()}</span>
 		</BaseFlowNode>
 	);
 }
@@ -608,11 +564,7 @@ export function EndNode({ data, selected }: NodeProps) {
 // ── Node Type Registry ───────────────────────────────────────────
 
 export const nodeTypes = {
-	start: StartNode,
-	"trigger-keyword": TriggerKeywordNode,
-	"trigger-any": TriggerAnyNode,
-	"trigger-webhook": TriggerWebhookNode,
-	"trigger-schedule": TriggerScheduleNode,
+	trigger: TriggerNode,
 	"send-text": SendTextNode,
 	"send-image": SendImageNode,
 	"send-video": SendVideoNode,
@@ -634,7 +586,7 @@ export const nodeTypes = {
 };
 
 export type NodeTypeName = keyof typeof nodeTypes;
-export type PaletteNodeTypeName = Exclude<NodeTypeName, "start">;
+export type PaletteNodeTypeName = Exclude<NodeTypeName, "trigger">;
 
 // ── Palette Definition ───────────────────────────────────────────
 
@@ -651,35 +603,6 @@ export interface PaletteItem {
 }
 
 export const paletteCategories: PaletteCategory[] = [
-	{
-		label: "Triggers",
-		items: [
-			{
-				type: "trigger-keyword",
-				label: "Keyword",
-				icon: Hash,
-				category: "trigger",
-			},
-			{
-				type: "trigger-any",
-				label: "Any Message",
-				icon: MessageSquare,
-				category: "trigger",
-			},
-			{
-				type: "trigger-webhook",
-				label: "Webhook",
-				icon: Globe,
-				category: "trigger",
-			},
-			{
-				type: "trigger-schedule",
-				label: "Schedule",
-				icon: Clock,
-				category: "trigger",
-			},
-		],
-	},
 	{
 		label: "Messages",
 		items: [
@@ -782,11 +705,7 @@ function nextNodeId() {
 }
 
 const defaultLabels: Record<NodeTypeName, string> = {
-	start: "Start",
-	"trigger-keyword": "Keyword Match",
-	"trigger-any": "Any Message",
-	"trigger-webhook": "Webhook",
-	"trigger-schedule": "Schedule",
+	trigger: "Trigger",
 	"send-text": "Send Text",
 	"send-image": "Send Image",
 	"send-video": "Send Video",
@@ -807,15 +726,25 @@ const defaultLabels: Record<NodeTypeName, string> = {
 	end: "End",
 };
 
-export function createStartNode(): Node {
+export function createTriggerNode(): Node {
 	return {
-		id: "start",
-		type: "start",
+		id: "trigger",
+		type: "trigger",
 		position: { x: 40, y: 120 },
 		deletable: false,
-		data: { id: "start", nodeType: "start", label: "Start", category: "start" },
+		data: {
+			id: "trigger",
+			nodeType: "trigger",
+			label: "Trigger",
+			category: "trigger",
+			triggerKind: "keyword",
+			keyword: "",
+		},
 	};
 }
+
+// Backward-compat alias for any external callers still referencing the old name.
+export const createStartNode = createTriggerNode;
 
 export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 	const id = nextNodeId();
@@ -832,18 +761,6 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 	};
 
 	switch (type) {
-		case "trigger-keyword":
-			return { ...base, data: { ...base.data, keyword: "" } };
-		case "trigger-webhook":
-			return {
-				...base,
-				data: { ...base.data, webhookToken: crypto.randomUUID() },
-			};
-		case "trigger-schedule":
-			return {
-				...base,
-				data: { ...base.data, cronExpression: "", contactNumber: "" },
-			};
 		case "send-text":
 			return { ...base, data: { ...base.data, text: "" } };
 		case "send-image":
@@ -914,4 +831,100 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 		default:
 			return base;
 	}
+}
+
+// ── Legacy Node Migration ────────────────────────────────────────
+// Maps old node shapes (separate `start` + `trigger-*` nodes) onto the unified
+// `trigger` node so existing flows stored as JSONB keep working.
+
+const TRIGGER_TYPE_TO_KIND: Record<string, TriggerKind> = {
+	"trigger-keyword": "keyword",
+	"trigger-any": "any_message",
+	"trigger-webhook": "webhook",
+	"trigger-schedule": "schedule",
+};
+
+export function migrateLegacyNodes(nodes: Node[]): Node[] {
+	const hasTrigger = nodes.some((n) => n.type === "trigger");
+	if (hasTrigger) {
+		// Drop any leftover `start` node; keep the unified trigger.
+		return nodes.filter((n) => n.type !== "start");
+	}
+
+	const legacyTrigger = nodes.find((n) => n.type?.startsWith("trigger-"));
+	const startNode = nodes.find((n) => n.type === "start");
+
+	if (!legacyTrigger && !startNode) return nodes;
+
+	const kind = legacyTrigger?.type
+		? TRIGGER_TYPE_TO_KIND[legacyTrigger.type]
+		: "keyword";
+	const legacyData = (legacyTrigger?.data ?? {}) as Record<string, unknown>;
+	const triggerData: TriggerNodeData = {
+		id: "trigger",
+		nodeType: "trigger",
+		label: "Trigger",
+		category: "trigger",
+		triggerKind: kind,
+		keyword: typeof legacyData.keyword === "string" ? legacyData.keyword : "",
+		webhookToken:
+			typeof legacyData.webhookToken === "string"
+				? legacyData.webhookToken
+				: undefined,
+		cronExpression:
+			typeof legacyData.cronExpression === "string"
+				? legacyData.cronExpression
+				: undefined,
+		contactNumber:
+			typeof legacyData.contactNumber === "string"
+				? legacyData.contactNumber
+				: undefined,
+	};
+
+	const triggerNode: Node = {
+		id: "trigger",
+		type: "trigger",
+		position: startNode?.position ??
+			legacyTrigger?.position ?? { x: 40, y: 120 },
+		deletable: false,
+		data: triggerData,
+	};
+
+	// Re-point edges that referenced the old start/trigger node ids onto "trigger".
+	const remapped = nodes
+		.filter((n) => n.type !== "start" && !n.type?.startsWith("trigger-"))
+		.map((n) => {
+			if (n.id === (legacyTrigger?.id ?? startNode?.id)) return triggerNode;
+			return n;
+		});
+
+	if (!remapped.some((n) => n.id === "trigger")) remapped.unshift(triggerNode);
+	return remapped;
+}
+
+export function remapLegacyEdges(edges: Edge[], nodes: Node[] = []): Edge[] {
+	// Edges are plain objects; remap source/target from old start/trigger node ids to "trigger".
+	const legacyTriggerIds = new Set(
+		nodes
+			.filter(
+				(node) => node.type === "start" || node.type?.startsWith("trigger-"),
+			)
+			.map((node) => node.id),
+	);
+	legacyTriggerIds.add("start");
+
+	return edges.map((e) => {
+		const edge = { ...e };
+		if (legacyTriggerIds.has(edge.source)) {
+			edge.source = "trigger";
+			// Legacy trigger nodes often had specific handle IDs (like "next").
+			// The new TriggerNode uses the default handle (no id), so we must clear it.
+			delete edge.sourceHandle;
+		}
+		if (legacyTriggerIds.has(edge.target)) {
+			edge.target = "trigger";
+			delete edge.targetHandle;
+		}
+		return edge;
+	});
 }

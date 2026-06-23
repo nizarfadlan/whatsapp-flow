@@ -13,10 +13,13 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
+import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
+import { Route as DashboardGroupsRouteImport } from './routes/dashboard.groups'
 import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
 import { Route as DashboardDevicesRouteImport } from './routes/dashboard.devices'
+import { Route as DashboardContactsRouteImport } from './routes/dashboard.contacts'
 import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flows.index'
 import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.new'
 import { Route as DashboardFlowsFlowIdRouteImport } from './routes/dashboard.flows.$flowId'
@@ -43,6 +46,11 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
+  id: '/webhooks',
+  path: '/webhooks',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardLogsRoute = DashboardLogsRouteImport.update({
   id: '/logs',
   path: '/logs',
@@ -53,6 +61,11 @@ const DashboardInboxRoute = DashboardInboxRouteImport.update({
   path: '/inbox',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardGroupsRoute = DashboardGroupsRouteImport.update({
+  id: '/groups',
+  path: '/groups',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardFlowsRoute = DashboardFlowsRouteImport.update({
   id: '/flows',
   path: '/flows',
@@ -61,6 +74,11 @@ const DashboardFlowsRoute = DashboardFlowsRouteImport.update({
 const DashboardDevicesRoute = DashboardDevicesRouteImport.update({
   id: '/devices',
   path: '/devices',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardContactsRoute = DashboardContactsRouteImport.update({
+  id: '/contacts',
+  path: '/contacts',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardFlowsIndexRoute = DashboardFlowsIndexRouteImport.update({
@@ -94,10 +112,13 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
+  '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
+  '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
+  '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
@@ -108,9 +129,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
+  '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
+  '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
@@ -123,10 +147,13 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
+  '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
+  '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
+  '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
@@ -140,10 +167,13 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
+    | '/dashboard/contacts'
     | '/dashboard/devices'
     | '/dashboard/flows'
+    | '/dashboard/groups'
     | '/dashboard/inbox'
     | '/dashboard/logs'
+    | '/dashboard/webhooks'
     | '/dashboard/'
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
@@ -154,9 +184,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/dashboard/contacts'
     | '/dashboard/devices'
+    | '/dashboard/groups'
     | '/dashboard/inbox'
     | '/dashboard/logs'
+    | '/dashboard/webhooks'
     | '/dashboard'
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
@@ -168,10 +201,13 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
+    | '/dashboard/contacts'
     | '/dashboard/devices'
     | '/dashboard/flows'
+    | '/dashboard/groups'
     | '/dashboard/inbox'
     | '/dashboard/logs'
+    | '/dashboard/webhooks'
     | '/dashboard/'
     | '/dashboard/devices/$id'
     | '/dashboard/flows/$flowId'
@@ -216,6 +252,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/webhooks': {
+      id: '/dashboard/webhooks'
+      path: '/webhooks'
+      fullPath: '/dashboard/webhooks'
+      preLoaderRoute: typeof DashboardWebhooksRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/logs': {
       id: '/dashboard/logs'
       path: '/logs'
@@ -230,6 +273,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardInboxRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/groups': {
+      id: '/dashboard/groups'
+      path: '/groups'
+      fullPath: '/dashboard/groups'
+      preLoaderRoute: typeof DashboardGroupsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/flows': {
       id: '/dashboard/flows'
       path: '/flows'
@@ -242,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/devices'
       fullPath: '/dashboard/devices'
       preLoaderRoute: typeof DashboardDevicesRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/contacts': {
+      id: '/dashboard/contacts'
+      path: '/contacts'
+      fullPath: '/dashboard/contacts'
+      preLoaderRoute: typeof DashboardContactsRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/flows/': {
@@ -321,18 +378,24 @@ const DashboardFlowsRouteWithChildren = DashboardFlowsRoute._addFileChildren(
 )
 
 interface DashboardRouteChildren {
+  DashboardContactsRoute: typeof DashboardContactsRoute
   DashboardDevicesRoute: typeof DashboardDevicesRouteWithChildren
   DashboardFlowsRoute: typeof DashboardFlowsRouteWithChildren
+  DashboardGroupsRoute: typeof DashboardGroupsRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardLogsRoute: typeof DashboardLogsRoute
+  DashboardWebhooksRoute: typeof DashboardWebhooksRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
 const DashboardRouteChildren: DashboardRouteChildren = {
+  DashboardContactsRoute: DashboardContactsRoute,
   DashboardDevicesRoute: DashboardDevicesRouteWithChildren,
   DashboardFlowsRoute: DashboardFlowsRouteWithChildren,
+  DashboardGroupsRoute: DashboardGroupsRoute,
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardLogsRoute: DashboardLogsRoute,
+  DashboardWebhooksRoute: DashboardWebhooksRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 

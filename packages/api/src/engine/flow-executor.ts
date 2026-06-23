@@ -1,11 +1,13 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { db } from "@whatsapp-flow/db";
+import { contact as contactTable } from "@whatsapp-flow/db/schema/contact";
 import {
 	flow,
 	flowExecutionLog,
 	flowSession,
 } from "@whatsapp-flow/db/schema/device";
+import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import type { OutgoingMessage } from "@whatsapp-flow/whatsapp";
 import {
 	connectionManager,
@@ -42,6 +44,7 @@ type ExecutionContext = {
 	logId: string;
 	variables: Record<string, string>;
 	nodeResults: NodeResult[];
+	triggerMessageKey?: import("baileys").WAMessageKey;
 };
 
 type ExecutionStatus = "running" | "waiting" | "completed" | "failed";
@@ -50,6 +53,7 @@ type TriggerSource = "message" | "schedule" | "webhook" | "session";
 type ExecutionOptions = {
 	replyJid?: string;
 	triggerSource?: TriggerSource;
+	triggerMessageKey?: import("baileys").WAMessageKey;
 };
 
 type ExecutionResult = {
@@ -75,7 +79,10 @@ function buildAdjacencyMap(edges: FlowEdge[]) {
 }
 
 function getTriggerNode(nodes: FlowNode[]) {
-	return nodes.find((node) => node.type?.startsWith("trigger-"));
+	// Support both unified "trigger" node and legacy "trigger-*" shapes.
+	return nodes.find(
+		(node) => node.type === "trigger" || node.type?.startsWith("trigger-"),
+	);
 }
 
 function getNextNodes(
@@ -149,6 +156,7 @@ async function executeNode(
 			case "send-text": {
 				const text = resolveTemplate(String(data.text ?? ""), ctx);
 				await sendWhatsAppMessage(socket, jid, { type: "text", text });
+				void recordOutboundMessage(ctx, "text", text);
 				ctx.nodeResults.push({
 					nodeId: node.id,
 					status: "success",
@@ -174,6 +182,7 @@ async function executeNode(
 					url,
 					caption,
 				} as OutgoingMessage);
+				void recordOutboundMessage(ctx, messageType, caption ?? url, { url });
 				ctx.nodeResults.push({
 					nodeId: node.id,
 					status: "success",
@@ -207,12 +216,36 @@ async function executeNode(
 				return true;
 			}
 			case "send-reaction": {
+				const emoji = String(data.emoji ?? "");
+				if (!emoji) {
+					ctx.nodeResults.push({
+						nodeId: node.id,
+						status: "error",
+						error: "No emoji configured",
+					});
+					return false;
+				}
+				if (!ctx.triggerMessageKey) {
+					// Reaction requires the key of the triggering message.
+					// Gracefully skip when triggered by schedule/webhook (no message key).
+					ctx.nodeResults.push({
+						nodeId: node.id,
+						status: "success",
+						output: "skipped:no_message_key",
+					});
+					return true;
+				}
+				await sendWhatsAppMessage(socket, jid, {
+					type: "reaction",
+					text: emoji,
+					messageKey: ctx.triggerMessageKey,
+				});
 				ctx.nodeResults.push({
 					nodeId: node.id,
-					status: "error",
-					error: "Reaction node needs incoming message key support",
+					status: "success",
+					output: emoji,
 				});
-				return false;
+				return true;
 			}
 			case "send-button": {
 				const bodyText = resolveTemplate(String(data.bodyText ?? ""), ctx);
@@ -233,12 +266,50 @@ async function executeNode(
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
 			}
-			case "send-list":
-			case "send-quick-reply": {
+			case "send-list": {
 				const bodyText = resolveTemplate(String(data.bodyText ?? ""), ctx);
+				const footer = data.footerText
+					? resolveTemplate(String(data.footerText), ctx)
+					: undefined;
+				const sections =
+					(data.sections as
+						| {
+								title: string;
+								rows: { id: string; title: string; description?: string }[];
+						  }[]
+						| undefined) ?? [];
+				const lines: string[] = [bodyText];
+				let optionIndex = 1;
+				for (const section of sections) {
+					if (section.title) lines.push(`\n*${section.title}*`);
+					for (const row of section.rows) {
+						lines.push(
+							row.description
+								? `${optionIndex}. ${row.title} — ${row.description}`
+								: `${optionIndex}. ${row.title}`,
+						);
+						optionIndex++;
+					}
+				}
+				if (footer) lines.push(`\n_${footer}_`);
 				await sendWhatsAppMessage(socket, jid, {
 					type: "text",
-					text: bodyText,
+					text: lines.join("\n"),
+				});
+				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
+				return true;
+			}
+			case "send-quick-reply": {
+				const bodyText = resolveTemplate(String(data.bodyText ?? ""), ctx);
+				const buttons =
+					(data.buttons as { id: string; text: string }[] | undefined) ?? [];
+				const lines: string[] = [bodyText];
+				for (let i = 0; i < buttons.length; i++) {
+					lines.push(`${i + 1}. ${buttons[i]?.text ?? ""}`);
+				}
+				await sendWhatsAppMessage(socket, jid, {
+					type: "text",
+					text: lines.join("\n"),
 				});
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
@@ -296,18 +367,28 @@ async function executeNode(
 				const target = normalizeNumber(
 					resolveTemplate(String(data.targetNumber ?? ""), ctx),
 				);
-				if (target) {
-					await sendWhatsAppMessage(socket, `${target}@s.whatsapp.net`, {
-						type: "text",
-						text: `Forwarded from ${ctx.contactNumber}`,
+				const targetJid = target ? `${target}@s.whatsapp.net` : null;
+				if (targetJid) {
+					// Forward the incoming message text; include attribution.
+					const forwardBody = ctx.incomingText
+						? `*Forwarded from ${ctx.contactNumber}:*\n${ctx.incomingText}`
+						: `*Forwarded from ${ctx.contactNumber}* (media message)`;
+					const template = String(data.messageTemplate ?? "").trim();
+					const text = template ? resolveTemplate(template, ctx) : forwardBody;
+					await sendWhatsAppMessage(socket, targetJid, { type: "text", text });
+					ctx.nodeResults.push({
+						nodeId: node.id,
+						status: "success",
+						output: target,
+					});
+				} else {
+					ctx.nodeResults.push({
+						nodeId: node.id,
+						status: "error",
+						error: "No target number configured",
 					});
 				}
-				ctx.nodeResults.push({
-					nodeId: node.id,
-					status: "success",
-					output: target,
-				});
-				return true;
+				return !!targetJid;
 			}
 			case "end":
 			case "condition":
@@ -367,6 +448,90 @@ function resolveTemplate(text: string, ctx: ExecutionContext) {
 
 function normalizeNumber(value: string) {
 	return value.replace(/[^\d]/g, "");
+}
+
+async function recordOutboundMessage(
+	ctx: ExecutionContext,
+	messageType: string,
+	text?: string,
+	raw?: Record<string, unknown>,
+) {
+	try {
+		const now = new Date();
+		const chatJid = ctx.replyJid;
+		let chatType: "private" | "group" | "channel" | "broadcast" = "private";
+		if (chatJid.endsWith("@g.us")) {
+			chatType = "group";
+		} else if (chatJid.endsWith("@newsletter")) {
+			chatType = "channel";
+		} else if (chatJid.endsWith("@broadcast")) {
+			chatType = "broadcast";
+		}
+		let contactId: string | null = null;
+
+		if (chatType === "private") {
+			const [savedContact] = await db
+				.insert(contactTable)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ctx.deviceId,
+					jid: chatJid,
+					phoneNumber: ctx.contactNumber,
+					source: "message",
+				})
+				.onConflictDoUpdate({
+					target: [contactTable.deviceId, contactTable.jid],
+					set: { phoneNumber: ctx.contactNumber, updatedAt: now },
+				})
+				.returning({ id: contactTable.id });
+			contactId = savedContact?.id ?? null;
+		}
+
+		const [savedThread] = await db
+			.insert(inboxThread)
+			.values({
+				id: crypto.randomUUID(),
+				deviceId: ctx.deviceId,
+				chatType,
+				chatJid,
+				contactId,
+				contactNumber: chatType === "private" ? ctx.contactNumber : null,
+				lastMessageText: text ?? null,
+				lastMessageAt: now,
+				unreadCount: 0,
+			})
+			.onConflictDoUpdate({
+				target: [inboxThread.deviceId, inboxThread.chatJid],
+				set: {
+					chatType,
+					contactId,
+					contactNumber: chatType === "private" ? ctx.contactNumber : null,
+					lastMessageText: text ?? null,
+					lastMessageAt: now,
+				},
+			})
+			.returning({ id: inboxThread.id });
+
+		const threadId = savedThread?.id;
+
+		if (threadId) {
+			await db.insert(inboxMessage).values({
+				id: crypto.randomUUID(),
+				threadId,
+				direction: "outbound",
+				messageType,
+				text: text ?? null,
+				raw: raw ?? null,
+			});
+		}
+	} catch (error) {
+		console.warn("Failed to persist outbound inbox message", {
+			flowId: ctx.flowId,
+			deviceId: ctx.deviceId,
+			contactNumber: ctx.contactNumber,
+			error,
+		});
+	}
 }
 
 function isPrivateIpAddress(address: string) {
@@ -651,6 +816,7 @@ export async function resumeWaitingSession(
 	contactNumber: string,
 	incomingText: string,
 	replyJid = `${contactNumber}@s.whatsapp.net`,
+	triggerMessageKey?: import("baileys").WAMessageKey,
 ): Promise<ExecutionResult | null> {
 	const [waiting] = await db
 		.select()
@@ -689,13 +855,14 @@ export async function resumeWaitingSession(
 		.returning();
 
 	if (!claimed) return null;
-	return resumeFlowSession(claimed, incomingText, replyJid);
+	return resumeFlowSession(claimed, incomingText, replyJid, triggerMessageKey);
 }
 
 async function resumeFlowSession(
 	session: typeof flowSession.$inferSelect,
 	incomingText: string,
 	replyJid: string,
+	triggerMessageKey?: import("baileys").WAMessageKey,
 ): Promise<ExecutionResult> {
 	const [flowRow] = await db
 		.select()
@@ -724,6 +891,7 @@ async function resumeFlowSession(
 		logId: session.executionLogId,
 		variables,
 		nodeResults: normalizeNodeResults(session.nodeResults),
+		triggerMessageKey,
 	};
 
 	const connection = connectionManager.getConnection(ctx.deviceId);
@@ -833,6 +1001,7 @@ export async function executeFlow(
 		logId,
 		variables: {},
 		nodeResults: [],
+		triggerMessageKey: options.triggerMessageKey,
 	};
 
 	const connection = connectionManager.getConnection(ctx.deviceId);
