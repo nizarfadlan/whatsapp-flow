@@ -543,6 +543,7 @@ function FlowEditor() {
 						<NodeConfigPanel
 							node={selectedNode}
 							flowId={flowId}
+							allNodes={nodes}
 							onUpdate={updateNodeData}
 							onDelete={deleteNode}
 						/>

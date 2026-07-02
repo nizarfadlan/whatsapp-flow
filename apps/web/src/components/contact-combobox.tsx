@@ -80,22 +80,25 @@ export function ContactCombobox({
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<Button
-					variant="outline"
-					role="combobox"
-					aria-expanded={open}
-					className={cn(
-						"h-7 w-full justify-between px-2 font-normal text-xs",
-						!selected && !value && "text-muted-foreground",
-						className,
-					)}
-				>
-					<span className="min-w-0 flex-1 truncate text-left">
-						{displayLabel}
-					</span>
-					<ChevronsUpDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
-				</Button>
+			<PopoverTrigger
+				render={
+					<Button
+						type="button"
+						variant="outline"
+						role="combobox"
+						aria-expanded={open}
+						className={cn(
+							"h-7 w-full justify-between px-2 font-normal text-xs",
+							!selected && !value && "text-muted-foreground",
+							className,
+						)}
+					/>
+				}
+			>
+				<span className="min-w-0 flex-1 truncate text-left">
+					{displayLabel}
+				</span>
+				<ChevronsUpDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
 			</PopoverTrigger>
 			<PopoverContent className="w-60 p-0" align="start">
 				<Command shouldFilter={false}>

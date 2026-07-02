@@ -1,5 +1,24 @@
 import { Button } from "@whatsapp-flow/ui/components/button";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@whatsapp-flow/ui/components/command";
+import {
+	EmojiPicker,
+	EmojiPickerContent,
+	EmojiPickerFooter,
+	EmojiPickerSearch,
+} from "@whatsapp-flow/ui/components/emoji-picker";
 import { Input } from "@whatsapp-flow/ui/components/input";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@whatsapp-flow/ui/components/popover";
 import {
 	Select,
 	SelectContent,
@@ -10,7 +29,8 @@ import {
 import { Separator } from "@whatsapp-flow/ui/components/separator";
 import { Textarea } from "@whatsapp-flow/ui/components/textarea";
 import type { Node } from "@xyflow/react";
-import { Copy, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Copy, Plus, RefreshCw, Smile, Trash2, X } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import { ContactCombobox } from "./contact-combobox";
 import type {
 	ActionNodeData,
@@ -25,6 +45,8 @@ import { MediaUpload } from "./media-upload";
 interface NodeConfigPanelProps {
 	node: Node | null;
 	flowId: string;
+	/** All flow nodes, used to extract variable names for autocomplete. */
+	allNodes?: Node[];
 	onUpdate: (id: string, data: Partial<FlowNodeData>) => void;
 	onDelete: (id: string) => void;
 }
@@ -48,7 +70,6 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 	return <h4 className="font-medium text-[10px]">{children}</h4>;
 }
 
-// Trigger configs
 function TriggerKeywordConfig({
 	data,
 	onUpdate,
@@ -150,26 +171,194 @@ function TriggerScheduleConfig({
 	);
 }
 
-// Message configs
+function getFlowVariables(allNodes?: Node[]): string[] {
+	const vars = new Set(["contact.number", "message.text"]);
+	if (allNodes) {
+		for (const node of allNodes) {
+			const data = node.data as Record<string, unknown>;
+			if (
+				data.nodeType === "set-variable" &&
+				typeof data.variableName === "string" &&
+				data.variableName.trim()
+			) {
+				vars.add(`variables.${data.variableName.trim()}`);
+			}
+		}
+	}
+	return Array.from(vars);
+}
+
+function getVariableMeta(variable: string) {
+	if (variable === "contact.number") {
+		return {
+			label: "Contact number",
+			description: "Sender phone number",
+		};
+	}
+
+	if (variable === "message.text") {
+		return {
+			label: "Message text",
+			description: "Incoming message text",
+		};
+	}
+
+	if (variable.startsWith("variables.")) {
+		return {
+			label: variable.slice("variables.".length),
+			description: "Flow variable",
+		};
+	}
+
+	return {
+		label: variable,
+		description: "Variable",
+	};
+}
+
 function SendTextConfig({
 	data,
 	onUpdate,
+	allNodes,
 }: {
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
+	allNodes?: Node[];
 }) {
-	return (
-		<Field label="Message Text">
-			<Textarea
-				className="min-h-[64px] text-xs"
-				placeholder="e.g. Hello! How can I help?
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const [showVars, setShowVars] = useState(false);
+	const [varQuery, setVarQuery] = useState("");
 
-Supports {{variables}}"
-				value={data.text ?? ""}
-				onChange={(e) => onUpdate({ text: e.target.value })}
-			/>
+	const flowVars = getFlowVariables(allNodes);
+
+	const handleChange = useCallback(
+		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+			const value = e.target.value;
+			onUpdate({ text: value });
+
+			const cursorPos = e.target.selectionStart ?? 0;
+			const textBeforeCursor = value.slice(0, cursorPos);
+			const match = textBeforeCursor.match(/\{\{([\w.]*)$/);
+			if (match) {
+				setVarQuery(match[1] ?? "");
+				setShowVars(true);
+			} else {
+				setShowVars(false);
+			}
+		},
+		[onUpdate],
+	);
+
+	const insertVariable = useCallback(
+		(variable: string) => {
+			const textarea = textareaRef.current;
+			if (!textarea) return;
+
+			const value = data.text ?? "";
+			const cursorPos = textarea.selectionStart;
+			const textBeforeCursor = value.slice(0, cursorPos);
+			const match = textBeforeCursor.match(/\{\{([\w.]*)$/);
+			const beforeInsert = match
+				? textBeforeCursor.slice(0, match.index)
+				: textBeforeCursor;
+			const inserted = `{{${variable}}}`;
+			const afterCursor = value.slice(cursorPos);
+			const newValue = `${beforeInsert}${inserted}${afterCursor}`;
+
+			onUpdate({ text: newValue });
+			setShowVars(false);
+			setVarQuery("");
+
+			const newCursorPos = beforeInsert.length + inserted.length;
+			requestAnimationFrame(() => {
+				textarea.focus();
+				textarea.setSelectionRange(newCursorPos, newCursorPos);
+			});
+		},
+		[data.text, onUpdate],
+	);
+
+	const filteredVars = flowVars.filter((v) => {
+		const query = varQuery.toLowerCase();
+		const meta = getVariableMeta(v);
+		return [v, meta.label, meta.description].some((value) =>
+			value.toLowerCase().includes(query),
+		);
+	});
+
+	return (
+		<Field label="Text Message">
+			<div className="relative">
+				<Textarea
+					ref={textareaRef}
+					className="min-h-[64px] text-xs"
+					placeholder="e.g. Hi! How can I help?\n\nUse {{variable}} to insert a value."
+					value={data.text ?? ""}
+					onChange={handleChange}
+				/>
+				<Popover
+					open={showVars && filteredVars.length > 0}
+					onOpenChange={setShowVars}
+				>
+					<PopoverTrigger
+						render={
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="mt-1 h-7 w-fit text-xs"
+								onClick={() => {
+									setVarQuery("");
+									setShowVars(true);
+								}}
+							/>
+						}
+					>
+						Variables
+					</PopoverTrigger>
+					<PopoverContent
+						className="w-56 p-0"
+						align="start"
+						side="bottom"
+						sideOffset={4}
+						onOpenAutoFocus={(e) => e.preventDefault()}
+					>
+						<Command>
+							<CommandInput
+								placeholder="Search variables..."
+								value={varQuery}
+								onValueChange={setVarQuery}
+								className="h-8 text-xs"
+							/>
+							<CommandList>
+								<CommandEmpty className="py-3 text-center text-muted-foreground text-xs">
+									No variables found
+								</CommandEmpty>
+								<CommandGroup heading="Available Variables">
+									{filteredVars.map((v) => {
+										const meta = getVariableMeta(v);
+										return (
+											<CommandItem
+												key={v}
+												value={`${meta.label} ${meta.description} ${v}`}
+												className="flex flex-col items-start gap-0.5 text-xs"
+												onSelect={() => insertVariable(v)}
+											>
+												<span>{meta.label}</span>
+												<span className="text-[10px] text-muted-foreground">
+													{meta.description} · {`{{${v}}}`}
+												</span>
+											</CommandItem>
+										);
+									})}
+								</CommandGroup>
+							</CommandList>
+						</Command>
+					</PopoverContent>
+				</Popover>
+			</div>
 			<p className="text-[10px] text-muted-foreground">
-				Use {"{{variable}}"} to insert context values.
+				Use {"{{variable}}"} to insert values from context.
 			</p>
 		</Field>
 	);
@@ -298,19 +487,53 @@ function ReactionConfig({
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const [pickerOpen, setPickerOpen] = useState(false);
+
+	const handleEmojiSelect = useCallback(
+		(emoji: string) => {
+			onUpdate({ emoji });
+			setPickerOpen(false);
+		},
+		[onUpdate],
+	);
+
 	return (
 		<Field label="Emoji">
-			<Input
-				className="h-7 text-xs"
-				placeholder="👍"
-				value={data.emoji ?? ""}
-				onChange={(e) => onUpdate({ emoji: e.target.value })}
-			/>
+			<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+				<PopoverTrigger
+					render={
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="h-7 w-full justify-start gap-1.5 font-normal text-xs"
+						/>
+					}
+				>
+					{data.emoji ? (
+						<span className="text-base leading-none">{data.emoji}</span>
+					) : (
+						<Smile className="size-3.5 text-muted-foreground" />
+					)}
+					<span className={data.emoji ? "" : "text-muted-foreground"}>
+						{data.emoji ? data.emoji : "Select emoji"}
+					</span>
+				</PopoverTrigger>
+				<PopoverContent className="h-80 w-72 p-0" align="start">
+					<EmojiPicker
+						className="h-full"
+						onEmojiSelect={(e) => handleEmojiSelect(e.emoji)}
+					>
+						<EmojiPickerSearch placeholder="Search emoji..." />
+						<EmojiPickerContent />
+						<EmojiPickerFooter />
+					</EmojiPicker>
+				</PopoverContent>
+			</Popover>
 		</Field>
 	);
 }
 
-// Interactive configs
 function InteractiveButtonsConfig({
 	data,
 	onUpdate,
@@ -336,7 +559,7 @@ function InteractiveButtonsConfig({
 
 	return (
 		<>
-			<Field label="Body Text">
+			<Field label="Message Body">
 				<Input
 					className="h-7 text-xs"
 					placeholder="Main message"
@@ -355,7 +578,7 @@ function InteractiveButtonsConfig({
 			<div className="flex flex-col gap-1">
 				<div className="flex items-center justify-between">
 					<span className="text-[10px] text-muted-foreground">
-						Buttons ({(data.buttons ?? []).length}/3)
+						Button ({(data.buttons ?? []).length}/3)
 					</span>
 					{(data.buttons ?? []).length < 3 && (
 						<Button
@@ -441,7 +664,7 @@ function InteractiveListConfig({
 
 	return (
 		<>
-			<Field label="Body Text">
+			<Field label="Message Body">
 				<Input
 					className="h-7 text-xs"
 					placeholder="Main message"
@@ -602,7 +825,6 @@ function InteractiveQuickReplyConfig({
 	);
 }
 
-// Logic configs
 function ConditionConfig({
 	data,
 	onUpdate,
@@ -739,7 +961,6 @@ function WaitForReplyConfig({
 	);
 }
 
-// Action configs
 function ForwardConfig({
 	data,
 	onUpdate,
@@ -875,13 +1096,17 @@ function TriggerConfigForm({
 function MessageConfigForm({
 	data,
 	onUpdate,
+	allNodes,
 }: {
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
+	allNodes?: Node[];
 }) {
 	switch (data.nodeType) {
 		case "send-text":
-			return <SendTextConfig data={data} onUpdate={onUpdate} />;
+			return (
+				<SendTextConfig data={data} onUpdate={onUpdate} allNodes={allNodes} />
+			);
 		case "send-image":
 		case "send-video":
 		case "send-audio":
@@ -965,6 +1190,7 @@ function ActionConfigForm({
 export function NodeConfigPanel({
 	node,
 	flowId,
+	allNodes,
 	onUpdate,
 	onDelete,
 }: NodeConfigPanelProps) {
@@ -1000,6 +1226,7 @@ export function NodeConfigPanel({
 				<MessageConfigForm
 					data={data as MessageNodeData}
 					onUpdate={handleUpdate}
+					allNodes={allNodes}
 				/>
 			);
 			break;
