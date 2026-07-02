@@ -22,9 +22,14 @@ import {
 	Smartphone,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { z } from "zod";
+import { useInboxSSE } from "@/hooks/use-inbox-sse";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/inbox")({
+	validateSearch: z.object({
+		thread: z.string().optional(),
+	}),
 	component: InboxPage,
 });
 
@@ -333,8 +338,16 @@ function EmptyThread() {
 
 function InboxPage() {
 	const trpc = useTRPC();
+	const { thread: threadFromUrl } = Route.useSearch();
 	const { data: threads } = useSuspenseQuery(trpc.inbox.list.queryOptions({}));
-	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [selectedId, setSelectedId] = useState<string | null>(
+		threadFromUrl ?? null,
+	);
+	useInboxSSE();
+
+	useEffect(() => {
+		if (threadFromUrl) setSelectedId(threadFromUrl);
+	}, [threadFromUrl]);
 
 	const typedThreads = threads as ThreadRow[];
 	const selectedThread = selectedId

@@ -3,6 +3,7 @@ import { contactRouter } from "./contact";
 import { deviceRouter } from "./device";
 import { flowRouter } from "./flow";
 import { flowLogRouter } from "./flow-log";
+import { flowSessionRouter } from "./flow-session";
 import { groupRouter } from "./group";
 import { inboxRouter } from "./inbox";
 import { mediaRouter } from "./media";
@@ -23,6 +24,7 @@ export const appRouter = router({
 	group: groupRouter,
 	flow: flowRouter,
 	flowLog: flowLogRouter,
+	flowSession: flowSessionRouter,
 	inbox: inboxRouter,
 	media: mediaRouter,
 	webhook: webhookRouter,

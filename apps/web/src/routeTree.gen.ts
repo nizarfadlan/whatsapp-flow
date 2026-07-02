@@ -24,6 +24,7 @@ import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flow
 import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.new'
 import { Route as DashboardFlowsFlowIdRouteImport } from './routes/dashboard.flows.$flowId'
 import { Route as DashboardDevicesIdRouteImport } from './routes/dashboard.devices.$id'
+import { Route as DashboardFlowsFlowIdSessionsRouteImport } from './routes/dashboard.flows.$flowId.sessions'
 import { Route as DashboardFlowsFlowIdLogsRouteImport } from './routes/dashboard.flows.$flowId.logs'
 
 const LoginRoute = LoginRouteImport.update({
@@ -101,6 +102,12 @@ const DashboardDevicesIdRoute = DashboardDevicesIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => DashboardDevicesRoute,
 } as any)
+const DashboardFlowsFlowIdSessionsRoute =
+  DashboardFlowsFlowIdSessionsRouteImport.update({
+    id: '/sessions',
+    path: '/sessions',
+    getParentRoute: () => DashboardFlowsFlowIdRoute,
+  } as any)
 const DashboardFlowsFlowIdLogsRoute =
   DashboardFlowsFlowIdLogsRouteImport.update({
     id: '/logs',
@@ -125,6 +132,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows/': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
+  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -141,6 +149,7 @@ export interface FileRoutesByTo {
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
+  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -160,6 +169,7 @@ export interface FileRoutesById {
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows/': typeof DashboardFlowsIndexRoute
   '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
+  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -180,6 +190,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/new'
     | '/dashboard/flows/'
     | '/dashboard/flows/$flowId/logs'
+    | '/dashboard/flows/$flowId/sessions'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -196,6 +207,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/new'
     | '/dashboard/flows'
     | '/dashboard/flows/$flowId/logs'
+    | '/dashboard/flows/$flowId/sessions'
   id:
     | '__root__'
     | '/'
@@ -214,6 +226,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/new'
     | '/dashboard/flows/'
     | '/dashboard/flows/$flowId/logs'
+    | '/dashboard/flows/$flowId/sessions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -329,6 +342,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardDevicesIdRouteImport
       parentRoute: typeof DashboardDevicesRoute
     }
+    '/dashboard/flows/$flowId/sessions': {
+      id: '/dashboard/flows/$flowId/sessions'
+      path: '/sessions'
+      fullPath: '/dashboard/flows/$flowId/sessions'
+      preLoaderRoute: typeof DashboardFlowsFlowIdSessionsRouteImport
+      parentRoute: typeof DashboardFlowsFlowIdRoute
+    }
     '/dashboard/flows/$flowId/logs': {
       id: '/dashboard/flows/$flowId/logs'
       path: '/logs'
@@ -352,10 +372,12 @@ const DashboardDevicesRouteWithChildren =
 
 interface DashboardFlowsFlowIdRouteChildren {
   DashboardFlowsFlowIdLogsRoute: typeof DashboardFlowsFlowIdLogsRoute
+  DashboardFlowsFlowIdSessionsRoute: typeof DashboardFlowsFlowIdSessionsRoute
 }
 
 const DashboardFlowsFlowIdRouteChildren: DashboardFlowsFlowIdRouteChildren = {
   DashboardFlowsFlowIdLogsRoute: DashboardFlowsFlowIdLogsRoute,
+  DashboardFlowsFlowIdSessionsRoute: DashboardFlowsFlowIdSessionsRoute,
 }
 
 const DashboardFlowsFlowIdRouteWithChildren =

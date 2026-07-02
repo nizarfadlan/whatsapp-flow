@@ -32,7 +32,12 @@ function DashboardLayout() {
 	const location = useLocation();
 	const isFlowWorkspace = /^\/dashboard\/flows\/[^/]+$/.test(location.pathname);
 	const isInboxWorkspace = location.pathname === "/dashboard/inbox";
-	const isFixedWorkspace = isFlowWorkspace || isInboxWorkspace;
+	const isLogsWorkspace =
+		location.pathname === "/dashboard/logs" ||
+		location.pathname.endsWith("/logs") ||
+		location.pathname.endsWith("/sessions");
+	const isFixedWorkspace =
+		isFlowWorkspace || isInboxWorkspace || isLogsWorkspace;
 
 	return (
 		<SidebarProvider className="h-svh min-h-0 overflow-hidden bg-sidebar">

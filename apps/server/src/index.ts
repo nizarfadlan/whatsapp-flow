@@ -209,6 +209,105 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 	});
 });
 
+// Global SSE endpoint: all device events for user
+app.get("/api/events", async (c) => {
+	const session = await auth.api.getSession({
+		headers: c.req.raw.headers,
+	});
+	if (!session) {
+		return c.text("Unauthorized", 401);
+	}
+
+	const db = createDb();
+	const userDevices = await db
+		.select({ id: device.id })
+		.from(device)
+		.where(eq(device.userId, session.user.id));
+
+	const deviceIds = new Set(userDevices.map((d) => d.id));
+
+	return streamSSE(c, async (stream) => {
+		const onQr = (ev: { deviceId: string; qr: string }) => {
+			if (deviceIds.has(ev.deviceId)) {
+				stream.writeSSE({
+					data: JSON.stringify({
+						type: "qr",
+						deviceId: ev.deviceId,
+						qr: ev.qr,
+					}),
+				});
+			}
+		};
+
+		const onStatus = (ev: {
+			deviceId: string;
+			status: string;
+			phoneNumber?: string;
+		}) => {
+			if (deviceIds.has(ev.deviceId)) {
+				stream.writeSSE({
+					data: JSON.stringify({
+						type: "status",
+						deviceId: ev.deviceId,
+						status: ev.status,
+						phoneNumber: ev.phoneNumber,
+					}),
+				});
+			}
+		};
+
+		const onInboxUpdated = (ev: { deviceId: string; threadId?: string }) => {
+			if (deviceIds.has(ev.deviceId)) {
+				stream.writeSSE({
+					data: JSON.stringify({
+						type: "inbox:message",
+						deviceId: ev.deviceId,
+						threadId: ev.threadId,
+					}),
+				});
+			}
+		};
+
+		const onFlowLogUpdated = (ev: {
+			logId: string;
+			flowId: string;
+			deviceId: string;
+		}) => {
+			if (deviceIds.has(ev.deviceId)) {
+				stream.writeSSE({
+					data: JSON.stringify({
+						type: "flow:log:updated",
+						logId: ev.logId,
+						flowId: ev.flowId,
+						deviceId: ev.deviceId,
+					}),
+				});
+			}
+		};
+
+		connectionManager.on("device:qr", onQr);
+		connectionManager.on("device:status", onStatus);
+		connectionManager.on("inbox:updated", onInboxUpdated);
+		connectionManager.on("flow:log:updated", onFlowLogUpdated);
+
+		const ping = setInterval(() => {
+			stream.writeSSE({ data: JSON.stringify({ type: "ping" }) });
+		}, 30_000);
+
+		stream.onAbort(() => {
+			connectionManager.off("device:qr", onQr);
+			connectionManager.off("device:status", onStatus);
+			connectionManager.off("inbox:updated", onInboxUpdated);
+			connectionManager.off("flow:log:updated", onFlowLogUpdated);
+			clearInterval(ping);
+		});
+
+		await new Promise<void>((resolve) => {
+			stream.onAbort(() => resolve());
+		});
+	});
+});
+
 app.get("/", (c) => {
 	return c.text("OK");
 });
@@ -320,6 +419,7 @@ connectionManager.on("device:message", async (ev) => {
 				text: message.text ?? null,
 				raw: message.raw as Record<string, unknown> | null,
 			});
+			connectionManager.emit("inbox:updated", { deviceId, threadId });
 		}
 	} catch (err) {
 		console.error("Failed to persist inbox message", err);

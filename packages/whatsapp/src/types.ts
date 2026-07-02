@@ -52,4 +52,13 @@ export interface ConnectionManagerEvents {
 			raw?: unknown;
 		}[];
 	};
+	"inbox:updated": {
+		deviceId: string;
+		threadId?: string;
+	};
+	"flow:log:updated": {
+		logId: string;
+		flowId: string;
+		deviceId: string;
+	};
 }

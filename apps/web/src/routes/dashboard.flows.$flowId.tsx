@@ -5,6 +5,17 @@ import {
 	Outlet,
 	useLocation,
 } from "@tanstack/react-router";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogMedia,
+	AlertDialogTitle,
+} from "@whatsapp-flow/ui/components/alert-dialog";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
 import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
@@ -33,6 +44,7 @@ import {
 	useNodesState,
 } from "@xyflow/react";
 import {
+	AlertTriangle,
 	ArrowLeft,
 	GripVertical,
 	Play,
@@ -40,6 +52,7 @@ import {
 	Save,
 	ScrollText,
 	Undo2,
+	Users,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -66,7 +79,10 @@ export const Route = createFileRoute("/dashboard/flows/$flowId")({
 function FlowRoute() {
 	const location = useLocation();
 
-	if (location.pathname.endsWith("/logs")) {
+	if (
+		location.pathname.endsWith("/logs") ||
+		location.pathname.endsWith("/sessions")
+	) {
 		return <Outlet />;
 	}
 
@@ -387,6 +403,14 @@ function FlowEditor() {
 						{flow.status}
 					</Badge>
 					<Link
+						to="/dashboard/flows/$flowId/sessions"
+						params={{ flowId }}
+						className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
+					>
+						<Users className="size-3.5" />
+						Sessions
+					</Link>
+					<Link
 						to="/dashboard/flows/$flowId/logs"
 						params={{ flowId }}
 						className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
@@ -541,13 +565,19 @@ function DeployDialog({
 	const trpc = useTRPC();
 	const [open, setOpen] = useState(false);
 	const [deviceId, setDeviceId] = useState("");
+	const [showConfirm, setShowConfirm] = useState(false);
 
 	const { data: devices } = useSuspenseQuery(trpc.device.list.queryOptions());
+	const { data: flows, refetch: refetchFlows } = useSuspenseQuery(
+		trpc.flow.list.queryOptions(),
+	);
 
 	const deployMut = useMutation(
 		trpc.flow.deploy.mutationOptions({
 			onSuccess: () => {
 				setOpen(false);
+				setShowConfirm(false);
+				refetchFlows();
 				toast.success(`"${flowName}" deployed`);
 			},
 			onError: (err) => toast.error(err.message ?? "Deploy failed"),
@@ -560,64 +590,121 @@ function DeployDialog({
 		}
 	}, [open, devices, deviceId]);
 
+	const activeFlowOnSelectedDevice = deviceId
+		? (flows.find(
+				(f) =>
+					f.id !== flowId && f.status === "active" && f.deviceId === deviceId,
+			) ?? null)
+		: null;
+
+	const selectedDevice = devices?.find((d) => d.id === deviceId);
+
+	const handleDeployClick = () => {
+		if (activeFlowOnSelectedDevice) {
+			setShowConfirm(true);
+		} else {
+			deployMut.mutate({ id: flowId, deviceId });
+		}
+	};
+
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger
-				disabled={disabled}
-				className={cn(buttonVariants({ size: "sm" }), "h-7 text-xs")}
-			>
-				<Play className="size-3.5" />
-				Deploy
-			</DialogTrigger>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>Deploy Flow</DialogTitle>
-					<DialogDescription>
-						Select device to run this flow on.
-					</DialogDescription>
-				</DialogHeader>
-				{devices && devices.length > 0 ? (
-					<div className="flex flex-col gap-1">
-						{devices.map((d) => (
-							<Button
-								key={d.id}
-								type="button"
-								variant="ghost"
-								className={cn(
-									"h-auto justify-start rounded-lg border px-3 py-2 text-left text-xs",
-									deviceId === d.id
-										? "border-primary bg-primary/10"
-										: "border-border hover:bg-muted",
-								)}
-								onClick={() => setDeviceId(d.id)}
-							>
-								<span className="flex flex-col items-start gap-0.5">
-									<span className="font-medium">{d.name}</span>
-									<span className="text-[10px] text-muted-foreground">
-										{d.phoneNumber ?? "No phone"} · {d.status}
-									</span>
-								</span>
-							</Button>
-						))}
-					</div>
-				) : (
-					<p className="text-muted-foreground text-xs">
-						No devices available. Add device first.
-					</p>
-				)}
-				<DialogFooter>
-					<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-						Cancel
-					</Button>
-					<Button
-						size="sm"
-						disabled={!deviceId || deployMut.isPending}
-						onClick={() => deployMut.mutate({ id: flowId, deviceId })}
-					>
-						{deployMut.isPending ? "Deploying..." : "Deploy"}
-					</Button>
-				</DialogFooter>
-			</DialogContent>
-		</Dialog>
+		<>
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogTrigger
+					disabled={disabled}
+					className={cn(buttonVariants({ size: "sm" }), "h-7 text-xs")}
+				>
+					<Play className="size-3.5" />
+					Deploy
+				</DialogTrigger>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Deploy Flow</DialogTitle>
+						<DialogDescription>
+							Select device to run this flow on.
+						</DialogDescription>
+					</DialogHeader>
+					{devices && devices.length > 0 ? (
+						<div className="flex flex-col gap-1">
+							{devices.map((d) => {
+								const activeFlowOnDevice = flows.find(
+									(f) => f.status === "active" && f.deviceId === d.id,
+								);
+								return (
+									<Button
+										key={d.id}
+										type="button"
+										variant="ghost"
+										className={cn(
+											"h-auto justify-start rounded-lg border px-3 py-2 text-left text-xs",
+											deviceId === d.id
+												? "border-primary bg-primary/10"
+												: "border-border hover:bg-muted",
+										)}
+										onClick={() => setDeviceId(d.id)}
+									>
+										<span className="flex flex-col items-start gap-0.5">
+											<span className="font-medium">{d.name}</span>
+											<span className="text-[10px] text-muted-foreground">
+												{d.phoneNumber ?? "No phone"} · {d.status}
+												{activeFlowOnDevice && (
+													<span className="ml-1 text-amber-600">
+														(dengan "{activeFlowOnDevice.name}" aktif)
+													</span>
+												)}
+											</span>
+										</span>
+									</Button>
+								);
+							})}
+						</div>
+					) : (
+						<p className="text-muted-foreground text-xs">
+							No devices available. Add device first.
+						</p>
+					)}
+					<DialogFooter>
+						<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+							Cancel
+						</Button>
+						<Button
+							size="sm"
+							disabled={!deviceId || deployMut.isPending}
+							onClick={handleDeployClick}
+						>
+							{deployMut.isPending ? "Deploying..." : "Deploy"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogMedia className="bg-destructive/10">
+							<AlertTriangle className="size-5 text-destructive" />
+						</AlertDialogMedia>
+						<AlertDialogTitle>Deploy dan replace?</AlertDialogTitle>
+						<AlertDialogDescription>
+							Deploy ke <strong>{selectedDevice?.name ?? "device ini"}</strong>{" "}
+							akan mem.pause flow{" "}
+							<strong>"{activeFlowOnSelectedDevice?.name}"</strong> yang sedang
+							aktif. Hanya satu flow bisa aktif per device.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Batal</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={() => {
+								deployMut.mutate({ id: flowId, deviceId });
+								setShowConfirm(false);
+							}}
+						>
+							Deploy
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</>
 	);
 }

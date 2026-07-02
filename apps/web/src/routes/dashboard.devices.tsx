@@ -33,6 +33,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { DataTable } from "@/components/data-table";
+import { useDeviceStatusSSE } from "@/hooks/use-device-status-sse";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/devices")({
@@ -159,6 +160,7 @@ function QrModal({
 			}
 			if (data.type === "status") {
 				setStatus(data.status);
+				if (data.phoneNumber) setPhoneNumber(data.phoneNumber);
 				onStatusChange?.();
 			}
 		});
@@ -169,6 +171,18 @@ function QrModal({
 
 		return () => es.close();
 	}, [deviceId, onStatusChange, open]);
+
+	useEffect(() => {
+		if (status === "connected") {
+			toast.success(
+				phoneNumber
+					? `WhatsApp connected (${phoneNumber})`
+					: "WhatsApp connected",
+			);
+			onStatusChange?.();
+			onOpenChange(false);
+		}
+	}, [status, phoneNumber, onOpenChange, onStatusChange]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -233,6 +247,7 @@ function DevicesPage() {
 		trpc.device.list.queryOptions(),
 	);
 	const [qrDeviceId, setQrDeviceId] = useState<string | null>(null);
+	useDeviceStatusSSE();
 
 	const connectMut = useMutation(
 		trpc.device.connect.mutationOptions({

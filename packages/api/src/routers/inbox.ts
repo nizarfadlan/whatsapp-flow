@@ -176,6 +176,11 @@ export const inboxRouter = router({
 				.set({ lastMessageText: input.text, lastMessageAt: now })
 				.where(eq(inboxThread.id, thread.id));
 
+			connectionManager.emit("inbox:updated", {
+				deviceId: thread.deviceId,
+				threadId: thread.id,
+			});
+
 			return message;
 		}),
 

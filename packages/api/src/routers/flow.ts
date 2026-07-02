@@ -204,10 +204,12 @@ export const flowRouter = router({
 				status: flow.status,
 				triggerType: flow.triggerType,
 				deviceId: flow.deviceId,
+				deviceName: device.name,
 				createdAt: flow.createdAt,
 				updatedAt: flow.updatedAt,
 			})
 			.from(flow)
+			.leftJoin(device, eq(flow.deviceId, device.id))
 			.where(eq(flow.userId, ctx.session.user.id))
 			.orderBy(desc(flow.updatedAt));
 	}),
@@ -363,6 +365,20 @@ export const flowRouter = router({
 						message: "Device must be connected before activation",
 					});
 				}
+
+				const [existing] = await ctx.db
+					.select({ id: flow.id })
+					.from(flow)
+					.where(
+						and(eq(flow.deviceId, found.deviceId), eq(flow.status, "active")),
+					)
+					.limit(1);
+				if (existing && existing.id !== input.id) {
+					await ctx.db
+						.update(flow)
+						.set({ status: "paused" })
+						.where(eq(flow.id, existing.id));
+				}
 			}
 
 			await ctx.db
@@ -420,6 +436,20 @@ export const flowRouter = router({
 					code: "BAD_REQUEST",
 					message: "Flow needs a trigger node",
 				});
+			}
+
+			const [existing] = await ctx.db
+				.select({ id: flow.id })
+				.from(flow)
+				.where(
+					and(eq(flow.deviceId, input.deviceId), eq(flow.status, "active")),
+				)
+				.limit(1);
+			if (existing && existing.id !== input.id) {
+				await ctx.db
+					.update(flow)
+					.set({ status: "paused" })
+					.where(eq(flow.id, existing.id));
 			}
 
 			await ctx.db

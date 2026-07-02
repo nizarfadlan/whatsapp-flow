@@ -19,18 +19,23 @@ import {
 } from "@whatsapp-flow/ui/components/dropdown-menu";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { MoreHorizontal, Plus, Search, Trash2, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { z } from "zod";
 import { DataTable } from "@/components/data-table";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/contacts")({
+	validateSearch: z.object({
+		search: z.string().optional(),
+	}),
 	component: ContactsPage,
 });
 
 function ContactsPage() {
 	const trpc = useTRPC();
-	const [search, setSearch] = useState("");
+	const { search: searchFromUrl } = Route.useSearch();
+	const [search, setSearch] = useState(searchFromUrl ?? "");
 	const [addOpen, setAddOpen] = useState(false);
 	const [newPhone, setNewPhone] = useState("");
 	const [newName, setNewName] = useState("");
@@ -38,6 +43,10 @@ function ContactsPage() {
 	const { data: contacts = [], refetch } = useSuspenseQuery(
 		trpc.contact.list.queryOptions({ search: search || undefined, limit: 100 }),
 	);
+
+	useEffect(() => {
+		if (searchFromUrl) setSearch(searchFromUrl);
+	}, [searchFromUrl]);
 
 	const addMut = useMutation(
 		trpc.contact.create.mutationOptions({

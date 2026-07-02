@@ -426,13 +426,33 @@ async function persistProgress(
 		if (status === "completed" || status === "failed") {
 			updates.completedAt = new Date();
 		}
-		await db
+		const [updated] = await db
 			.update(flowExecutionLog)
 			.set(updates)
-			.where(eq(flowExecutionLog.id, logId));
+			.where(eq(flowExecutionLog.id, logId))
+			.returning({
+				id: flowExecutionLog.id,
+				flowId: flowExecutionLog.flowId,
+				deviceId: flowExecutionLog.deviceId,
+			});
+		if (updated) {
+			connectionManager.emit("flow:log:updated", {
+				logId: updated.id,
+				flowId: updated.flowId,
+				deviceId: updated.deviceId,
+			});
+		}
 	} catch (error) {
 		console.error("Failed to persist flow progress", { logId, error });
 	}
+}
+
+function emitLogCreated(log: { id: string; flowId: string; deviceId: string }) {
+	connectionManager.emit("flow:log:updated", {
+		logId: log.id,
+		flowId: log.flowId,
+		deviceId: log.deviceId,
+	});
 }
 
 function resolveTemplate(text: string, ctx: ExecutionContext) {
@@ -522,6 +542,10 @@ async function recordOutboundMessage(
 				messageType,
 				text: text ?? null,
 				raw: raw ?? null,
+			});
+			connectionManager.emit("inbox:updated", {
+				deviceId: ctx.deviceId,
+				threadId,
 			});
 		}
 	} catch (error) {
@@ -1006,31 +1030,47 @@ export async function executeFlow(
 
 	const connection = connectionManager.getConnection(ctx.deviceId);
 	if (!connection?.socket) {
-		await db.insert(flowExecutionLog).values({
+		const [failedLog] = await db
+			.insert(flowExecutionLog)
+			.values({
+				id: logId,
+				flowId: flowRow.id,
+				deviceId: ctx.deviceId,
+				contactNumber,
+				triggerSource,
+				status: "failed",
+				error: "Device not connected",
+				nodeResults: [],
+				startedAt: new Date(),
+				completedAt: new Date(),
+			})
+			.returning({
+				id: flowExecutionLog.id,
+				flowId: flowExecutionLog.flowId,
+				deviceId: flowExecutionLog.deviceId,
+			});
+		if (failedLog) emitLogCreated(failedLog);
+		return { status: "failed", logId, error: "Device not connected" };
+	}
+
+	const [createdLog] = await db
+		.insert(flowExecutionLog)
+		.values({
 			id: logId,
 			flowId: flowRow.id,
 			deviceId: ctx.deviceId,
 			contactNumber,
 			triggerSource,
-			status: "failed",
-			error: "Device not connected",
+			status: "running",
 			nodeResults: [],
 			startedAt: new Date(),
-			completedAt: new Date(),
+		})
+		.returning({
+			id: flowExecutionLog.id,
+			flowId: flowExecutionLog.flowId,
+			deviceId: flowExecutionLog.deviceId,
 		});
-		return { status: "failed", logId, error: "Device not connected" };
-	}
-
-	await db.insert(flowExecutionLog).values({
-		id: logId,
-		flowId: flowRow.id,
-		deviceId: ctx.deviceId,
-		contactNumber,
-		triggerSource,
-		status: "running",
-		nodeResults: [],
-		startedAt: new Date(),
-	});
+	if (createdLog) emitLogCreated(createdLog);
 
 	const adjacency = buildAdjacencyMap(edges);
 	const result = await runFlowNodes({
