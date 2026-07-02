@@ -28,7 +28,7 @@ import {
 } from "@whatsapp-flow/ui/components/select";
 import { Separator } from "@whatsapp-flow/ui/components/separator";
 import { Textarea } from "@whatsapp-flow/ui/components/textarea";
-import type { Node } from "@xyflow/react";
+import type { Edge, Node } from "@xyflow/react";
 import { Copy, Plus, RefreshCw, Smile, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { ContactCombobox } from "./contact-combobox";
@@ -47,6 +47,7 @@ interface NodeConfigPanelProps {
 	flowId: string;
 	/** All flow nodes, used to extract variable names for autocomplete. */
 	allNodes?: Node[];
+	edges?: Edge[];
 	onUpdate: (id: string, data: Partial<FlowNodeData>) => void;
 	onDelete: (id: string) => void;
 }
@@ -171,20 +172,47 @@ function TriggerScheduleConfig({
 	);
 }
 
-function getFlowVariables(allNodes?: Node[]): string[] {
-	const vars = new Set(["contact.number", "message.text"]);
-	if (allNodes) {
-		for (const node of allNodes) {
-			const data = node.data as Record<string, unknown>;
-			if (
-				data.nodeType === "set-variable" &&
-				typeof data.variableName === "string" &&
-				data.variableName.trim()
-			) {
-				vars.add(`variables.${data.variableName.trim()}`);
-			}
+function getUpstreamNodeIds(
+	currentNodeId?: string,
+	edges?: Edge[],
+): Set<string> {
+	const upstream = new Set<string>();
+	const queue = currentNodeId ? [currentNodeId] : [];
+
+	while (queue.length > 0) {
+		const target = queue.shift();
+		for (const edge of edges ?? []) {
+			if (edge.target !== target || upstream.has(edge.source)) continue;
+			upstream.add(edge.source);
+			queue.push(edge.source);
 		}
 	}
+
+	return upstream;
+}
+
+function getFlowVariables(
+	allNodes?: Node[],
+	edges?: Edge[],
+	currentNodeId?: string,
+): string[] {
+	const vars = new Set(["contact.number", "message.text"]);
+	const upstreamNodeIds = getUpstreamNodeIds(currentNodeId, edges);
+
+	for (const node of allNodes ?? []) {
+		if (!upstreamNodeIds.has(node.id)) continue;
+
+		const data = node.data as Record<string, unknown>;
+		if (
+			(data.nodeType === "set-variable" ||
+				data.nodeType === "wait-for-reply") &&
+			typeof data.variableName === "string" &&
+			data.variableName.trim()
+		) {
+			vars.add(`variables.${data.variableName.trim()}`);
+		}
+	}
+
 	return Array.from(vars);
 }
 
@@ -220,16 +248,20 @@ function SendTextConfig({
 	data,
 	onUpdate,
 	allNodes,
+	edges,
+	currentNodeId,
 }: {
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 	allNodes?: Node[];
+	edges?: Edge[];
+	currentNodeId?: string;
 }) {
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [showVars, setShowVars] = useState(false);
 	const [varQuery, setVarQuery] = useState("");
 
-	const flowVars = getFlowVariables(allNodes);
+	const flowVars = getFlowVariables(allNodes, edges, currentNodeId);
 
 	const handleChange = useCallback(
 		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -321,7 +353,6 @@ function SendTextConfig({
 						align="start"
 						side="bottom"
 						sideOffset={4}
-						onOpenAutoFocus={(e) => e.preventDefault()}
 					>
 						<Command>
 							<CommandInput
@@ -968,6 +999,8 @@ function ForwardConfig({
 	data: ActionNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const forwardData = data as ActionNodeData & { messageTemplate?: string };
+
 	return (
 		<>
 			<Field label="Forward To">
@@ -990,9 +1023,7 @@ function ForwardConfig({
 				<Textarea
 					className="min-h-[48px] text-xs"
 					placeholder="Leave empty to forward the original message"
-					value={
-						((data as Record<string, unknown>).messageTemplate as string) ?? ""
-					}
+					value={forwardData.messageTemplate ?? ""}
 					onChange={(e) =>
 						onUpdate({
 							...data,
@@ -1097,15 +1128,25 @@ function MessageConfigForm({
 	data,
 	onUpdate,
 	allNodes,
+	edges,
+	currentNodeId,
 }: {
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 	allNodes?: Node[];
+	edges?: Edge[];
+	currentNodeId?: string;
 }) {
 	switch (data.nodeType) {
 		case "send-text":
 			return (
-				<SendTextConfig data={data} onUpdate={onUpdate} allNodes={allNodes} />
+				<SendTextConfig
+					data={data}
+					onUpdate={onUpdate}
+					allNodes={allNodes}
+					edges={edges}
+					currentNodeId={currentNodeId}
+				/>
 			);
 		case "send-image":
 		case "send-video":
@@ -1191,6 +1232,7 @@ export function NodeConfigPanel({
 	node,
 	flowId,
 	allNodes,
+	edges,
 	onUpdate,
 	onDelete,
 }: NodeConfigPanelProps) {
@@ -1227,6 +1269,8 @@ export function NodeConfigPanel({
 					data={data as MessageNodeData}
 					onUpdate={handleUpdate}
 					allNodes={allNodes}
+					edges={edges}
+					currentNodeId={node.id}
 				/>
 			);
 			break;

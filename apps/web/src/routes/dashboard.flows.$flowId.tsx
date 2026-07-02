@@ -544,6 +544,7 @@ function FlowEditor() {
 							node={selectedNode}
 							flowId={flowId}
 							allNodes={nodes}
+							edges={edges}
 							onUpdate={updateNodeData}
 							onDelete={deleteNode}
 						/>
