@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
@@ -38,6 +39,9 @@ export function MediaUpload({
 	maxSizeMb = DEFAULT_MAX_MB,
 }: MediaUploadProps) {
 	const trpc = useTRPC();
+	const createUploadUrl = useMutation(
+		trpc.media.createUploadUrl.mutationOptions(),
+	);
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -53,7 +57,7 @@ export function MediaUpload({
 		setUploading(true);
 		try {
 			const { driver, uploadUrl, publicUrl, key } =
-				await trpc.media.createUploadUrl.mutate({
+				await createUploadUrl.mutateAsync({
 					fileName: file.name,
 					mimeType: file.type || "application/octet-stream",
 					size: file.size,

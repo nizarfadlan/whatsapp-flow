@@ -191,7 +191,7 @@ function BaseFlowNode({
 	return (
 		<div
 			className={cn(
-				"group relative flex min-w-56 flex-col overflow-visible rounded-2xl border border-border/80 bg-card text-card-foreground text-xs shadow-sm ring-1 ring-foreground/5 transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md",
+				"group relative flex min-w-56 flex-col overflow-visible rounded-2xl border border-border/80 bg-card text-card-foreground text-xs shadow-sm ring-1 ring-foreground/5 transition-all hover:border-border hover:shadow-md",
 				selected && "border-primary/60 shadow-md ring-2 ring-primary/15",
 			)}
 		>

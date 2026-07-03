@@ -859,19 +859,41 @@ function InteractiveQuickReplyConfig({
 function ConditionConfig({
 	data,
 	onUpdate,
+	allNodes,
+	edges,
+	currentNodeId,
 }: {
 	data: LogicNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
+	allNodes?: Node[];
+	edges?: Edge[];
+	currentNodeId?: string;
 }) {
+	const flowVars = getFlowVariables(allNodes, edges, currentNodeId);
+
 	return (
 		<>
 			<Field label="Field">
-				<Input
-					className="h-7 text-xs"
-					placeholder="message.text"
-					value={data.field ?? ""}
-					onChange={(e) => onUpdate({ field: e.target.value })}
-				/>
+				<Select
+					value={data.field ?? "message.text"}
+					onValueChange={(value) => {
+						if (value) onUpdate({ field: value });
+					}}
+				>
+					<SelectTrigger className="h-7 w-full text-xs" size="sm">
+						<SelectValue placeholder="Select variable" />
+					</SelectTrigger>
+					<SelectContent>
+						{flowVars.map((variable) => {
+							const meta = getVariableMeta(variable);
+							return (
+								<SelectItem key={variable} value={variable}>
+									{meta.label}
+								</SelectItem>
+							);
+						})}
+					</SelectContent>
+				</Select>
 			</Field>
 			<Field label="Operator">
 				<Select
@@ -1185,13 +1207,27 @@ function InteractiveConfigForm({
 function LogicConfigForm({
 	data,
 	onUpdate,
+	allNodes,
+	edges,
+	currentNodeId,
 }: {
 	data: LogicNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
+	allNodes?: Node[];
+	edges?: Edge[];
+	currentNodeId?: string;
 }) {
 	switch (data.nodeType) {
 		case "condition":
-			return <ConditionConfig data={data} onUpdate={onUpdate} />;
+			return (
+				<ConditionConfig
+					data={data}
+					onUpdate={onUpdate}
+					allNodes={allNodes}
+					edges={edges}
+					currentNodeId={currentNodeId}
+				/>
+			);
 		case "delay":
 			return <DelayConfig data={data} onUpdate={onUpdate} />;
 		case "set-variable":
@@ -1284,7 +1320,13 @@ export function NodeConfigPanel({
 			break;
 		case "logic":
 			configForm = (
-				<LogicConfigForm data={data as LogicNodeData} onUpdate={handleUpdate} />
+				<LogicConfigForm
+					data={data as LogicNodeData}
+					onUpdate={handleUpdate}
+					allNodes={allNodes}
+					edges={edges}
+					currentNodeId={node.id}
+				/>
 			);
 			break;
 		case "action":
