@@ -887,7 +887,7 @@ export function migrateLegacyNodes(nodes: Node[]): Node[] {
 		position: startNode?.position ??
 			legacyTrigger?.position ?? { x: 40, y: 120 },
 		deletable: false,
-		data: triggerData,
+		data: { ...triggerData },
 	};
 
 	// Re-point edges that referenced the old start/trigger node ids onto "trigger".

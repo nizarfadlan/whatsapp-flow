@@ -43,6 +43,10 @@ function ContactsPage() {
 	const { data: contacts = [], refetch } = useSuspenseQuery(
 		trpc.contact.list.queryOptions({ search: search || undefined, limit: 100 }),
 	);
+	const { data: devices = [] } = useSuspenseQuery(
+		trpc.device.list.queryOptions(),
+	);
+	const defaultDeviceId = devices[0]?.id;
 
 	useEffect(() => {
 		if (searchFromUrl) setSearch(searchFromUrl);
@@ -121,10 +125,12 @@ function ContactsPage() {
 			header: "",
 			cell: (row: (typeof contacts)[0]) => (
 				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button variant="ghost" size="icon-xs" className="size-6">
-							<MoreHorizontal className="size-3.5" />
-						</Button>
+					<DropdownMenuTrigger
+						render={
+							<Button variant="ghost" size="icon-xs" className="size-6" />
+						}
+					>
+						<MoreHorizontal className="size-3.5" />
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem
@@ -150,11 +156,11 @@ function ContactsPage() {
 					</p>
 				</div>
 				<Dialog open={addOpen} onOpenChange={setAddOpen}>
-					<DialogTrigger asChild>
-						<Button size="sm" className="h-7 gap-1.5 text-xs">
-							<Plus className="size-3.5" />
-							Add Contact
-						</Button>
+					<DialogTrigger
+						render={<Button size="sm" className="h-7 gap-1.5 text-xs" />}
+					>
+						<Plus className="size-3.5" />
+						Add Contact
 					</DialogTrigger>
 					<DialogContent>
 						<DialogHeader>
@@ -197,13 +203,17 @@ function ContactsPage() {
 							</Button>
 							<Button
 								size="sm"
-								disabled={!newPhone.trim() || addMut.isPending}
-								onClick={() =>
+								disabled={
+									!newPhone.trim() || !defaultDeviceId || addMut.isPending
+								}
+								onClick={() => {
+									if (!defaultDeviceId) return;
 									addMut.mutate({
+										deviceId: defaultDeviceId,
 										phoneNumber: newPhone.trim(),
 										name: newName.trim() || undefined,
-									})
-								}
+									});
+								}}
 							>
 								{addMut.isPending ? "Adding..." : "Add"}
 							</Button>

@@ -84,8 +84,8 @@ function WebhooksPage() {
 	const columns = [
 		{
 			key: "name",
-			label: "Name",
-			render: (row: (typeof webhooks)[0]) => (
+			header: "Name",
+			cell: (row: (typeof webhooks)[0]) => (
 				<span className="cursor-pointer truncate font-medium text-foreground text-xs underline decoration-border decoration-dotted underline-offset-4">
 					{row.name}
 				</span>
@@ -93,8 +93,8 @@ function WebhooksPage() {
 		},
 		{
 			key: "url",
-			label: "Target URL",
-			render: (row: (typeof webhooks)[0]) => (
+			header: "Target URL",
+			cell: (row: (typeof webhooks)[0]) => (
 				<span className="block max-w-xs truncate font-mono text-xs">
 					{row.url}
 				</span>
@@ -102,8 +102,8 @@ function WebhooksPage() {
 		},
 		{
 			key: "scope",
-			label: "Scope",
-			render: (row: (typeof webhooks)[0]) => (
+			header: "Scope",
+			cell: (row: (typeof webhooks)[0]) => (
 				<Badge variant="outline" className="h-4 gap-1 px-1 text-[9px]">
 					<Globe className="mr-0.5 h-2.5 w-2.5 text-muted-foreground" />
 					{row.deviceId ? `Device: ${row.deviceId}` : "Global (All Devices)"}
@@ -112,8 +112,8 @@ function WebhooksPage() {
 		},
 		{
 			key: "isActive",
-			label: "Status",
-			render: (row: (typeof webhooks)[0]) => (
+			header: "Status",
+			cell: (row: (typeof webhooks)[0]) => (
 				<Badge
 					variant={row.isActive ? "default" : "secondary"}
 					className="h-4 px-1 text-[9px]"
@@ -124,13 +124,15 @@ function WebhooksPage() {
 		},
 		{
 			key: "actions",
-			label: "",
-			render: (row: (typeof webhooks)[0]) => (
+			header: "",
+			cell: (row: (typeof webhooks)[0]) => (
 				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button variant="ghost" size="icon-xs" className="size-6">
-							<MoreHorizontal className="size-3.5" />
-						</Button>
+					<DropdownMenuTrigger
+						render={
+							<Button variant="ghost" size="icon-xs" className="size-6" />
+						}
+					>
+						<MoreHorizontal className="size-3.5" />
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem
@@ -171,11 +173,11 @@ function WebhooksPage() {
 					</p>
 				</div>
 				<Dialog open={addOpen} onOpenChange={setAddOpen}>
-					<DialogTrigger asChild>
-						<Button size="sm" className="h-7 gap-1.5 text-xs">
-							<Plus className="size-3.5" />
-							New Endpoint
-						</Button>
+					<DialogTrigger
+						render={<Button size="sm" className="h-7 gap-1.5 text-xs" />}
+					>
+						<Plus className="size-3.5" />
+						New Endpoint
 					</DialogTrigger>
 					<DialogContent>
 						<DialogHeader>
@@ -265,7 +267,11 @@ function WebhooksPage() {
 				</div>
 			) : (
 				<div className="max-w-full overflow-x-auto rounded-md border text-sm">
-					<DataTable data={webhooks} columns={columns} />
+					<DataTable
+						data={webhooks}
+						columns={columns}
+						getRowKey={(row) => row.id}
+					/>
 				</div>
 			)}
 		</div>

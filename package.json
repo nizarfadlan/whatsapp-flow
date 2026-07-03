@@ -37,7 +37,7 @@
 		"db:watch": "turbo -F @whatsapp-flow/db db:watch",
 		"db:stop": "turbo -F @whatsapp-flow/db db:stop",
 		"db:down": "turbo -F @whatsapp-flow/db db:down",
-		"check": "biome check --write .",
+		"check": "bun check-types && biome check --write .",
 		"prepare": "husky"
 	},
 	"dependencies": {

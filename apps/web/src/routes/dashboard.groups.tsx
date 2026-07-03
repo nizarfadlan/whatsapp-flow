@@ -22,8 +22,8 @@ function GroupsPage() {
 	const columns = [
 		{
 			key: "subject",
-			label: "Group Name",
-			render: (row: (typeof groups)[0]) => (
+			header: "Group Name",
+			cell: (row: (typeof groups)[0]) => (
 				<div className="flex flex-col">
 					<span className="font-medium text-xs">{row.subject}</span>
 					{row.description && (
@@ -36,15 +36,15 @@ function GroupsPage() {
 		},
 		{
 			key: "participants",
-			label: "Members",
-			render: (row: (typeof groups)[0]) => (
+			header: "Members",
+			cell: (row: (typeof groups)[0]) => (
 				<span className="text-xs">{row.participantCount}</span>
 			),
 		},
 		{
 			key: "jid",
-			label: "JID",
-			render: (row: (typeof groups)[0]) => (
+			header: "JID",
+			cell: (row: (typeof groups)[0]) => (
 				<span className="font-mono text-[10px] text-muted-foreground">
 					{row.jid}
 				</span>
@@ -52,8 +52,8 @@ function GroupsPage() {
 		},
 		{
 			key: "source",
-			label: "Source",
-			render: (row: (typeof groups)[0]) => (
+			header: "Source",
+			cell: (row: (typeof groups)[0]) => (
 				<Badge variant="outline" className="h-4 px-1 text-[9px]">
 					{row.source}
 				</Badge>
@@ -61,8 +61,8 @@ function GroupsPage() {
 		},
 		{
 			key: "isMember",
-			label: "Member",
-			render: (row: (typeof groups)[0]) => (
+			header: "Member",
+			cell: (row: (typeof groups)[0]) => (
 				<Badge
 					variant={row.isMember ? "default" : "secondary"}
 					className="h-4 px-1 text-[9px]"
@@ -104,7 +104,11 @@ function GroupsPage() {
 					</p>
 				</div>
 			) : (
-				<DataTable data={groups} columns={columns} />
+				<DataTable
+					data={groups}
+					columns={columns}
+					getRowKey={(row) => row.id}
+				/>
 			)}
 		</div>
 	);
