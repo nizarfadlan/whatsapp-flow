@@ -1,6 +1,6 @@
 export type IncomingMessage = {
 	deviceId: string;
-	contact: { jid: string; number: string; name?: string };
+	contact: { jid: string; number?: string; lid?: string; name?: string };
 	message: {
 		text?: string;
 		type: string;

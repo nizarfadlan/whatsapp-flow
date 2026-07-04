@@ -32,6 +32,7 @@ export const contact = pgTable(
 		isBlocked: boolean("is_blocked").default(false).notNull(),
 		source: contactSourceEnum("source").default("sync").notNull(),
 		avatarUrl: text("avatar_url"),
+		lid: text("lid"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")
 			.defaultNow()
@@ -42,6 +43,7 @@ export const contact = pgTable(
 		uniqueIndex("contact_device_jid_unique_idx").on(table.deviceId, table.jid),
 		index("contact_deviceId_idx").on(table.deviceId),
 		index("contact_device_phone_idx").on(table.deviceId, table.phoneNumber),
+		index("contact_device_lid_idx").on(table.deviceId, table.lid),
 	],
 );
 
@@ -130,3 +132,39 @@ export const groupParticipantRelations = relations(
 		}),
 	}),
 );
+
+export const channelSourceEnum = pgEnum("channel_source", ["sync", "manual"]);
+
+export const channel = pgTable(
+	"channel",
+	{
+		id: text("id").primaryKey(),
+		deviceId: text("device_id")
+			.notNull()
+			.references(() => device.id, { onDelete: "cascade" }),
+		jid: text("jid").notNull(),
+		name: text("name").notNull(),
+		description: text("description"),
+		ownerJid: text("owner_jid"),
+		subscribersCount: integer("subscribers_count").default(0).notNull(),
+		isSubscribed: boolean("is_subscribed").default(true).notNull(),
+		verificationStatus: text("verification_status"),
+		source: channelSourceEnum("source").default("sync").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("channel_device_jid_unique_idx").on(table.deviceId, table.jid),
+		index("channel_deviceId_idx").on(table.deviceId),
+	],
+);
+
+export const channelRelations = relations(channel, ({ one }) => ({
+	device: one(device, {
+		fields: [channel.deviceId],
+		references: [device.id],
+	}),
+}));

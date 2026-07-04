@@ -1,7 +1,11 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { db } from "@whatsapp-flow/db";
-import { contact as contactTable } from "@whatsapp-flow/db/schema/contact";
+import {
+	channel,
+	chatGroup,
+	contact as contactTable,
+} from "@whatsapp-flow/db/schema/contact";
 import {
 	flow,
 	flowExecutionLog,
@@ -488,6 +492,8 @@ async function recordOutboundMessage(
 			chatType = "broadcast";
 		}
 		let contactId: string | null = null;
+		let groupId: string | null = null;
+		let channelId: string | null = null;
 
 		if (chatType === "private") {
 			const [savedContact] = await db
@@ -505,6 +511,38 @@ async function recordOutboundMessage(
 				})
 				.returning({ id: contactTable.id });
 			contactId = savedContact?.id ?? null;
+		} else if (chatType === "group") {
+			const [savedGroup] = await db
+				.insert(chatGroup)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ctx.deviceId,
+					jid: chatJid,
+					subject: chatJid,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [chatGroup.deviceId, chatGroup.jid],
+					set: { updatedAt: now },
+				})
+				.returning({ id: chatGroup.id });
+			groupId = savedGroup?.id ?? null;
+		} else if (chatType === "channel") {
+			const [savedChannel] = await db
+				.insert(channel)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ctx.deviceId,
+					jid: chatJid,
+					name: chatJid,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [channel.deviceId, channel.jid],
+					set: { updatedAt: now },
+				})
+				.returning({ id: channel.id });
+			channelId = savedChannel?.id ?? null;
 		}
 
 		const [savedThread] = await db
@@ -515,6 +553,10 @@ async function recordOutboundMessage(
 				chatType,
 				chatJid,
 				contactId,
+				groupId,
+				channelId,
+				groupJid: chatType === "group" ? chatJid : null,
+				channelJid: chatType === "channel" ? chatJid : null,
 				contactNumber: chatType === "private" ? ctx.contactNumber : null,
 				lastMessageText: text ?? null,
 				lastMessageAt: now,
@@ -525,6 +567,10 @@ async function recordOutboundMessage(
 				set: {
 					chatType,
 					contactId,
+					groupId,
+					channelId,
+					groupJid: chatType === "group" ? chatJid : null,
+					channelJid: chatType === "channel" ? chatJid : null,
 					contactNumber: chatType === "private" ? ctx.contactNumber : null,
 					lastMessageText: text ?? null,
 					lastMessageAt: now,

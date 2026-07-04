@@ -47,6 +47,8 @@ export function startFlowDispatcher(): void {
 		const text = message.text ?? "";
 
 		try {
+			if (!contact.number) return;
+
 			const resumed = await resumeWaitingSession(
 				deviceId,
 				contact.number,

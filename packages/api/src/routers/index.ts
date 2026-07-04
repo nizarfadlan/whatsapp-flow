@@ -1,4 +1,5 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
+import { channelRouter } from "./channel";
 import { contactRouter } from "./contact";
 import { deviceRouter } from "./device";
 import { flowRouter } from "./flow";
@@ -22,6 +23,7 @@ export const appRouter = router({
 	device: deviceRouter,
 	contact: contactRouter,
 	group: groupRouter,
+	channel: channelRouter,
 	flow: flowRouter,
 	flowLog: flowLogRouter,
 	flowSession: flowSessionRouter,

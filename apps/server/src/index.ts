@@ -11,6 +11,7 @@ import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
 import {
+	channel,
 	chatGroup,
 	contact as contactTable,
 } from "@whatsapp-flow/db/schema/contact";
@@ -329,6 +330,7 @@ connectionManager.on("device:message", async (ev) => {
 		const now = new Date();
 		let contactId: string | null = null;
 		let groupId: string | null = null;
+		let channelId: string | null = null;
 
 		if (chatType === "private") {
 			const [savedContact] = await db
@@ -337,7 +339,8 @@ connectionManager.on("device:message", async (ev) => {
 					id: crypto.randomUUID(),
 					deviceId,
 					jid: contact.jid,
-					phoneNumber: contact.number,
+					phoneNumber: contact.number ?? null,
+					lid: contact.lid ?? null,
 					name: contact.name ?? null,
 					pushName: contact.name ?? null,
 					source: "message",
@@ -345,7 +348,8 @@ connectionManager.on("device:message", async (ev) => {
 				.onConflictDoUpdate({
 					target: [contactTable.deviceId, contactTable.jid],
 					set: {
-						phoneNumber: contact.number,
+						phoneNumber: contact.number ?? null,
+						lid: contact.lid ?? null,
 						name: contact.name ?? null,
 						pushName: contact.name ?? null,
 						updatedAt: now,
@@ -372,6 +376,25 @@ connectionManager.on("device:message", async (ev) => {
 				})
 				.returning({ id: chatGroup.id });
 			groupId = savedGroup?.id ?? null;
+		} else if (chatType === "channel") {
+			const [savedChannel] = await db
+				.insert(channel)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId,
+					jid: contact.jid,
+					name: contact.name ?? contact.jid,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [channel.deviceId, channel.jid],
+					set: {
+						name: contact.name ?? contact.jid,
+						updatedAt: now,
+					},
+				})
+				.returning({ id: channel.id });
+			channelId = savedChannel?.id ?? null;
 		}
 
 		const [savedThread] = await db
@@ -383,8 +406,10 @@ connectionManager.on("device:message", async (ev) => {
 				chatJid: contact.jid,
 				contactId,
 				groupId,
+				channelId,
 				groupJid: chatType === "group" ? contact.jid : null,
-				contactNumber: chatType === "private" ? contact.number : null,
+				channelJid: chatType === "channel" ? contact.jid : null,
+				contactNumber: chatType === "private" ? (contact.number ?? null) : null,
 				contactName: contact.name ?? null,
 				lastMessageText: message.text ?? null,
 				lastMessageAt: now,
@@ -396,8 +421,11 @@ connectionManager.on("device:message", async (ev) => {
 					chatType,
 					contactId,
 					groupId,
+					channelId,
 					groupJid: chatType === "group" ? contact.jid : null,
-					contactNumber: chatType === "private" ? contact.number : null,
+					channelJid: chatType === "channel" ? contact.jid : null,
+					contactNumber:
+						chatType === "private" ? (contact.number ?? null) : null,
 					contactName: Object.hasOwn(contact, "name")
 						? (contact.name ?? null)
 						: undefined, // undefined skips updating if not present in payload
@@ -437,6 +465,7 @@ connectionManager.on("device:contacts", async (ev) => {
 					deviceId: ev.deviceId,
 					jid: item.jid,
 					phoneNumber: item.phoneNumber ?? null,
+					lid: item.lid ?? null,
 					name: item.name ?? null,
 					pushName: item.pushName ?? null,
 					isWaContact: item.isWaContact ?? true,
@@ -446,6 +475,7 @@ connectionManager.on("device:contacts", async (ev) => {
 					target: [contactTable.deviceId, contactTable.jid],
 					set: {
 						phoneNumber: item.phoneNumber ?? null,
+						lid: item.lid ?? null,
 						name: item.name ?? null,
 						pushName: item.pushName ?? null,
 						isWaContact: item.isWaContact ?? true,
@@ -489,6 +519,42 @@ connectionManager.on("device:groups", async (ev) => {
 		}
 	} catch (err) {
 		console.error("Failed to persist groups sync", err);
+	}
+});
+
+connectionManager.on("device:channels", async (ev) => {
+	try {
+		const now = new Date();
+		for (const item of ev.channels) {
+			await db
+				.insert(channel)
+				.values({
+					id: crypto.randomUUID(),
+					deviceId: ev.deviceId,
+					jid: item.jid,
+					name: item.name,
+					description: item.description ?? null,
+					ownerJid: item.ownerJid ?? null,
+					subscribersCount: item.subscribersCount ?? 0,
+					isSubscribed: item.isSubscribed ?? true,
+					verificationStatus: item.verificationStatus ?? null,
+					source: "sync",
+				})
+				.onConflictDoUpdate({
+					target: [channel.deviceId, channel.jid],
+					set: {
+						name: item.name,
+						description: item.description ?? null,
+						ownerJid: item.ownerJid ?? null,
+						subscribersCount: item.subscribersCount ?? 0,
+						isSubscribed: item.isSubscribed ?? true,
+						verificationStatus: item.verificationStatus ?? null,
+						updatedAt: now,
+					},
+				});
+		}
+	} catch (err) {
+		console.error("Failed to persist channels sync", err);
 	}
 });
 

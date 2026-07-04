@@ -16,10 +16,12 @@ import {
 	CheckCheck,
 	Clock3,
 	Inbox,
+	Megaphone,
 	MessageSquare,
 	MoreHorizontal,
 	Search,
 	Smartphone,
+	UsersRound,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
@@ -33,25 +35,57 @@ export const Route = createFileRoute("/dashboard/inbox")({
 	component: InboxPage,
 });
 
+type ChatType = "private" | "group" | "channel" | "broadcast";
+
 type ThreadRow = {
 	id: string;
 	deviceId: string;
-	contactNumber: string;
+	chatType: ChatType;
+	chatJid: string | null;
+	contactId: string | null;
+	groupId: string | null;
+	groupJid: string | null;
+	channelId: string | null;
+	channelJid: string | null;
+	contactNumber: string | null;
 	contactName: string | null;
 	lastMessageText: string | null;
 	lastMessageAt: string;
 	unreadCount: number;
 };
 
-function getInitials(name: string | null, fallback: string) {
+function getThreadTitle(thread: ThreadRow) {
 	return (
-		name
-			?.split(/\s+/)
-			.slice(0, 2)
-			.map((word) => word[0])
-			.join("")
-			.toUpperCase() || fallback.slice(0, 2)
+		thread.contactName ??
+		thread.contactNumber ??
+		thread.groupJid ??
+		thread.channelJid ??
+		thread.chatJid ??
+		"Unknown chat"
 	);
+}
+
+function getThreadSubtitle(thread: ThreadRow) {
+	if (thread.chatType === "private")
+		return thread.contactNumber ?? thread.chatJid;
+	if (thread.chatType === "group") return thread.groupJid ?? thread.chatJid;
+	if (thread.chatType === "channel") return thread.channelJid ?? thread.chatJid;
+	return thread.chatJid;
+}
+
+function getThreadTypeLabel(chatType: ChatType) {
+	if (chatType === "channel") return "Newsletter";
+	return chatType[0]?.toUpperCase() + chatType.slice(1);
+}
+
+function getInitials(name: string | null, fallback: string | null) {
+	const source = name || fallback || "?";
+	return source
+		.split(/\s+/)
+		.slice(0, 2)
+		.map((word) => word[0])
+		.join("")
+		.toUpperCase();
 }
 
 function formatTime(dateStr: string) {
@@ -78,12 +112,15 @@ function ThreadList({
 	const filtered = useMemo(() => {
 		if (!search) return threads;
 		const q = search.toLowerCase();
-		return threads.filter(
-			(thread) =>
-				thread.contactNumber.includes(q) ||
-				thread.contactName?.toLowerCase().includes(q) ||
-				thread.lastMessageText?.toLowerCase().includes(q),
-		);
+		return threads.filter((thread) => {
+			const title = getThreadTitle(thread).toLowerCase();
+			const subtitle = getThreadSubtitle(thread)?.toLowerCase() ?? "";
+			return (
+				title.includes(q) ||
+				subtitle.includes(q) ||
+				thread.lastMessageText?.toLowerCase().includes(q)
+			);
+		});
 	}, [search, threads]);
 
 	if (threads.length === 0) {
@@ -139,12 +176,12 @@ function ThreadList({
 							onClick={() => onSelect(thread.id)}
 						>
 							<span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-background font-medium text-xs shadow-xs">
-								{getInitials(thread.contactName, thread.contactNumber)}
+								{getInitials(thread.contactName, getThreadSubtitle(thread))}
 							</span>
 							<span className="min-w-0 flex-1 space-y-1">
 								<span className="flex items-center justify-between gap-2">
 									<span className="truncate font-medium">
-										{thread.contactName ?? thread.contactNumber}
+										{getThreadTitle(thread)}
 									</span>
 									<span className="shrink-0 text-[10px] text-muted-foreground">
 										{formatTime(thread.lastMessageAt)}
@@ -174,14 +211,14 @@ function ThreadHeader({ thread }: { thread: ThreadRow }) {
 		<div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b px-4">
 			<div className="flex min-w-0 items-center gap-3">
 				<div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted font-medium text-xs">
-					{getInitials(thread.contactName, thread.contactNumber)}
+					{getInitials(thread.contactName, getThreadSubtitle(thread))}
 				</div>
 				<div className="min-w-0 flex-1">
 					<p className="truncate font-semibold text-sm">
-						{thread.contactName ?? thread.contactNumber}
+						{getThreadTitle(thread)}
 					</p>
 					<p className="truncate text-muted-foreground text-xs">
-						{thread.contactNumber}
+						{getThreadSubtitle(thread)}
 					</p>
 				</div>
 			</div>
@@ -264,8 +301,19 @@ function ThreadView({ thread }: { thread: ThreadRow }) {
 }
 
 function ThreadDetails({ thread }: { thread: ThreadRow }) {
+	const ChatIcon =
+		thread.chatType === "group"
+			? UsersRound
+			: thread.chatType === "channel"
+				? Megaphone
+				: Inbox;
 	const details = [
-		{ label: "Phone", value: thread.contactNumber, icon: Inbox },
+		{
+			label: "Type",
+			value: getThreadTypeLabel(thread.chatType),
+			icon: ChatIcon,
+		},
+		{ label: "JID", value: getThreadSubtitle(thread) ?? "-", icon: Inbox },
 		{ label: "Device", value: thread.deviceId, icon: Smartphone },
 		{
 			label: "Last message",
@@ -282,12 +330,12 @@ function ThreadDetails({ thread }: { thread: ThreadRow }) {
 			<CardContent className="space-y-4 p-4">
 				<div className="flex flex-col items-center rounded-xl border bg-background p-4 text-center">
 					<div className="mb-3 flex size-12 items-center justify-center rounded-xl border bg-muted font-semibold text-sm">
-						{getInitials(thread.contactName, thread.contactNumber)}
+						{getInitials(thread.contactName, getThreadSubtitle(thread))}
 					</div>
-					<p className="font-semibold text-sm">
-						{thread.contactName ?? thread.contactNumber}
+					<p className="font-semibold text-sm">{getThreadTitle(thread)}</p>
+					<p className="text-muted-foreground text-xs">
+						WhatsApp {getThreadTypeLabel(thread.chatType).toLowerCase()}
 					</p>
-					<p className="text-muted-foreground text-xs">WhatsApp contact</p>
 				</div>
 
 				<div className="space-y-2">

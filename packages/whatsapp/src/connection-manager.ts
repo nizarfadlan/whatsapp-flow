@@ -3,6 +3,7 @@ import { db } from "@whatsapp-flow/db";
 import { device } from "@whatsapp-flow/db/schema/device";
 import {
 	type BaileysEventMap,
+	type Contact,
 	DEFAULT_CONNECTION_CONFIG,
 	DisconnectReason,
 	fetchLatestBaileysVersion,
@@ -38,6 +39,29 @@ function extractMessageType(message: WAMessage) {
 
 function normalizeContactNumber(jid: string) {
 	return jid.split("@")[0]?.split(":")[0] ?? jid;
+}
+
+function toPhoneJid(phoneNumber: string) {
+	return phoneNumber.includes("@")
+		? phoneNumber
+		: `${phoneNumber}@s.whatsapp.net`;
+}
+
+function toNewsletterJid(id: string) {
+	return id.endsWith("@newsletter") ? id : `${id}@newsletter`;
+}
+
+function getStringValue(value: unknown) {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function getNumberValue(value: unknown) {
+	if (typeof value === "number") return value;
+	if (typeof value === "string") {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : undefined;
+	}
+	return undefined;
 }
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
@@ -133,16 +157,29 @@ export class ConnectionManager extends EventEmitter {
 			void this.handleMessagesUpsert(deviceId, upsert);
 		});
 		socket.ev.on("contacts.upsert", (contacts) => {
-			this.handleContactsUpsert(deviceId, contacts);
+			void this.handleContactsUpsert(deviceId, contacts);
 		});
 		socket.ev.on("contacts.update", (contacts) => {
-			this.handleContactsUpsert(deviceId, contacts);
+			void this.handleContactsUpsert(deviceId, contacts);
 		});
 		socket.ev.on("groups.upsert", (groups) => {
 			this.handleGroupsUpsert(deviceId, groups);
 		});
 		socket.ev.on("groups.update", (groups) => {
 			this.handleGroupsUpsert(deviceId, groups);
+		});
+		socket.ev.on("messaging-history.set", (history) => {
+			this.handleChannelsUpsert(deviceId, history.chats);
+			this.handleChannelsUpsert(
+				deviceId,
+				history.messages.map((message) => ({
+					id: message.key.remoteJid,
+					name: message.pushName,
+				})),
+			);
+		});
+		socket.ev.on("newsletter.view", (view) => {
+			void this.handleNewsletterView(deviceId, view.id);
 		});
 
 		return connection;
@@ -285,13 +322,16 @@ export class ConnectionManager extends EventEmitter {
 				continue;
 			}
 
-			const contactJid = message.key.remoteJid;
-			const contactNumber = normalizeContactNumber(contactJid);
+			const resolved = await this.resolveIncomingChatJid(
+				deviceId,
+				message.key.remoteJid,
+			);
 			this.emit("device:message", {
 				deviceId,
 				contact: {
-					jid: contactJid,
-					number: contactNumber,
+					jid: resolved.jid,
+					number: resolved.phoneNumber,
+					lid: resolved.lid,
 					name: message.pushName ?? undefined,
 				},
 				message: {
@@ -304,22 +344,81 @@ export class ConnectionManager extends EventEmitter {
 		}
 	}
 
-	private handleContactsUpsert(
+	private async resolveIncomingChatJid(deviceId: string, jid: string) {
+		if (!jid.endsWith("@lid")) {
+			return {
+				jid,
+				phoneNumber:
+					jid.endsWith("@s.whatsapp.net") || !jid.includes("@")
+						? normalizeContactNumber(jid)
+						: undefined,
+			};
+		}
+
+		const connection = this.connections.get(deviceId);
+		const mappings = await connection?.socket.signalRepository.lidMapping
+			.getPNsForLIDs([jid])
+			.catch(() => null);
+		const pnJid = mappings?.[0]?.pn ? toPhoneJid(mappings[0].pn) : undefined;
+		return {
+			jid: pnJid ?? jid,
+			phoneNumber: pnJid ? normalizeContactNumber(pnJid) : undefined,
+			lid: jid,
+		};
+	}
+
+	private async handleContactsUpsert(
 		deviceId: string,
-		contacts: {
-			id?: string;
-			name?: string;
-			notify?: string;
-			verifiedName?: string;
-		}[],
+		contacts: Partial<Contact>[],
 	) {
+		const connection = this.connections.get(deviceId);
+		const lidJids = [
+			...new Set(
+				contacts
+					.map((item) => item.lid ?? item.id)
+					.filter(
+						(jid): jid is string =>
+							typeof jid === "string" && jid.endsWith("@lid"),
+					),
+			),
+		];
+		const lidMappings = lidJids.length
+			? await connection?.socket.signalRepository.lidMapping.getPNsForLIDs(
+					lidJids,
+				)
+			: null;
+		const pnByLid = new Map(
+			(lidMappings ?? []).map((mapping) => [
+				mapping.lid,
+				toPhoneJid(mapping.pn),
+			]),
+		);
+
 		const mapped = contacts
 			.map((item) => {
-				const jid = item.id;
-				if (!jid || jid.endsWith("@g.us")) return null;
+				const rawJid = item.id;
+				if (
+					!rawJid ||
+					rawJid.endsWith("@g.us") ||
+					rawJid.endsWith("@newsletter")
+				) {
+					return null;
+				}
+
+				const lid = item.lid ?? (rawJid.endsWith("@lid") ? rawJid : undefined);
+				const phoneJid = item.phoneNumber
+					? toPhoneJid(item.phoneNumber)
+					: lid
+						? pnByLid.get(lid)
+						: rawJid.endsWith("@s.whatsapp.net")
+							? rawJid
+							: undefined;
+				const jid = phoneJid ?? rawJid;
+
 				return {
 					jid,
-					phoneNumber: normalizeContactNumber(jid),
+					phoneNumber: phoneJid ? normalizeContactNumber(phoneJid) : undefined,
+					lid,
 					name: item.name ?? item.verifiedName ?? item.notify,
 					pushName: item.notify,
 					isWaContact: true,
@@ -359,6 +458,60 @@ export class ConnectionManager extends EventEmitter {
 			.filter((item): item is NonNullable<typeof item> => item != null);
 		if (mapped.length > 0) {
 			this.emit("device:groups", { deviceId, groups: mapped });
+		}
+	}
+
+	private handleChannelsUpsert(deviceId: string, channels: unknown[]) {
+		const mapped = channels
+			.map((item) => {
+				if (!item || typeof item !== "object") return null;
+				const record = item as Record<string, unknown>;
+				const rawJid = getStringValue(record.id) ?? getStringValue(record.jid);
+				if (!rawJid?.endsWith("@newsletter")) return null;
+
+				const threadMetadata =
+					record.thread_metadata && typeof record.thread_metadata === "object"
+						? (record.thread_metadata as Record<string, unknown>)
+						: undefined;
+				const jid = toNewsletterJid(rawJid);
+				const name =
+					getStringValue(record.name) ??
+					getStringValue(record.subject) ??
+					getStringValue(threadMetadata?.name) ??
+					jid;
+
+				return {
+					jid,
+					name,
+					description:
+						getStringValue(record.description) ??
+						getStringValue(record.desc) ??
+						getStringValue(threadMetadata?.description),
+					ownerJid: getStringValue(record.owner),
+					subscribersCount:
+						getNumberValue(record.subscribers) ??
+						getNumberValue(record.subscribers_count),
+					isSubscribed: true,
+					verificationStatus: getStringValue(record.verification),
+					raw: item,
+				};
+			})
+			.filter((item): item is NonNullable<typeof item> => item != null);
+		if (mapped.length > 0) {
+			this.emit("device:channels", { deviceId, channels: mapped });
+		}
+	}
+
+	private async handleNewsletterView(deviceId: string, id: string) {
+		const connection = this.connections.get(deviceId);
+		if (!connection) return;
+
+		const jid = toNewsletterJid(id);
+		try {
+			const metadata = await connection.socket.newsletterMetadata("jid", jid);
+			this.handleChannelsUpsert(deviceId, [{ ...(metadata ?? {}), id: jid }]);
+		} catch {
+			this.handleChannelsUpsert(deviceId, [{ id: jid }]);
 		}
 	}
 

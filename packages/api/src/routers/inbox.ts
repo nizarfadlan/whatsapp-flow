@@ -32,6 +32,8 @@ export const inboxRouter = router({
 					contactId: inboxThread.contactId,
 					groupId: inboxThread.groupId,
 					groupJid: inboxThread.groupJid,
+					channelId: inboxThread.channelId,
+					channelJid: inboxThread.channelJid,
 					contactNumber: inboxThread.contactNumber,
 					contactName: inboxThread.contactName,
 					lastMessageText: inboxThread.lastMessageText,
@@ -59,6 +61,8 @@ export const inboxRouter = router({
 					contactId: inboxThread.contactId,
 					groupId: inboxThread.groupId,
 					groupJid: inboxThread.groupJid,
+					channelId: inboxThread.channelId,
+					channelJid: inboxThread.channelJid,
 					contactNumber: inboxThread.contactNumber,
 					contactName: inboxThread.contactName,
 					lastMessageText: inboxThread.lastMessageText,
@@ -127,6 +131,7 @@ export const inboxRouter = router({
 				.select({
 					id: inboxThread.id,
 					deviceId: inboxThread.deviceId,
+					chatType: inboxThread.chatType,
 					chatJid: inboxThread.chatJid,
 					contactNumber: inboxThread.contactNumber,
 				})
@@ -145,7 +150,26 @@ export const inboxRouter = router({
 				throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
 			}
 
-			const jid = thread.chatJid ?? `${thread.contactNumber}@s.whatsapp.net`;
+			if (thread.chatType === "channel" || thread.chatType === "broadcast") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						"Sending messages to newsletters or broadcasts is not supported",
+				});
+			}
+
+			const jid =
+				thread.chatJid ??
+				(thread.chatType === "private" && thread.contactNumber
+					? `${thread.contactNumber}@s.whatsapp.net`
+					: null);
+			if (!jid) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Thread is missing a valid chat JID",
+				});
+			}
+
 			const connection = connectionManager.getConnection(thread.deviceId);
 			if (!connection?.socket) {
 				throw new TRPCError({

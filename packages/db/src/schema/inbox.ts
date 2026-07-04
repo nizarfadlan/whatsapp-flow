@@ -9,7 +9,7 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { chatGroup, contact } from "./contact";
+import { channel, chatGroup, contact } from "./contact";
 import { device } from "./device";
 
 export const messageDirectionEnum = pgEnum("message_direction", [
@@ -42,6 +42,10 @@ export const inboxThread = pgTable(
 			onDelete: "set null",
 		}),
 		groupJid: text("group_jid"),
+		channelId: text("channel_id").references(() => channel.id, {
+			onDelete: "set null",
+		}),
+		channelJid: text("channel_jid"),
 		// Denormalised fields for quick display
 		contactNumber: text("contact_number"),
 		contactName: text("contact_name"),
@@ -67,6 +71,7 @@ export const inboxThread = pgTable(
 		index("inbox_thread_chatType_idx").on(table.chatType),
 		index("inbox_thread_contactId_idx").on(table.contactId),
 		index("inbox_thread_groupId_idx").on(table.groupId),
+		index("inbox_thread_channelId_idx").on(table.channelId),
 		index("inbox_thread_lastMessageAt_idx").on(table.lastMessageAt),
 	],
 );
@@ -99,6 +104,10 @@ export const inboxThreadRelations = relations(inboxThread, ({ one, many }) => ({
 	group: one(chatGroup, {
 		fields: [inboxThread.groupId],
 		references: [chatGroup.id],
+	}),
+	channel: one(channel, {
+		fields: [inboxThread.channelId],
+		references: [channel.id],
 	}),
 }));
 

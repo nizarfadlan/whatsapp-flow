@@ -21,7 +21,7 @@ export interface ConnectionManagerEvents {
 	"device:qr": { deviceId: string; qr: string };
 	"device:message": {
 		deviceId: string;
-		contact: { jid: string; number: string; name?: string };
+		contact: { jid: string; number?: string; lid?: string; name?: string };
 		message: {
 			text?: string;
 			type: string;
@@ -34,9 +34,23 @@ export interface ConnectionManagerEvents {
 		contacts: {
 			jid: string;
 			phoneNumber?: string;
+			lid?: string;
 			name?: string;
 			pushName?: string;
 			isWaContact?: boolean;
+			raw?: unknown;
+		}[];
+	};
+	"device:channels": {
+		deviceId: string;
+		channels: {
+			jid: string;
+			name: string;
+			description?: string;
+			ownerJid?: string;
+			subscribersCount?: number;
+			isSubscribed?: boolean;
+			verificationStatus?: string;
 			raw?: unknown;
 		}[];
 	};

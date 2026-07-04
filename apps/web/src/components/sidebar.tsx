@@ -19,6 +19,7 @@ import {
 	Bot,
 	Inbox,
 	LayoutDashboard,
+	Megaphone,
 	MessageSquare,
 	Plus,
 	Smartphone,
@@ -39,6 +40,12 @@ const navItems = [
 	{ to: "/dashboard/inbox", label: "Inbox", icon: Inbox, exact: false },
 	{ to: "/dashboard/contacts", label: "Contacts", icon: Users, exact: false },
 	{ to: "/dashboard/groups", label: "Groups", icon: UsersRound, exact: false },
+	{
+		to: "/dashboard/newsletters",
+		label: "Newsletters",
+		icon: Megaphone,
+		exact: false,
+	},
 	{ to: "/dashboard/logs", label: "Logs", icon: Activity, exact: false },
 	{ to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook, exact: false },
 ] as const;

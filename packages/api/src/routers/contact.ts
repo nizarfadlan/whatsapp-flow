@@ -1,12 +1,20 @@
 import { TRPCError } from "@trpc/server";
 import { contact } from "@whatsapp-flow/db/schema/contact";
 import { device } from "@whatsapp-flow/db/schema/device";
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
+import { connectionManager } from "@whatsapp-flow/whatsapp";
+import { and, desc, eq, ilike, isNull, like, or } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
 
 function normalizeNumber(value: string) {
 	return value.replace(/[^\d]/g, "");
+}
+
+function toPhoneJid(phoneNumber: string) {
+	return phoneNumber.includes("@")
+		? phoneNumber
+		: `${phoneNumber}@s.whatsapp.net`;
 }
 
 async function requireDeviceOwnership(
@@ -53,6 +61,7 @@ export const contactRouter = router({
 					deviceId: contact.deviceId,
 					jid: contact.jid,
 					phoneNumber: contact.phoneNumber,
+					lid: contact.lid,
 					name: contact.name,
 					pushName: contact.pushName,
 					isWaContact: contact.isWaContact,
@@ -143,6 +152,107 @@ export const contactRouter = router({
 				.where(eq(contact.id, input.id))
 				.returning();
 			return updated;
+		}),
+
+	dedupLidContacts: protectedProcedure
+		.input(z.object({ deviceId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.deviceId, ctx.session.user.id);
+
+			const connection = connectionManager.getConnection(input.deviceId);
+			if (!connection) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Device must be connected to resolve LID contacts",
+				});
+			}
+
+			const lidRows = await ctx.db
+				.select({
+					id: contact.id,
+					jid: contact.jid,
+					lid: contact.lid,
+				})
+				.from(contact)
+				.where(
+					and(
+						eq(contact.deviceId, input.deviceId),
+						like(contact.jid, "%@lid"),
+						isNull(contact.phoneNumber),
+					),
+				);
+
+			const lidJids = [
+				...new Set(
+					lidRows
+						.map((row) => row.lid ?? row.jid)
+						.filter((jid) => jid.endsWith("@lid")),
+				),
+			];
+			const mappings = lidJids.length
+				? await connection.socket.signalRepository.lidMapping.getPNsForLIDs(
+						lidJids,
+					)
+				: null;
+			const pnByLid = new Map(
+				(mappings ?? []).map((mapping) => [
+					mapping.lid,
+					toPhoneJid(mapping.pn),
+				]),
+			);
+
+			let resolved = 0;
+			let merged = 0;
+			let updated = 0;
+			const now = new Date();
+
+			for (const row of lidRows) {
+				const lid = row.lid ?? row.jid;
+				const pnJid = pnByLid.get(lid);
+				if (!pnJid) continue;
+
+				resolved += 1;
+				const phoneNumber = normalizeNumber(pnJid);
+				const [existing] = await ctx.db
+					.select({ id: contact.id })
+					.from(contact)
+					.where(
+						and(eq(contact.deviceId, input.deviceId), eq(contact.jid, pnJid)),
+					)
+					.limit(1);
+
+				if (existing && existing.id !== row.id) {
+					await ctx.db
+						.update(inboxThread)
+						.set({
+							contactId: existing.id,
+							contactNumber: phoneNumber,
+							updatedAt: now,
+						})
+						.where(eq(inboxThread.contactId, row.id));
+					await ctx.db.delete(contact).where(eq(contact.id, row.id));
+					merged += 1;
+					continue;
+				}
+
+				await ctx.db
+					.update(contact)
+					.set({
+						jid: pnJid,
+						phoneNumber,
+						lid,
+						updatedAt: now,
+					})
+					.where(eq(contact.id, row.id));
+				updated += 1;
+			}
+
+			return {
+				processed: lidRows.length,
+				resolved,
+				merged,
+				updated,
+			};
 		}),
 
 	delete: protectedProcedure
