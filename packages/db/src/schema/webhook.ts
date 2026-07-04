@@ -27,6 +27,8 @@ export const webhookEndpoint = pgTable(
 		secret: text("secret").notNull(),
 		isActive: boolean("is_active").default(true).notNull(),
 		subscribedEvents: jsonb("subscribed_events").default('["*"]').notNull(),
+		deviceIds: jsonb("device_ids").default("[]").notNull(),
+		flowIds: jsonb("flow_ids").default("[]").notNull(),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")
 			.defaultNow()

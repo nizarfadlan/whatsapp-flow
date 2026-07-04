@@ -83,4 +83,17 @@ export interface ConnectionManagerEvents {
 		contactNumber: string;
 		status: "waiting" | "running" | "completed" | "expired" | "failed";
 	};
+	"flow:execution-event": {
+		id: string;
+		executionLogId: string;
+		flowId: string;
+		deviceId: string;
+		sessionId: string | null;
+		contactNumber: string;
+		type: string;
+		nodeId: string | null;
+		message: string | null;
+		payload: Record<string, unknown>;
+		createdAt: string;
+	};
 }

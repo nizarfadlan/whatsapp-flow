@@ -1,35 +1,88 @@
 import { createHmac } from "node:crypto";
 import { db } from "@whatsapp-flow/db";
-import { device } from "@whatsapp-flow/db/schema/device";
+import { device, flow } from "@whatsapp-flow/db/schema/device";
 import {
 	webhookDelivery,
 	webhookEndpoint,
 } from "@whatsapp-flow/db/schema/webhook";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
+import {
+	FLOW_EXECUTION_WEBHOOK_EVENT_MAP,
+	type WebhookEventType,
+} from "./webhook-events";
+import { fetchSafeOutboundWebhookUrl } from "./webhook-url-safety";
 
 const MAX_WEBHOOK_ATTEMPTS = 5;
 
-export async function enqueueWebhook(
-	userId: string,
-	deviceId: string,
-	eventType: string,
-	payload: unknown,
+type EnqueueWebhookInput = {
+	userId: string;
+	deviceId: string;
+	eventType: WebhookEventType;
+	payload: Record<string, unknown>;
+	flowId?: string | null;
+};
+
+function normalizeStringArray(value: unknown) {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && !!item)
+		: [];
+}
+
+function endpointMatchesEvent(
+	endpoint: typeof webhookEndpoint.$inferSelect,
+	eventType: WebhookEventType,
 ) {
+	const subscribed = normalizeStringArray(endpoint.subscribedEvents);
+	return subscribed.includes("*") || subscribed.includes(eventType);
+}
+
+function endpointMatchesDevice(
+	endpoint: typeof webhookEndpoint.$inferSelect,
+	deviceId: string,
+) {
+	const deviceIds = normalizeStringArray(endpoint.deviceIds);
+	return deviceIds.length === 0 || deviceIds.includes(deviceId);
+}
+
+function endpointMatchesFlow(
+	endpoint: typeof webhookEndpoint.$inferSelect,
+	eventType: WebhookEventType,
+	flowId?: string | null,
+) {
+	if (!eventType.startsWith("flow.")) return true;
+	const flowIds = normalizeStringArray(endpoint.flowIds);
+	return flowIds.length === 0 || (!!flowId && flowIds.includes(flowId));
+}
+
+function serializeMessageForWebhook(message: {
+	text?: string;
+	type: string;
+	messageKey?: import("baileys").WAMessageKey;
+}) {
+	return {
+		type: message.type,
+		text: message.text,
+		messageKey: message.messageKey
+			? {
+					id: message.messageKey.id,
+					remoteJid: message.messageKey.remoteJid,
+					fromMe: message.messageKey.fromMe,
+					participant: message.messageKey.participant,
+				}
+			: undefined,
+	};
+}
+
+export async function enqueueWebhook(input: EnqueueWebhookInput) {
 	try {
-		// Find active endpoints for this user that apply to this device
-		// Either global (deviceId is null) or specific (deviceId matches)
 		const endpoints = await db
 			.select()
 			.from(webhookEndpoint)
 			.where(
 				and(
-					eq(webhookEndpoint.userId, userId),
+					eq(webhookEndpoint.userId, input.userId),
 					eq(webhookEndpoint.isActive, true),
-					or(
-						isNull(webhookEndpoint.deviceId),
-						eq(webhookEndpoint.deviceId, deviceId),
-					),
 				),
 			);
 
@@ -37,17 +90,17 @@ export async function enqueueWebhook(
 
 		const deliveriesIdBase = crypto.randomUUID();
 		const deliveriesToInsert = endpoints
-			.filter((ep) => {
-				const subscribed = Array.isArray(ep.subscribedEvents)
-					? ep.subscribedEvents
-					: [];
-				return subscribed.includes("*") || subscribed.includes(eventType);
-			})
-			.map((ep, idx) => ({
+			.filter(
+				(endpoint) =>
+					endpointMatchesEvent(endpoint, input.eventType) &&
+					endpointMatchesDevice(endpoint, input.deviceId) &&
+					endpointMatchesFlow(endpoint, input.eventType, input.flowId),
+			)
+			.map((endpoint, idx) => ({
 				id: `${deliveriesIdBase}-${idx}`,
-				endpointId: ep.id,
-				eventType,
-				payload: payload as Record<string, unknown>,
+				endpointId: endpoint.id,
+				eventType: input.eventType,
+				payload: input.payload,
 				status: "pending" as const,
 			}));
 
@@ -84,6 +137,7 @@ export function startWebhookDispatcher() {
 				.where(
 					and(
 						eq(webhookDelivery.status, "pending"),
+						eq(webhookEndpoint.isActive, true),
 						lte(webhookDelivery.nextAttemptAt, new Date()),
 					),
 				)
@@ -111,9 +165,16 @@ export function startWebhookDispatcher() {
 				.where(eq(device.id, ev.deviceId))
 				.limit(1);
 			if (d[0]) {
-				await enqueueWebhook(d[0].userId, ev.deviceId, "message.received", {
-					contact: ev.contact,
-					message: ev.message,
+				await enqueueWebhook({
+					userId: d[0].userId,
+					deviceId: ev.deviceId,
+					eventType: "message.received",
+					payload: {
+						eventType: "message.received",
+						deviceId: ev.deviceId,
+						contact: ev.contact,
+						message: serializeMessageForWebhook(ev.message),
+					},
 				});
 			}
 		} catch (_err) {}
@@ -127,16 +188,53 @@ export function startWebhookDispatcher() {
 				.where(eq(device.id, ev.deviceId))
 				.limit(1);
 			if (d[0]) {
-				await enqueueWebhook(
-					d[0].userId,
-					ev.deviceId,
-					"device.status_changed",
-					{
+				await enqueueWebhook({
+					userId: d[0].userId,
+					deviceId: ev.deviceId,
+					eventType: "device.status_changed",
+					payload: {
+						eventType: "device.status_changed",
+						deviceId: ev.deviceId,
 						status: ev.status,
 						phoneNumber: ev.phoneNumber,
 					},
-				);
+				});
 			}
+		} catch (_err) {}
+	});
+
+	connectionManager.on("flow:execution-event", async (ev) => {
+		try {
+			const eventType = FLOW_EXECUTION_WEBHOOK_EVENT_MAP[ev.type];
+			if (!eventType) return;
+
+			const rows = await db
+				.select({ userId: flow.userId, flowName: flow.name })
+				.from(flow)
+				.where(eq(flow.id, ev.flowId))
+				.limit(1);
+			const flowRow = rows[0];
+			if (!flowRow) return;
+
+			await enqueueWebhook({
+				userId: flowRow.userId,
+				deviceId: ev.deviceId,
+				flowId: ev.flowId,
+				eventType,
+				payload: {
+					eventType,
+					deviceId: ev.deviceId,
+					flowId: ev.flowId,
+					flowName: flowRow.flowName,
+					executionLogId: ev.executionLogId,
+					sessionId: ev.sessionId,
+					contactNumber: ev.contactNumber,
+					nodeId: ev.nodeId,
+					message: ev.message,
+					data: ev.payload,
+					createdAt: ev.createdAt,
+				},
+			});
 		} catch (_err) {}
 	});
 }
@@ -145,6 +243,8 @@ async function processWebhookDelivery(
 	delivery: typeof webhookDelivery.$inferSelect,
 	endpoint: typeof webhookEndpoint.$inferSelect,
 ) {
+	if (!endpoint.isActive) return;
+
 	let statusCode: number | null = null;
 	let responseBody = "";
 	let isSuccess = false;
@@ -157,21 +257,16 @@ async function processWebhookDelivery(
 		.digest("hex");
 
 	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 10_000);
-
-		const response = await fetch(endpoint.url, {
-			method: "POST",
-			headers: {
+		const response = await fetchSafeOutboundWebhookUrl(
+			endpoint.url,
+			bodyString,
+			{
 				"Content-Type": "application/json",
 				"X-Webhook-Signature": signature,
 				"User-Agent": "WhatsAppFlow-Webhook/1.0",
 			},
-			body: bodyString,
-			signal: controller.signal,
-		});
+		);
 
-		clearTimeout(timeout);
 		statusCode = response.status;
 
 		const text = await response.text();

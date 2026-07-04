@@ -1,21 +1,95 @@
 import { TRPCError } from "@trpc/server";
-import { device } from "@whatsapp-flow/db/schema/device";
+import { device, flow } from "@whatsapp-flow/db/schema/device";
 import {
 	webhookDelivery,
 	webhookEndpoint,
 } from "@whatsapp-flow/db/schema/webhook";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
+import { WEBHOOK_EVENT_TYPES } from "../engine/webhook-events";
+import { assertSafeOutboundWebhookUrl } from "../engine/webhook-url-safety";
 import { protectedProcedure, router } from "../index";
+
+const webhookEventInputSchema = z
+	.array(z.union([z.enum(WEBHOOK_EVENT_TYPES), z.literal("*")]))
+	.default(["*"]);
+
+const safeEndpointSelect = {
+	id: webhookEndpoint.id,
+	userId: webhookEndpoint.userId,
+	deviceId: webhookEndpoint.deviceId,
+	name: webhookEndpoint.name,
+	url: webhookEndpoint.url,
+	isActive: webhookEndpoint.isActive,
+	subscribedEvents: webhookEndpoint.subscribedEvents,
+	deviceIds: webhookEndpoint.deviceIds,
+	flowIds: webhookEndpoint.flowIds,
+	createdAt: webhookEndpoint.createdAt,
+	updatedAt: webhookEndpoint.updatedAt,
+};
 
 function generateSecret() {
 	return `whsec_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
+function normalizeStringIds(value: string[] | undefined) {
+	return [...new Set((value ?? []).filter(Boolean))];
+}
+
+function normalizeSubscribedEvents(events: ("*" | string)[] | undefined) {
+	const unique = [...new Set(events?.filter(Boolean) ?? ["*"])];
+	if (unique.length === 0 || unique.includes("*")) return ["*"];
+	return unique;
+}
+
+async function validateWebhookUrl(url: string) {
+	try {
+		await assertSafeOutboundWebhookUrl(url);
+	} catch (error) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				error instanceof Error ? error.message : "Webhook URL is invalid",
+		});
+	}
+}
+
+async function validateOwnedDevices(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	ids: string[],
+	userId: string,
+) {
+	if (ids.length === 0) return;
+	const rows = await db
+		.select({ id: device.id })
+		.from(device)
+		.where(and(eq(device.userId, userId), inArray(device.id, ids)));
+
+	if (rows.length !== ids.length) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
+	}
+}
+
+async function validateOwnedFlows(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	ids: string[],
+	userId: string,
+) {
+	if (ids.length === 0) return;
+	const rows = await db
+		.select({ id: flow.id })
+		.from(flow)
+		.where(and(eq(flow.userId, userId), inArray(flow.id, ids)));
+
+	if (rows.length !== ids.length) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
+	}
+}
+
 export const webhookRouter = router({
 	listEndpoints: protectedProcedure.query(async ({ ctx }) => {
 		return ctx.db
-			.select()
+			.select(safeEndpointSelect)
 			.from(webhookEndpoint)
 			.where(eq(webhookEndpoint.userId, ctx.session.user.id))
 			.orderBy(desc(webhookEndpoint.createdAt));
@@ -26,44 +100,37 @@ export const webhookRouter = router({
 			z.object({
 				name: z.string().min(1),
 				url: z.string().url(),
-				deviceId: z.string().nullable().optional(),
-				subscribedEvents: z.array(z.string()).default(["*"]),
+				isActive: z.boolean().optional().default(true),
+				deviceIds: z.array(z.string().min(1)).optional().default([]),
+				flowIds: z.array(z.string().min(1)).optional().default([]),
+				subscribedEvents: webhookEventInputSchema,
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			if (input.deviceId) {
-				// Verify device ownership
-				const [owned] = await ctx.db
-					.select({ id: device.id })
-					.from(device)
-					.where(
-						and(
-							eq(device.id, input.deviceId),
-							eq(device.userId, ctx.session.user.id),
-						),
-					)
-					.limit(1);
-				if (!owned) {
-					throw new TRPCError({
-						code: "NOT_FOUND",
-						message: "Device not found",
-					});
-				}
-			}
+			const deviceIds = normalizeStringIds(input.deviceIds);
+			const flowIds = normalizeStringIds(input.flowIds);
+			const subscribedEvents = normalizeSubscribedEvents(
+				input.subscribedEvents,
+			);
+
+			await validateWebhookUrl(input.url);
+			await validateOwnedDevices(ctx.db, deviceIds, ctx.session.user.id);
+			await validateOwnedFlows(ctx.db, flowIds, ctx.session.user.id);
 
 			const [row] = await ctx.db
 				.insert(webhookEndpoint)
 				.values({
 					id: crypto.randomUUID(),
 					userId: ctx.session.user.id,
-					deviceId: input.deviceId ?? null,
 					name: input.name,
 					url: input.url,
 					secret: generateSecret(),
-					subscribedEvents: input.subscribedEvents,
-					isActive: true,
+					subscribedEvents,
+					deviceIds,
+					flowIds,
+					isActive: input.isActive,
 				})
-				.returning();
+				.returning(safeEndpointSelect);
 			return row;
 		}),
 
@@ -74,14 +141,16 @@ export const webhookRouter = router({
 				name: z.string().min(1).optional(),
 				url: z.string().url().optional(),
 				isActive: z.boolean().optional(),
-				subscribedEvents: z.array(z.string()).optional(),
+				deviceIds: z.array(z.string().min(1)).optional(),
+				flowIds: z.array(z.string().min(1)).optional(),
+				subscribedEvents: webhookEventInputSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const { id, ...updates } = input;
+			const { id, deviceIds, flowIds, subscribedEvents, ...updates } = input;
 
 			const [owned] = await ctx.db
-				.select({ id: webhookEndpoint.id })
+				.select(safeEndpointSelect)
 				.from(webhookEndpoint)
 				.where(
 					and(
@@ -97,12 +166,39 @@ export const webhookRouter = router({
 				});
 			}
 
-			if (Object.keys(updates).length > 0) {
+			const nextUpdates: typeof updates & {
+				deviceIds?: string[];
+				flowIds?: string[];
+				subscribedEvents?: string[];
+			} = { ...updates };
+
+			if (updates.url) {
+				await validateWebhookUrl(updates.url);
+			}
+
+			if (deviceIds) {
+				const normalized = normalizeStringIds(deviceIds);
+				await validateOwnedDevices(ctx.db, normalized, ctx.session.user.id);
+				nextUpdates.deviceIds = normalized;
+			}
+
+			if (flowIds) {
+				const normalized = normalizeStringIds(flowIds);
+				await validateOwnedFlows(ctx.db, normalized, ctx.session.user.id);
+				nextUpdates.flowIds = normalized;
+			}
+
+			if (subscribedEvents) {
+				nextUpdates.subscribedEvents =
+					normalizeSubscribedEvents(subscribedEvents);
+			}
+
+			if (Object.keys(nextUpdates).length > 0) {
 				const [updated] = await ctx.db
 					.update(webhookEndpoint)
-					.set({ ...updates, updatedAt: new Date() })
+					.set({ ...nextUpdates, updatedAt: new Date() })
 					.where(eq(webhookEndpoint.id, id))
-					.returning();
+					.returning(safeEndpointSelect);
 				return updated;
 			}
 			return owned;

@@ -497,18 +497,39 @@ export function emitFlowSessionUpdated(session: {
 }
 
 export async function recordFlowExecutionEvent(input: FlowExecutionEventInput) {
+	const id = crypto.randomUUID();
+	const createdAt = new Date();
+	const payload = input.payload ?? {};
+	const sessionId = input.sessionId ?? null;
+	const nodeId = input.nodeId ?? null;
+	const message = input.message ?? null;
+
 	try {
 		await db.insert(flowExecutionEvent).values({
-			id: crypto.randomUUID(),
+			id,
 			executionLogId: input.executionLogId,
 			flowId: input.flowId,
 			deviceId: input.deviceId,
-			sessionId: input.sessionId ?? null,
+			sessionId,
 			contactNumber: input.contactNumber,
 			type: input.type,
-			nodeId: input.nodeId ?? null,
-			message: input.message ?? null,
-			payload: input.payload ?? {},
+			nodeId,
+			message,
+			payload,
+			createdAt,
+		});
+		connectionManager.emit("flow:execution-event", {
+			id,
+			executionLogId: input.executionLogId,
+			flowId: input.flowId,
+			deviceId: input.deviceId,
+			sessionId,
+			contactNumber: input.contactNumber,
+			type: input.type,
+			nodeId,
+			message,
+			payload,
+			createdAt: createdAt.toISOString(),
 		});
 	} catch (error) {
 		console.warn("Failed to record flow execution event", {
