@@ -8,6 +8,7 @@ import {
 } from "@whatsapp-flow/db/schema/contact";
 import {
 	flow,
+	flowExecutionEvent,
 	flowExecutionLog,
 	flowSession,
 } from "@whatsapp-flow/db/schema/device";
@@ -52,7 +53,25 @@ type ExecutionContext = {
 };
 
 type ExecutionStatus = "running" | "waiting" | "completed" | "failed";
+type FlowSessionStatus =
+	| "waiting"
+	| "running"
+	| "completed"
+	| "expired"
+	| "failed";
 type TriggerSource = "message" | "schedule" | "webhook" | "session";
+
+type FlowExecutionEventInput = {
+	executionLogId: string;
+	flowId: string;
+	deviceId: string;
+	contactNumber: string;
+	type: string;
+	sessionId?: string | null;
+	nodeId?: string | null;
+	message?: string | null;
+	payload?: Record<string, unknown>;
+};
 
 type ExecutionOptions = {
 	replyJid?: string;
@@ -459,6 +478,55 @@ function emitLogCreated(log: { id: string; flowId: string; deviceId: string }) {
 	});
 }
 
+export function emitFlowSessionUpdated(session: {
+	id: string;
+	flowId: string;
+	deviceId: string;
+	executionLogId: string;
+	contactNumber: string;
+	status: FlowSessionStatus;
+}) {
+	connectionManager.emit("flow:session:updated", {
+		sessionId: session.id,
+		flowId: session.flowId,
+		deviceId: session.deviceId,
+		executionLogId: session.executionLogId,
+		contactNumber: session.contactNumber,
+		status: session.status,
+	});
+}
+
+export async function recordFlowExecutionEvent(input: FlowExecutionEventInput) {
+	try {
+		await db.insert(flowExecutionEvent).values({
+			id: crypto.randomUUID(),
+			executionLogId: input.executionLogId,
+			flowId: input.flowId,
+			deviceId: input.deviceId,
+			sessionId: input.sessionId ?? null,
+			contactNumber: input.contactNumber,
+			type: input.type,
+			nodeId: input.nodeId ?? null,
+			message: input.message ?? null,
+			payload: input.payload ?? {},
+		});
+	} catch (error) {
+		console.warn("Failed to record flow execution event", {
+			flowId: input.flowId,
+			executionLogId: input.executionLogId,
+			type: input.type,
+			error,
+		});
+	}
+}
+
+function maskUserReply(value: string) {
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	if (trimmed.length <= 4) return "••••";
+	return `${trimmed.slice(0, 2)}••••${trimmed.slice(-2)}`;
+}
+
 function resolveTemplate(text: string, ctx: ExecutionContext) {
 	return text.replace(/\{\{([\w.]+)\}\}/g, (_, key: string) => {
 		if (key === "contact.number") return ctx.contactNumber;
@@ -748,6 +816,24 @@ async function runFlowNodes({
 		}
 
 		const ok = await executeNode(item.node, ctx, socket);
+		let result: NodeResult | undefined;
+		for (let i = ctx.nodeResults.length - 1; i >= 0; i--) {
+			if (ctx.nodeResults[i]?.nodeId === item.node.id) {
+				result = ctx.nodeResults[i];
+				break;
+			}
+		}
+		await recordFlowExecutionEvent({
+			executionLogId: ctx.logId,
+			flowId: ctx.flowId,
+			deviceId: ctx.deviceId,
+			contactNumber: ctx.contactNumber,
+			sessionId: previousSessionId ?? null,
+			type: ok ? "node.completed" : "node.failed",
+			nodeId: item.node.id,
+			message: result?.error ?? result?.output ?? null,
+			payload: { output: result?.output, error: result?.error },
+		});
 		if (!ok) hasError = true;
 
 		if (item.node.type === "condition") {
@@ -795,11 +881,12 @@ async function createWaitingSession(
 	);
 	const expiresAt = new Date(Date.now() + timeoutMinutes * 60_000);
 	const nextNodeIds = getNextNodeIds(node.id, adjacency);
+	const variableName = String(node.data.variableName ?? "reply");
 
 	ctx.nodeResults.push({
 		nodeId: node.id,
 		status: "success",
-		output: `waiting:${String(node.data.variableName ?? "reply")}`,
+		output: `waiting:${variableName}`,
 	});
 
 	try {
@@ -826,6 +913,18 @@ async function createWaitingSession(
 				.returning();
 			if (!updated) return null;
 
+			await recordFlowExecutionEvent({
+				executionLogId: ctx.logId,
+				flowId: ctx.flowId,
+				deviceId: ctx.deviceId,
+				contactNumber: ctx.contactNumber,
+				sessionId: updated.id,
+				type: "session.waiting",
+				nodeId: node.id,
+				message: `Waiting for ${variableName}`,
+				payload: { variableName, expiresAt: expiresAt.toISOString() },
+			});
+			emitFlowSessionUpdated(updated);
 			await persistProgress(ctx.logId, ctx.nodeResults, undefined, "waiting");
 			return updated;
 		}
@@ -847,6 +946,20 @@ async function createWaitingSession(
 			})
 			.returning();
 
+		if (created) {
+			await recordFlowExecutionEvent({
+				executionLogId: ctx.logId,
+				flowId: ctx.flowId,
+				deviceId: ctx.deviceId,
+				contactNumber: ctx.contactNumber,
+				sessionId: created.id,
+				type: "session.waiting",
+				nodeId: node.id,
+				message: `Waiting for ${variableName}`,
+				payload: { variableName, expiresAt: expiresAt.toISOString() },
+			});
+			emitFlowSessionUpdated(created);
+		}
 		await persistProgress(ctx.logId, ctx.nodeResults, undefined, "waiting");
 		return created;
 	} catch (error) {
@@ -903,10 +1016,22 @@ export async function resumeWaitingSession(
 	if (!waiting) return null;
 
 	if (waiting.expiresAt && waiting.expiresAt <= new Date()) {
-		await db
+		const [expired] = await db
 			.update(flowSession)
 			.set({ status: "expired", completedAt: new Date() })
-			.where(eq(flowSession.id, waiting.id));
+			.where(eq(flowSession.id, waiting.id))
+			.returning();
+		await recordFlowExecutionEvent({
+			executionLogId: waiting.executionLogId,
+			flowId: waiting.flowId,
+			deviceId: waiting.deviceId,
+			contactNumber: waiting.contactNumber,
+			sessionId: waiting.id,
+			type: "session.expired",
+			nodeId: waiting.waitingNodeId,
+			message: "Flow session expired",
+		});
+		if (expired) emitFlowSessionUpdated(expired);
 		await persistProgress(
 			waiting.executionLogId,
 			normalizeNodeResults(waiting.nodeResults),
@@ -925,6 +1050,7 @@ export async function resumeWaitingSession(
 		.returning();
 
 	if (!claimed) return null;
+	emitFlowSessionUpdated(claimed);
 	return resumeFlowSession(claimed, incomingText, replyJid, triggerMessageKey);
 }
 
@@ -949,8 +1075,34 @@ async function resumeFlowSession(
 	const edges = (flowRow.edges ?? []) as FlowEdge[];
 	const waitingNode = nodes.find((node) => node.id === session.waitingNodeId);
 	const variableName = String(waitingNode?.data.variableName ?? "reply").trim();
+	const savedVariableName = variableName || "reply";
 	const variables = normalizeVariables(session.variables);
-	variables[variableName || "reply"] = incomingText;
+	variables[savedVariableName] = incomingText;
+
+	await recordFlowExecutionEvent({
+		executionLogId: session.executionLogId,
+		flowId: session.flowId,
+		deviceId: session.deviceId,
+		contactNumber: session.contactNumber,
+		sessionId: session.id,
+		type: "reply.received",
+		nodeId: session.waitingNodeId,
+		message: `Reply captured as ${savedVariableName}`,
+		payload: {
+			variableName: savedVariableName,
+			maskedPreview: maskUserReply(incomingText),
+		},
+	});
+	await recordFlowExecutionEvent({
+		executionLogId: session.executionLogId,
+		flowId: session.flowId,
+		deviceId: session.deviceId,
+		contactNumber: session.contactNumber,
+		sessionId: session.id,
+		type: "session.resumed",
+		nodeId: session.waitingNodeId,
+		message: "Session resumed from user reply",
+	});
 
 	const ctx: ExecutionContext = {
 		flowId: flowRow.id,
@@ -1005,7 +1157,7 @@ async function resumeFlowSession(
 		result.hasError ? "One or more nodes failed" : undefined,
 		status,
 	);
-	await db
+	const [updated] = await db
 		.update(flowSession)
 		.set({
 			status,
@@ -1013,7 +1165,21 @@ async function resumeFlowSession(
 			nodeResults: ctx.nodeResults,
 			completedAt: new Date(),
 		})
-		.where(eq(flowSession.id, session.id));
+		.where(eq(flowSession.id, session.id))
+		.returning();
+	await recordFlowExecutionEvent({
+		executionLogId: ctx.logId,
+		flowId: ctx.flowId,
+		deviceId: ctx.deviceId,
+		contactNumber: ctx.contactNumber,
+		sessionId: session.id,
+		type: status === "completed" ? "session.completed" : "session.failed",
+		message:
+			status === "completed"
+				? "Session completed"
+				: "Session completed with node errors",
+	});
+	if (updated) emitFlowSessionUpdated(updated);
 
 	return { status, logId: ctx.logId, sessionId: session.id };
 }
@@ -1025,7 +1191,7 @@ async function markSessionFailed(
 	variables = normalizeVariables(session.variables),
 ) {
 	await persistProgress(session.executionLogId, nodeResults, error, "failed");
-	await db
+	const [updated] = await db
 		.update(flowSession)
 		.set({
 			status: "failed",
@@ -1033,7 +1199,19 @@ async function markSessionFailed(
 			nodeResults,
 			completedAt: new Date(),
 		})
-		.where(eq(flowSession.id, session.id));
+		.where(eq(flowSession.id, session.id))
+		.returning();
+	await recordFlowExecutionEvent({
+		executionLogId: session.executionLogId,
+		flowId: session.flowId,
+		deviceId: session.deviceId,
+		contactNumber: session.contactNumber,
+		sessionId: session.id,
+		type: "session.failed",
+		nodeId: session.waitingNodeId,
+		message: error,
+	});
+	if (updated) emitFlowSessionUpdated(updated);
 }
 
 export async function executeFlow(
@@ -1095,7 +1273,17 @@ export async function executeFlow(
 				flowId: flowExecutionLog.flowId,
 				deviceId: flowExecutionLog.deviceId,
 			});
-		if (failedLog) emitLogCreated(failedLog);
+		if (failedLog) {
+			await recordFlowExecutionEvent({
+				executionLogId: logId,
+				flowId: flowRow.id,
+				deviceId: ctx.deviceId,
+				contactNumber,
+				type: "execution.failed",
+				message: "Device not connected",
+			});
+			emitLogCreated(failedLog);
+		}
 		return { status: "failed", logId, error: "Device not connected" };
 	}
 
@@ -1116,7 +1304,18 @@ export async function executeFlow(
 			flowId: flowExecutionLog.flowId,
 			deviceId: flowExecutionLog.deviceId,
 		});
-	if (createdLog) emitLogCreated(createdLog);
+	if (createdLog) {
+		await recordFlowExecutionEvent({
+			executionLogId: logId,
+			flowId: flowRow.id,
+			deviceId: ctx.deviceId,
+			contactNumber,
+			type: "execution.started",
+			message: `Triggered by ${triggerSource}`,
+			payload: { triggerSource },
+		});
+		emitLogCreated(createdLog);
+	}
 
 	const adjacency = buildAdjacencyMap(edges);
 	const result = await runFlowNodes({
@@ -1132,16 +1331,28 @@ export async function executeFlow(
 	}
 
 	if (result.status === "failed") {
+		await recordFlowExecutionEvent({
+			executionLogId: logId,
+			flowId: flowRow.id,
+			deviceId: ctx.deviceId,
+			contactNumber,
+			type: "execution.failed",
+			message: result.error,
+		});
 		await persistProgress(logId, ctx.nodeResults, result.error, "failed");
 		return { status: "failed", logId, error: result.error };
 	}
 
 	const status = result.hasError ? "failed" : "completed";
-	await persistProgress(
-		logId,
-		ctx.nodeResults,
-		result.hasError ? "One or more nodes failed" : undefined,
-		status,
-	);
+	const error = result.hasError ? "One or more nodes failed" : undefined;
+	await recordFlowExecutionEvent({
+		executionLogId: logId,
+		flowId: flowRow.id,
+		deviceId: ctx.deviceId,
+		contactNumber,
+		type: status === "completed" ? "execution.completed" : "execution.failed",
+		message: error ?? "Execution completed",
+	});
+	await persistProgress(logId, ctx.nodeResults, error, status);
 	return { status, logId };
 }

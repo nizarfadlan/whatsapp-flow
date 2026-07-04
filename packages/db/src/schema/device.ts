@@ -178,6 +178,50 @@ export const flowSession = pgTable(
 	],
 );
 
+export const flowExecutionEvent = pgTable(
+	"flow_execution_event",
+	{
+		id: text("id").primaryKey(),
+		executionLogId: text("execution_log_id")
+			.notNull()
+			.references(() => flowExecutionLog.id, { onDelete: "cascade" }),
+		flowId: text("flow_id")
+			.notNull()
+			.references(() => flow.id, { onDelete: "cascade" }),
+		deviceId: text("device_id")
+			.notNull()
+			.references(() => device.id, { onDelete: "cascade" }),
+		sessionId: text("session_id").references(() => flowSession.id, {
+			onDelete: "set null",
+		}),
+		contactNumber: text("contact_number").notNull(),
+		type: text("type").notNull(),
+		nodeId: text("node_id"),
+		message: text("message"),
+		payload: jsonb("payload").default("{}").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(table) => [
+		index("flow_execution_event_log_created_idx").on(
+			table.executionLogId,
+			table.createdAt,
+		),
+		index("flow_execution_event_flow_created_idx").on(
+			table.flowId,
+			table.createdAt,
+		),
+		index("flow_execution_event_session_created_idx").on(
+			table.sessionId,
+			table.createdAt,
+		),
+		index("flow_execution_event_device_contact_created_idx").on(
+			table.deviceId,
+			table.contactNumber,
+			table.createdAt,
+		),
+	],
+);
+
 export const flowExecutionLogRelations = relations(
 	flowExecutionLog,
 	({ one, many }) => ({
@@ -190,11 +234,12 @@ export const flowExecutionLogRelations = relations(
 			references: [device.id],
 		}),
 		sessions: many(flowSession),
+		events: many(flowExecutionEvent),
 		webhookEndpoints: many(webhookEndpoint),
 	}),
 );
 
-export const flowSessionRelations = relations(flowSession, ({ one }) => ({
+export const flowSessionRelations = relations(flowSession, ({ one, many }) => ({
 	flow: one(flow, {
 		fields: [flowSession.flowId],
 		references: [flow.id],
@@ -207,7 +252,30 @@ export const flowSessionRelations = relations(flowSession, ({ one }) => ({
 		fields: [flowSession.executionLogId],
 		references: [flowExecutionLog.id],
 	}),
+	events: many(flowExecutionEvent),
 }));
+
+export const flowExecutionEventRelations = relations(
+	flowExecutionEvent,
+	({ one }) => ({
+		flow: one(flow, {
+			fields: [flowExecutionEvent.flowId],
+			references: [flow.id],
+		}),
+		device: one(device, {
+			fields: [flowExecutionEvent.deviceId],
+			references: [device.id],
+		}),
+		executionLog: one(flowExecutionLog, {
+			fields: [flowExecutionEvent.executionLogId],
+			references: [flowExecutionLog.id],
+		}),
+		session: one(flowSession, {
+			fields: [flowExecutionEvent.sessionId],
+			references: [flowSession.id],
+		}),
+	}),
+);
 
 export const deviceRelations = relations(device, ({ one, many }) => ({
 	user: one(user, {

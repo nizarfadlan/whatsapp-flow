@@ -17,6 +17,7 @@
 		"@whatsapp-flow/env": "workspace:*",
 		"baileys": "7.0.0-rc13",
 		"drizzle-orm": "^0.45.1",
+		"jimp": "^1.6.1",
 		"qrcode": "^1.5.4",
 		"zod": "catalog:"
 	},

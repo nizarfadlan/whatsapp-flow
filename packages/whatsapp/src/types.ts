@@ -75,4 +75,12 @@ export interface ConnectionManagerEvents {
 		flowId: string;
 		deviceId: string;
 	};
+	"flow:session:updated": {
+		sessionId: string;
+		flowId: string;
+		deviceId: string;
+		executionLogId: string;
+		contactNumber: string;
+		status: "waiting" | "running" | "completed" | "expired" | "failed";
+	};
 }

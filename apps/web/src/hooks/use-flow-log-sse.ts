@@ -19,6 +19,26 @@ export function useFlowLogSSE() {
 					queryClient.invalidateQueries({
 						queryKey: trpc.flowLog.getById.queryKey({ id: data.logId }),
 					});
+					queryClient.invalidateQueries({
+						queryKey: trpc.flowLog.timeline.queryKey({ id: data.logId }),
+					});
+				}
+			}
+			if (data.type === "flow:session:updated") {
+				queryClient.invalidateQueries({
+					queryKey: trpc.flowLog.list.queryKey(),
+				});
+				if (data.executionLogId) {
+					queryClient.invalidateQueries({
+						queryKey: trpc.flowLog.getById.queryKey({
+							id: data.executionLogId,
+						}),
+					});
+					queryClient.invalidateQueries({
+						queryKey: trpc.flowLog.timeline.queryKey({
+							id: data.executionLogId,
+						}),
+					});
 				}
 			}
 		});

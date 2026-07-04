@@ -286,10 +286,34 @@ app.get("/api/events", async (c) => {
 			}
 		};
 
+		const onFlowSessionUpdated = (ev: {
+			sessionId: string;
+			flowId: string;
+			deviceId: string;
+			executionLogId: string;
+			contactNumber: string;
+			status: string;
+		}) => {
+			if (deviceIds.has(ev.deviceId)) {
+				stream.writeSSE({
+					data: JSON.stringify({
+						type: "flow:session:updated",
+						sessionId: ev.sessionId,
+						flowId: ev.flowId,
+						deviceId: ev.deviceId,
+						executionLogId: ev.executionLogId,
+						contactNumber: ev.contactNumber,
+						status: ev.status,
+					}),
+				});
+			}
+		};
+
 		connectionManager.on("device:qr", onQr);
 		connectionManager.on("device:status", onStatus);
 		connectionManager.on("inbox:updated", onInboxUpdated);
 		connectionManager.on("flow:log:updated", onFlowLogUpdated);
+		connectionManager.on("flow:session:updated", onFlowSessionUpdated);
 
 		const ping = setInterval(() => {
 			stream.writeSSE({ data: JSON.stringify({ type: "ping" }) });
@@ -300,6 +324,7 @@ app.get("/api/events", async (c) => {
 			connectionManager.off("device:status", onStatus);
 			connectionManager.off("inbox:updated", onInboxUpdated);
 			connectionManager.off("flow:log:updated", onFlowLogUpdated);
+			connectionManager.off("flow:session:updated", onFlowSessionUpdated);
 			clearInterval(ping);
 		});
 

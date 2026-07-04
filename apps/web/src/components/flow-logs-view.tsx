@@ -54,6 +54,15 @@ export type FlowLogRow = {
 	sessionExpiresAt: string | null;
 };
 
+type TimelineEvent = {
+	id: string;
+	type: string;
+	nodeId: string | null;
+	message: string | null;
+	payload: unknown;
+	createdAt: string;
+};
+
 const statusConfig: Record<
 	string,
 	{ icon: typeof CheckCircle; color: string }
@@ -94,6 +103,16 @@ function formatDuration(startedAt: string, completedAt: string | null) {
 	const seconds =
 		(new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 1000;
 	return `${seconds.toFixed(1)}s`;
+}
+
+function normalizePayload(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function formatEventType(type: string) {
+	return type.replaceAll(".", " ");
 }
 
 function ContactCell({ log }: { log: FlowLogRow }) {
@@ -151,7 +170,11 @@ function LogDetailPanel({
 	const { data: log } = useSuspenseQuery(
 		trpc.flowLog.getById.queryOptions({ id: logId }),
 	);
+	const { data: timeline } = useSuspenseQuery(
+		trpc.flowLog.timeline.queryOptions({ id: logId }),
+	);
 
+	const events = timeline as TimelineEvent[];
 	const nodes =
 		flowNodes ??
 		((log?.flowNodes ?? []) as {
@@ -226,7 +249,7 @@ function LogDetailPanel({
 				{log.sessionId && (
 					<div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 text-xs">
 						<p className="font-medium text-yellow-700 dark:text-yellow-400">
-							Active session · {log.sessionStatus}
+							Session · {log.sessionStatus}
 						</p>
 						{log.waitingNodeId && (
 							<p className="mt-1 text-muted-foreground">
@@ -257,13 +280,58 @@ function LogDetailPanel({
 					</div>
 				)}
 
+				{events.length > 0 && (
+					<div>
+						<p className="mb-2 font-medium text-xs">Execution timeline</p>
+						<div className="space-y-1.5">
+							{events.map((event) => {
+								const payload = normalizePayload(event.payload);
+								const maskedPreview =
+									typeof payload.maskedPreview === "string"
+										? payload.maskedPreview
+										: null;
+								return (
+									<div
+										key={event.id}
+										className="rounded-lg border bg-background p-2.5 text-xs"
+									>
+										<div className="flex items-center justify-between gap-2">
+											<span className="font-medium capitalize">
+												{formatEventType(event.type)}
+											</span>
+											<span className="text-[10px] text-muted-foreground">
+												{new Date(event.createdAt).toLocaleTimeString()}
+											</span>
+										</div>
+										{event.nodeId && (
+											<p className="mt-0.5 text-muted-foreground">
+												{resolveNodeLabel(event.nodeId, nodes)}
+											</p>
+										)}
+										{event.message && (
+											<p className="mt-1 text-muted-foreground">
+												{event.message}
+											</p>
+										)}
+										{maskedPreview && (
+											<p className="mt-1 font-mono text-muted-foreground">
+												Reply: {maskedPreview}
+											</p>
+										)}
+									</div>
+								);
+							})}
+						</div>
+					</div>
+				)}
+
 				{nodeResults.length > 0 && (
 					<div>
 						<p className="mb-2 font-medium text-xs">Node progress</p>
 						<div className="space-y-1.5">
-							{nodeResults.map((result) => (
+							{nodeResults.map((result, index) => (
 								<div
-									key={result.nodeId}
+									key={`${result.nodeId}-${index}`}
 									className="rounded-lg border bg-background p-2.5 text-xs"
 								>
 									<div className="flex items-center justify-between gap-2">

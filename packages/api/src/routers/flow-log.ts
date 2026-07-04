@@ -2,15 +2,14 @@ import { contact } from "@whatsapp-flow/db/schema/contact";
 import {
 	device,
 	flow,
+	flowExecutionEvent,
 	flowExecutionLog,
 	flowSession,
 } from "@whatsapp-flow/db/schema/device";
 import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
-
-const activeSessionStatuses = ["waiting", "running"] as const;
 
 function buildLogSelect() {
 	return {
@@ -74,10 +73,7 @@ export const flowLogRouter = router({
 				)
 				.leftJoin(
 					flowSession,
-					and(
-						eq(flowSession.executionLogId, flowExecutionLog.id),
-						inArray(flowSession.status, [...activeSessionStatuses]),
-					),
+					eq(flowSession.executionLogId, flowExecutionLog.id),
 				)
 				.where(and(...conditions))
 				.orderBy(desc(flowExecutionLog.startedAt))
@@ -111,10 +107,7 @@ export const flowLogRouter = router({
 				)
 				.leftJoin(
 					flowSession,
-					and(
-						eq(flowSession.executionLogId, flowExecutionLog.id),
-						inArray(flowSession.status, [...activeSessionStatuses]),
-					),
+					eq(flowSession.executionLogId, flowExecutionLog.id),
 				)
 				.where(
 					and(
@@ -125,5 +118,29 @@ export const flowLogRouter = router({
 				.limit(1);
 
 			return rows[0] ?? null;
+		}),
+
+	timeline: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const owned = await ctx.db
+				.select({ id: flowExecutionLog.id })
+				.from(flowExecutionLog)
+				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
+				.where(
+					and(
+						eq(flowExecutionLog.id, input.id),
+						eq(flow.userId, ctx.session.user.id),
+					),
+				)
+				.limit(1);
+
+			if (!owned[0]) return [];
+
+			return ctx.db
+				.select()
+				.from(flowExecutionEvent)
+				.where(eq(flowExecutionEvent.executionLogId, input.id))
+				.orderBy(asc(flowExecutionEvent.createdAt));
 		}),
 });
