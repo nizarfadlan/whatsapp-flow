@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import {
 	Card,
@@ -12,6 +13,7 @@ import { useState } from "react";
 import Header from "@/components/header";
 import SignInForm from "@/components/sign-in-form";
 import SignUpForm from "@/components/sign-up-form";
+import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/login")({
 	component: RouteComponent,
@@ -24,19 +26,34 @@ const steps = [
 ] as const;
 
 function RouteComponent() {
+	const trpc = useTRPC();
+	const { data: publicSettings } = useQuery(
+		trpc.settings.public.queryOptions(),
+	);
 	const [showSignIn, setShowSignIn] = useState(true);
+	const branding = publicSettings?.branding;
+	const appName = branding?.appName ?? "WhatsApp Flow";
+	const logoUrl = branding?.logoUrl;
 
 	return (
 		<div className="min-h-svh bg-background">
 			<Header />
 			<main className="mx-auto grid min-h-[calc(100svh-3.5rem)] max-w-6xl gap-8 px-4 py-10 md:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
 				<section className="hidden space-y-6 lg:block">
-					<span className="flex size-11 items-center justify-center border bg-primary text-primary-foreground shadow-sm">
-						<Bot className="size-5" />
-					</span>
+					{logoUrl ? (
+						<img
+							src={logoUrl}
+							alt={`${appName} logo`}
+							className="size-11 border bg-muted object-contain shadow-sm"
+						/>
+					) : (
+						<span className="flex size-11 items-center justify-center border bg-primary text-primary-foreground shadow-sm">
+							<Bot className="size-5" />
+						</span>
+					)}
 					<div className="space-y-3">
 						<h1 className="font-semibold text-4xl tracking-tight">
-							Access your WhatsApp Flow workspace.
+							Access your {appName} workspace.
 						</h1>
 						<p className="max-w-md text-muted-foreground text-sm leading-6">
 							Sign in to manage devices, deploy flow automations, and monitor

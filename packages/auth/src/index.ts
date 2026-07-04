@@ -3,9 +3,15 @@ import * as schema from "@whatsapp-flow/db/schema/auth";
 import { env } from "@whatsapp-flow/env/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { genericOAuth } from "better-auth/plugins";
+import {
+	loadGenericOAuthProviderConfigs,
+	loadSocialProviderConfig,
+} from "./provider-settings";
 
-export function createAuth() {
+export async function createAuth() {
 	const db = createDb();
+	const genericOAuthConfigs = await loadGenericOAuthProviderConfigs();
 
 	return betterAuth({
 		database: drizzleAdapter(db, {
@@ -17,6 +23,17 @@ export function createAuth() {
 		emailAndPassword: {
 			enabled: true,
 		},
+		socialProviders: {
+			google: () => loadSocialProviderConfig("google"),
+			github: () => loadSocialProviderConfig("github"),
+			discord: () => loadSocialProviderConfig("discord"),
+			facebook: () => loadSocialProviderConfig("facebook"),
+			microsoft: () => loadSocialProviderConfig("microsoft"),
+			gitlab: () => loadSocialProviderConfig("gitlab"),
+			slack: () => loadSocialProviderConfig("slack"),
+			linkedin: () => loadSocialProviderConfig("linkedin"),
+			notion: () => loadSocialProviderConfig("notion"),
+		},
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
 		advanced: {
@@ -26,8 +43,12 @@ export function createAuth() {
 				httpOnly: true,
 			},
 		},
-		plugins: [],
+		plugins: [
+			genericOAuth({
+				config: genericOAuthConfigs,
+			}),
+		],
 	});
 }
 
-export const auth = createAuth();
+export const auth = await createAuth();

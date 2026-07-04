@@ -57,6 +57,13 @@
 			"when": 1783165653030,
 			"tag": "0007_thin_warstar",
 			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1783173523665,
+			"tag": "0008_remarkable_steel_serpent",
+			"breakpoints": true
 		}
 	]
 }

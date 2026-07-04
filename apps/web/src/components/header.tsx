@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import { buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Skeleton } from "@whatsapp-flow/ui/components/skeleton";
@@ -5,6 +6,7 @@ import { cn } from "@whatsapp-flow/ui/lib/utils";
 import { Bot } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
+import { useTRPC } from "@/utils/trpc";
 
 const links = [
 	{ href: "#features", label: "Features" },
@@ -13,7 +15,14 @@ const links = [
 
 export default function Header() {
 	const location = useLocation();
+	const trpc = useTRPC();
+	const { data: publicSettings } = useQuery(
+		trpc.settings.public.queryOptions(),
+	);
 	const isHome = location.pathname === "/";
+	const branding = publicSettings?.branding;
+	const appName = branding?.appName ?? "WhatsApp Flow";
+	const logoUrl = branding?.logoUrl;
 
 	return (
 		<header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
@@ -23,10 +32,18 @@ export default function Header() {
 						to="/"
 						className="flex items-center gap-2 font-semibold text-sm"
 					>
-						<span className="flex size-8 items-center justify-center bg-primary text-primary-foreground shadow-sm">
-							<Bot className="size-4" />
-						</span>
-						<span>WhatsApp Flow</span>
+						{logoUrl ? (
+							<img
+								src={logoUrl}
+								alt={`${appName} logo`}
+								className="size-8 border bg-muted object-contain shadow-sm"
+							/>
+						) : (
+							<span className="flex size-8 items-center justify-center bg-primary text-primary-foreground shadow-sm">
+								<Bot className="size-4" />
+							</span>
+						)}
+						<span>{appName}</span>
 					</Link>
 					{isHome && (
 						<nav className="hidden items-center gap-1 md:flex">

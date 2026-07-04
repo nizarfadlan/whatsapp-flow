@@ -8,6 +8,8 @@ export const env = createEnv({
 		BETTER_AUTH_SECRET: z.string().min(32),
 		BETTER_AUTH_URL: z.url(),
 		CORS_ORIGIN: z.url(),
+		SETTINGS_ENCRYPTION_KEY: z.string().optional(),
+		ADMIN_EMAILS: z.string().optional(),
 		PUBLIC_BASE_URL: z.url().optional(),
 		STORAGE_DRIVER: z.enum(["local", "s3"]).optional(),
 		LOCAL_UPLOAD_DIR: z.string().optional(),

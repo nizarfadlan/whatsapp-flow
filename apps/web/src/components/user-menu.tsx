@@ -20,7 +20,7 @@ function getInitials(name?: string | null, email?: string | null) {
 	return value
 		.split(" ")
 		.slice(0, 2)
-		.map((part) => part[0])
+		.map((part) => part.charAt(0))
 		.join("")
 		.toUpperCase();
 }
@@ -71,7 +71,7 @@ export default function UserMenu() {
 						</span>
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem>
+					<DropdownMenuItem render={<Link to="/dashboard/account" />}>
 						<User className="size-3.5" />
 						Account
 					</DropdownMenuItem>

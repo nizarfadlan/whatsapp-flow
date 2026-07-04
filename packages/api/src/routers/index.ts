@@ -8,6 +8,7 @@ import { flowSessionRouter } from "./flow-session";
 import { groupRouter } from "./group";
 import { inboxRouter } from "./inbox";
 import { mediaRouter } from "./media";
+import { settingsRouter } from "./settings";
 import { webhookRouter } from "./webhook";
 
 export const appRouter = router({
@@ -30,6 +31,7 @@ export const appRouter = router({
 	inbox: inboxRouter,
 	media: mediaRouter,
 	webhook: webhookRouter,
+	settings: settingsRouter,
 });
 
 export type AppRouter = typeof appRouter;
