@@ -1,13 +1,18 @@
 import { db } from "@whatsapp-flow/db";
-import { flow } from "@whatsapp-flow/db/schema/device";
+import { flow, flowSession } from "@whatsapp-flow/db/schema/device";
 import type { IncomingMessage } from "@whatsapp-flow/whatsapp";
 import {
 	connectionManager,
 	matchesKeywordTrigger,
 } from "@whatsapp-flow/whatsapp";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { matchesCronExpression } from "./cron";
-import { executeFlow, resumeWaitingSession } from "./flow-executor";
+import { enqueueJob } from "./job-queue";
+import {
+	messageFlowJobIdempotencyKey,
+	resumeFlowJobIdempotencyKey,
+	scheduledFlowJobIdempotencyKey,
+} from "./job-types";
 
 type DispatcherState = {
 	messageStarted: boolean;
@@ -49,17 +54,26 @@ export function startFlowDispatcher(): void {
 		try {
 			if (!contact.number) return;
 
-			const resumed = await resumeWaitingSession(
+			const waitingSession = await findActiveWaitingSession(
 				deviceId,
 				contact.number,
-				text,
-				contact.jid,
-				{
-					messageKey: message.messageKey,
-					providerMessageId: message.providerMessageId,
-				},
 			);
-			if (resumed) return;
+			if (waitingSession) {
+				await enqueueJob({
+					kind: "flow.resume",
+					payload: {
+						sessionId: waitingSession.id,
+						deviceId,
+						contactNumber: contact.number,
+						incomingText: text,
+						replyJid: contact.jid,
+						triggerMessageKey: message.messageKey,
+						triggerProviderMessageId: message.providerMessageId,
+					},
+					idempotencyKey: resumeMessageIdempotencyKey(event, waitingSession.id),
+				});
+				return;
+			}
 
 			const flows = await db
 				.select()
@@ -67,24 +81,23 @@ export function startFlowDispatcher(): void {
 				.where(and(eq(flow.deviceId, deviceId), eq(flow.status, "active")));
 
 			for (const flowRow of flows) {
+				if (!flowRow.deviceId) continue;
 				if (!matchesFlowTrigger(flowRow, text)) continue;
 
-				const result = await executeFlow(flowRow, contact.number, text, {
-					replyJid: contact.jid,
-					triggerSource: "message",
-					triggerMessageKey: message.messageKey,
-					triggerProviderMessageId: message.providerMessageId,
-				});
-				if (result.status === "failed") {
-					console.error("Message flow execution failed", {
+				await enqueueJob({
+					kind: "flow.execute",
+					payload: {
 						flowId: flowRow.id,
 						deviceId,
 						contactNumber: contact.number,
-						logId: result.logId,
-						error: result.error,
-					});
-				}
-				if (result.status === "waiting") return;
+						incomingText: text,
+						replyJid: contact.jid,
+						triggerSource: "message",
+						triggerMessageKey: message.messageKey,
+						triggerProviderMessageId: message.providerMessageId,
+					},
+					idempotencyKey: flowMessageIdempotencyKey(event, flowRow.id),
+				});
 			}
 		} catch (error) {
 			console.error("Failed to dispatch incoming WhatsApp message", {
@@ -123,29 +136,21 @@ export function startScheduleDispatcher(): void {
 				const cronExpression = config?.cronExpression?.trim();
 				const contactNumber = normalizeNumber(config?.contactNumber ?? "");
 
+				if (!flowRow.deviceId) continue;
 				if (!cronExpression || !contactNumber) continue;
 				if (!matchesCronExpression(cronExpression, now)) continue;
 
-				const result = await executeFlow(flowRow, contactNumber, "", {
-					triggerSource: "schedule",
+				await enqueueJob({
+					kind: "flow.execute",
+					payload: {
+						flowId: flowRow.id,
+						deviceId: flowRow.deviceId,
+						contactNumber,
+						incomingText: "",
+						triggerSource: "schedule",
+					},
+					idempotencyKey: scheduledFlowJobIdempotencyKey(flowRow.id, minuteKey),
 				});
-				if (result.status === "skipped") {
-					console.warn("Scheduled flow execution skipped", {
-						flowId: flowRow.id,
-						deviceId: flowRow.deviceId,
-						contactNumber,
-						error: result.error,
-					});
-				}
-				if (result.status === "failed") {
-					console.error("Scheduled flow execution failed", {
-						flowId: flowRow.id,
-						deviceId: flowRow.deviceId,
-						contactNumber,
-						logId: result.logId,
-						error: result.error,
-					});
-				}
 			}
 		} catch (error) {
 			console.error("Failed to dispatch scheduled flows", { error });
@@ -158,6 +163,57 @@ export function startScheduleDispatcher(): void {
 	dispatcherState.scheduleTimer = setInterval(() => {
 		void tick();
 	}, 60_000);
+}
+
+async function findActiveWaitingSession(
+	deviceId: string,
+	contactNumber: string,
+) {
+	const [waiting] = await db
+		.select({ id: flowSession.id })
+		.from(flowSession)
+		.where(
+			and(
+				eq(flowSession.deviceId, deviceId),
+				eq(flowSession.contactNumber, contactNumber),
+				eq(flowSession.status, "waiting"),
+				or(
+					isNull(flowSession.expiresAt),
+					gt(flowSession.expiresAt, new Date()),
+				),
+			),
+		)
+		.limit(1);
+	return waiting ?? null;
+}
+
+function flowMessageIdempotencyKey(event: IncomingMessage, flowId: string) {
+	const providerMessageId = providerMessageIdFromEvent(event);
+	if (!providerMessageId) return undefined;
+	return messageFlowJobIdempotencyKey({
+		provider: event.provider ?? "baileys",
+		providerMessageId,
+		flowId,
+	});
+}
+
+function resumeMessageIdempotencyKey(
+	event: IncomingMessage,
+	sessionId: string,
+) {
+	const providerMessageId = providerMessageIdFromEvent(event);
+	if (!providerMessageId) return undefined;
+	return resumeFlowJobIdempotencyKey({
+		provider: event.provider ?? "baileys",
+		providerMessageId,
+		sessionId,
+	});
+}
+
+function providerMessageIdFromEvent(event: IncomingMessage) {
+	return (
+		event.message.providerMessageId ?? event.message.messageKey?.id ?? null
+	);
 }
 
 function matchesFlowTrigger(

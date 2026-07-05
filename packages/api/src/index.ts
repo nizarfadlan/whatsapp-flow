@@ -1,9 +1,9 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { user } from "@whatsapp-flow/db/schema/auth";
-import { env } from "@whatsapp-flow/env/server";
 import { eq } from "drizzle-orm";
 
 import type { Context } from "./context";
+import { hasPermission, type PermissionKey } from "./rbac";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -50,22 +50,17 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 	});
 });
 
-export const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-	const adminEmails = new Set(
-		env.ADMIN_EMAILS?.split(",")
-			.map((email) => email.trim().toLowerCase())
-			.filter(Boolean) ?? [],
-	);
-	const isAdmin =
-		ctx.currentUser.role === "admin" ||
-		adminEmails.has(ctx.currentUser.email.toLowerCase());
+export function permissionProcedure(permissionKey: PermissionKey) {
+	return protectedProcedure.use(async ({ ctx, next }) => {
+		if (!(await hasPermission(ctx.db, ctx.currentUser, permissionKey))) {
+			throw new TRPCError({
+				code: "FORBIDDEN",
+				message: "Permission required",
+			});
+		}
 
-	if (!isAdmin) {
-		throw new TRPCError({
-			code: "FORBIDDEN",
-			message: "Admin access required",
-		});
-	}
+		return next({ ctx });
+	});
+}
 
-	return next({ ctx });
-});
+export const adminProcedure = permissionProcedure("roles.manage");

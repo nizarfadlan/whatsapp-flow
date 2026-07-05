@@ -24,6 +24,17 @@ export const env = createEnv({
 		META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
 		META_APP_ID: z.string().optional(),
 		META_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional(),
+		JOB_WORKER_ENABLED: z
+			.preprocess((value) => {
+				if (value === undefined || value === null || value === "")
+					return undefined;
+				if (value === "false" || value === false) return false;
+				return true;
+			}, z.boolean())
+			.default(true),
+		JOB_WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
+		JOB_LEASE_SECONDS: z.coerce.number().int().min(1).default(60),
+		METRICS_TOKEN: z.string().optional(),
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),

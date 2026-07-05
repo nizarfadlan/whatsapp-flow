@@ -25,6 +25,7 @@ import {
 	MessageSquare,
 	Plus,
 	Settings,
+	ShieldCheck,
 	Smartphone,
 	UserCircle,
 	Users,
@@ -42,9 +43,22 @@ const navItems = [
 		label: "Devices",
 		icon: Smartphone,
 		exact: false,
+		permission: "devices.read",
 	},
-	{ to: "/dashboard/flows", label: "Flows", icon: MessageSquare, exact: false },
-	{ to: "/dashboard/inbox", label: "Inbox", icon: Inbox, exact: false },
+	{
+		to: "/dashboard/flows",
+		label: "Flows",
+		icon: MessageSquare,
+		exact: false,
+		permission: "flows.read",
+	},
+	{
+		to: "/dashboard/inbox",
+		label: "Inbox",
+		icon: Inbox,
+		exact: false,
+		permission: "inbox.read",
+	},
 	{ to: "/dashboard/contacts", label: "Contacts", icon: Users, exact: false },
 	{ to: "/dashboard/groups", label: "Groups", icon: UsersRound, exact: false },
 	{
@@ -54,14 +68,40 @@ const navItems = [
 		exact: false,
 	},
 	{ to: "/dashboard/logs", label: "Logs", icon: Activity, exact: false },
-	{ to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook, exact: false },
-	{ to: "/dashboard/users", label: "Users", icon: UserCircle, exact: false },
-	{ to: "/dashboard/audit", label: "Audit", icon: ClipboardList, exact: false },
+	{
+		to: "/dashboard/webhooks",
+		label: "Webhooks",
+		icon: Webhook,
+		exact: false,
+		permission: "webhooks.read",
+	},
+	{
+		to: "/dashboard/users",
+		label: "Users",
+		icon: UserCircle,
+		exact: false,
+		permission: "users.read",
+	},
+	{
+		to: "/dashboard/roles",
+		label: "Roles",
+		icon: ShieldCheck,
+		exact: false,
+		permission: "roles.read",
+	},
+	{
+		to: "/dashboard/audit",
+		label: "Audit",
+		icon: ClipboardList,
+		exact: false,
+		permission: "audit.read",
+	},
 	{
 		to: "/dashboard/settings",
 		label: "Settings",
 		icon: Settings,
 		exact: false,
+		permission: "settings.read",
 	},
 ] as const;
 
@@ -134,10 +174,19 @@ function Brand() {
 
 function SidebarNav() {
 	const location = useLocation();
+	const trpc = useTRPC();
+	const permissionsQuery = useQuery(trpc.rbac.me.queryOptions());
+	const permissions = permissionsQuery.data
+		? new Set(permissionsQuery.data.permissions)
+		: null;
 
 	return (
 		<SidebarMenu>
-			{navItems.map(({ to, label, icon: Icon, exact }) => {
+			{navItems.map((item) => {
+				const { to, label, icon: Icon, exact } = item;
+				const permission = "permission" in item ? item.permission : undefined;
+				if (permission && permissions && !permissions.has(permission))
+					return null;
 				const active = exact
 					? location.pathname === to
 					: location.pathname === to || location.pathname.startsWith(`${to}/`);

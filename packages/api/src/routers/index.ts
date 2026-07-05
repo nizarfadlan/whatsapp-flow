@@ -9,6 +9,7 @@ import { flowSessionRouter } from "./flow-session";
 import { groupRouter } from "./group";
 import { inboxRouter } from "./inbox";
 import { mediaRouter } from "./media";
+import { rbacRouter } from "./rbac";
 import { settingsRouter } from "./settings";
 import { userRouter } from "./user";
 import { webhookRouter } from "./webhook";
@@ -33,6 +34,7 @@ export const appRouter = router({
 	flowSession: flowSessionRouter,
 	inbox: inboxRouter,
 	media: mediaRouter,
+	rbac: rbacRouter,
 	webhook: webhookRouter,
 	settings: settingsRouter,
 	user: userRouter,

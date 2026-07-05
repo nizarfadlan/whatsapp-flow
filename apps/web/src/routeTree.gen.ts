@@ -16,6 +16,7 @@ import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
 import { Route as DashboardUsersRouteImport } from './routes/dashboard.users'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
+import { Route as DashboardRolesRouteImport } from './routes/dashboard.roles'
 import { Route as DashboardNewslettersRouteImport } from './routes/dashboard.newsletters'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
@@ -65,6 +66,11 @@ const DashboardUsersRoute = DashboardUsersRouteImport.update({
 const DashboardSettingsRoute = DashboardSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardRolesRoute = DashboardRolesRouteImport.update({
+  id: '/roles',
+  path: '/roles',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardNewslettersRoute = DashboardNewslettersRouteImport.update({
@@ -158,6 +164,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
+  '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
@@ -180,6 +187,7 @@ export interface FileRoutesByTo {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
+  '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
@@ -205,6 +213,7 @@ export interface FileRoutesById {
   '/dashboard/inbox': typeof DashboardInboxRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
+  '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/webhooks': typeof DashboardWebhooksRoute
@@ -231,6 +240,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard/newsletters'
+    | '/dashboard/roles'
     | '/dashboard/settings'
     | '/dashboard/users'
     | '/dashboard/webhooks'
@@ -253,6 +263,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard/newsletters'
+    | '/dashboard/roles'
     | '/dashboard/settings'
     | '/dashboard/users'
     | '/dashboard/webhooks'
@@ -277,6 +288,7 @@ export interface FileRouteTypes {
     | '/dashboard/inbox'
     | '/dashboard/logs'
     | '/dashboard/newsletters'
+    | '/dashboard/roles'
     | '/dashboard/settings'
     | '/dashboard/users'
     | '/dashboard/webhooks'
@@ -344,6 +356,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/dashboard/settings'
       preLoaderRoute: typeof DashboardSettingsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/roles': {
+      id: '/dashboard/roles'
+      path: '/roles'
+      fullPath: '/dashboard/roles'
+      preLoaderRoute: typeof DashboardRolesRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/newsletters': {
@@ -504,6 +523,7 @@ interface DashboardRouteChildren {
   DashboardInboxRoute: typeof DashboardInboxRoute
   DashboardLogsRoute: typeof DashboardLogsRoute
   DashboardNewslettersRoute: typeof DashboardNewslettersRoute
+  DashboardRolesRoute: typeof DashboardRolesRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
   DashboardUsersRoute: typeof DashboardUsersRoute
   DashboardWebhooksRoute: typeof DashboardWebhooksRoute
@@ -520,6 +540,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardInboxRoute: DashboardInboxRoute,
   DashboardLogsRoute: DashboardLogsRoute,
   DashboardNewslettersRoute: DashboardNewslettersRoute,
+  DashboardRolesRoute: DashboardRolesRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,
   DashboardUsersRoute: DashboardUsersRoute,
   DashboardWebhooksRoute: DashboardWebhooksRoute,

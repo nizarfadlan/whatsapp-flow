@@ -6,7 +6,18 @@ import {
 	startScheduleDispatcher,
 } from "@whatsapp-flow/api/engine/flow-dispatcher";
 import { executeFlow } from "@whatsapp-flow/api/engine/flow-executor";
-import { startWebhookDispatcher } from "@whatsapp-flow/api/engine/webhook-dispatcher";
+import {
+	processFlowContinueJob,
+	processFlowExecuteJob,
+	processFlowResumeJob,
+} from "@whatsapp-flow/api/engine/flow-jobs";
+import { startJobWorker } from "@whatsapp-flow/api/engine/job-queue";
+import {
+	processWebhookDeliveryJob,
+	startWebhookDispatcher,
+} from "@whatsapp-flow/api/engine/webhook-dispatcher";
+import { renderMetrics } from "@whatsapp-flow/api/observability/metrics";
+import { seedRbac } from "@whatsapp-flow/api/rbac";
 import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
@@ -397,11 +408,31 @@ app.get("/api/events", async (c) => {
 	});
 });
 
+app.get("/metrics", (c) => {
+	if (env.NODE_ENV === "production") {
+		if (!env.METRICS_TOKEN)
+			return c.text("Metrics token is not configured", 503);
+		const authorization = c.req.header("authorization") ?? "";
+		const token = authorization.startsWith("Bearer ")
+			? authorization.slice("Bearer ".length)
+			: "";
+		if (!safeEqual(token, env.METRICS_TOKEN))
+			return c.text("Unauthorized", 401);
+	}
+
+	return c.text(renderMetrics(), 200, {
+		"content-type": "text/plain; version=0.0.4; charset=utf-8",
+	});
+});
+
 app.get("/", (c) => {
 	return c.text("OK");
 });
 
 const db = createDb();
+void seedRbac(db).catch((error) => {
+	console.error("Failed to seed RBAC", error);
+});
 
 // Persist incoming WhatsApp messages to contacts/groups + inbox
 connectionManager.on("device:message", async (ev) => {
@@ -836,20 +867,32 @@ function stringifyWebhookText(body: unknown) {
 	return JSON.stringify(body);
 }
 
+function safeEqual(value: string, expected: string) {
+	const valueBuffer = Buffer.from(value);
+	const expectedBuffer = Buffer.from(expected);
+	if (valueBuffer.length !== expectedBuffer.length) return false;
+	return timingSafeEqual(valueBuffer, expectedBuffer);
+}
+
 function isValidWebhookToken(triggerConfig: unknown, token: string) {
 	if (!triggerConfig || typeof triggerConfig !== "object") return false;
 	if (!("webhookToken" in triggerConfig)) return false;
 	const expected = triggerConfig.webhookToken;
 	if (typeof expected !== "string" || expected.length === 0) return false;
-	const tokenBuffer = Buffer.from(token);
-	const expectedBuffer = Buffer.from(expected);
-	if (tokenBuffer.length !== expectedBuffer.length) return false;
-	return timingSafeEqual(tokenBuffer, expectedBuffer);
+	return safeEqual(token, expected);
 }
 
 void reconnectDevices();
 startFlowDispatcher();
 startScheduleDispatcher();
 startWebhookDispatcher();
+startJobWorker({
+	handlers: {
+		"flow.continue": (job) => processFlowContinueJob(job.payload),
+		"flow.execute": (job) => processFlowExecuteJob(job.payload),
+		"flow.resume": (job) => processFlowResumeJob(job.payload),
+		"webhook.deliver": (job) => processWebhookDeliveryJob(job.payload),
+	},
+});
 
 export default app;

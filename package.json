@@ -27,6 +27,8 @@
 		"dev": "turbo dev",
 		"build": "turbo build",
 		"check-types": "turbo check-types",
+		"test": "turbo test",
+		"check:ci": "bun run check-types && biome check . && bun run build",
 		"dev:web": "turbo -F web dev",
 		"dev:server": "turbo -F server dev",
 		"db:push": "turbo -F @whatsapp-flow/db db:push",

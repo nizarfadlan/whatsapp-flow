@@ -7,6 +7,8 @@ import {
 } from "@whatsapp-flow/db/schema/webhook";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, asc, eq, lte } from "drizzle-orm";
+import { enqueueJob } from "./job-queue";
+import { webhookDeliveryJobIdempotencyKey } from "./job-types";
 import {
 	FLOW_EXECUTION_WEBHOOK_EVENT_MAP,
 	type WebhookEventType,
@@ -105,11 +107,51 @@ export async function enqueueWebhook(input: EnqueueWebhookInput) {
 			}));
 
 		if (deliveriesToInsert.length > 0) {
-			await db.insert(webhookDelivery).values(deliveriesToInsert);
+			const deliveries = await db
+				.insert(webhookDelivery)
+				.values(deliveriesToInsert)
+				.returning({ id: webhookDelivery.id });
+
+			await Promise.all(
+				deliveries.map((delivery) => enqueueWebhookDeliveryJob(delivery.id)),
+			);
 		}
 	} catch (error) {
 		console.error("[Webhook] Failed to enqueue webhook event:", error);
 	}
+}
+
+async function enqueueWebhookDeliveryJob(deliveryId: string) {
+	await enqueueJob({
+		kind: "webhook.deliver",
+		payload: { deliveryId },
+		idempotencyKey: webhookDeliveryJobIdempotencyKey(deliveryId),
+		maxAttempts: MAX_WEBHOOK_ATTEMPTS,
+	});
+}
+
+export async function enqueuePendingWebhookDeliveryJobs(limit = 50) {
+	const pendingDeliveries = await db
+		.select({ id: webhookDelivery.id })
+		.from(webhookDelivery)
+		.innerJoin(
+			webhookEndpoint,
+			eq(webhookDelivery.endpointId, webhookEndpoint.id),
+		)
+		.where(
+			and(
+				eq(webhookDelivery.status, "pending"),
+				eq(webhookEndpoint.isActive, true),
+				lte(webhookDelivery.nextAttemptAt, new Date()),
+			),
+		)
+		.orderBy(asc(webhookDelivery.nextAttemptAt))
+		.limit(limit);
+
+	await Promise.all(
+		pendingDeliveries.map((delivery) => enqueueWebhookDeliveryJob(delivery.id)),
+	);
+	return pendingDeliveries.length;
 }
 
 // Global dispatcher state so we don't start multiple
@@ -123,30 +165,7 @@ export function startWebhookDispatcher() {
 
 	const tick = async () => {
 		try {
-			// Find pending deliveries that are ready to attempt
-			const pendingDeliveries = await db
-				.select({
-					delivery: webhookDelivery,
-					endpoint: webhookEndpoint,
-				})
-				.from(webhookDelivery)
-				.innerJoin(
-					webhookEndpoint,
-					eq(webhookDelivery.endpointId, webhookEndpoint.id),
-				)
-				.where(
-					and(
-						eq(webhookDelivery.status, "pending"),
-						eq(webhookEndpoint.isActive, true),
-						lte(webhookDelivery.nextAttemptAt, new Date()),
-					),
-				)
-				.orderBy(asc(webhookDelivery.nextAttemptAt))
-				.limit(50);
-
-			for (const { delivery, endpoint } of pendingDeliveries) {
-				await processWebhookDelivery(delivery, endpoint);
-			}
+			await enqueuePendingWebhookDeliveryJobs();
 		} catch (error) {
 			console.error("[Webhook worker] Polling error:", error);
 		} finally {
@@ -239,11 +258,32 @@ export function startWebhookDispatcher() {
 	});
 }
 
+export async function processWebhookDeliveryJob(input: { deliveryId: string }) {
+	const [row] = await db
+		.select({ delivery: webhookDelivery, endpoint: webhookEndpoint })
+		.from(webhookDelivery)
+		.innerJoin(
+			webhookEndpoint,
+			eq(webhookDelivery.endpointId, webhookEndpoint.id),
+		)
+		.where(eq(webhookDelivery.id, input.deliveryId))
+		.limit(1);
+
+	if (!row) return;
+	const result = await processWebhookDelivery(row.delivery, row.endpoint);
+	if (result.status === "pending") {
+		throw new Error("Webhook delivery failed; retry scheduled");
+	}
+	if (result.status === "failed") {
+		throw new Error("Webhook delivery failed permanently");
+	}
+}
+
 async function processWebhookDelivery(
 	delivery: typeof webhookDelivery.$inferSelect,
 	endpoint: typeof webhookEndpoint.$inferSelect,
 ) {
-	if (!endpoint.isActive) return;
+	if (!endpoint.isActive) return { status: "skipped" as const };
 
 	let statusCode: number | null = null;
 	let responseBody = "";
@@ -302,4 +342,6 @@ async function processWebhookDelivery(
 			nextAttemptAt,
 		})
 		.where(eq(webhookDelivery.id, delivery.id));
+
+	return { status: nextStatus };
 }

@@ -1,8 +1,8 @@
 import { auditLog } from "@whatsapp-flow/db/schema/audit";
+import { desc, eq, sql } from "drizzle-orm";
+import { auditHashAlgorithm, hashAuditEntry } from "./audit-hash";
 import type { Context } from "./context";
-
-const sensitiveKeyPattern =
-	/(password|secret|token|accessToken|refreshToken|idToken|clientSecret|clientSecretEncrypted|appSecret|encryptedValue|sessionData|creds|keys|authorization|cookie|apiKey|privateKey)/i;
+import { redactSensitiveValue } from "./security/redaction";
 
 type AuditContext = Pick<
 	Context,
@@ -22,22 +22,10 @@ type AuditLogInput = {
 	metadata?: unknown;
 };
 
-export function redactAuditValue(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(redactAuditValue);
-	if (!value || typeof value !== "object") return value;
-	if (value instanceof Date) return value.toISOString();
-
-	const output: Record<string, unknown> = {};
-	for (const [key, item] of Object.entries(value)) {
-		output[key] = sensitiveKeyPattern.test(key)
-			? "[REDACTED]"
-			: redactAuditValue(item);
-	}
-	return output;
-}
+export const redactAuditValue = redactSensitiveValue;
 
 export async function writeAuditLog(ctx: AuditContext, input: AuditLogInput) {
-	await ctx.db.insert(auditLog).values({
+	const values = {
 		id: crypto.randomUUID(),
 		actorUserId: ctx.currentUser?.id ?? ctx.session?.user.id ?? null,
 		actorEmail: ctx.currentUser?.email ?? ctx.session?.user.email ?? null,
@@ -51,5 +39,41 @@ export async function writeAuditLog(ctx: AuditContext, input: AuditLogInput) {
 		requestIp: ctx.requestIp ?? null,
 		requestUserAgent: ctx.requestUserAgent ?? null,
 		metadata: input.metadata == null ? null : redactAuditValue(input.metadata),
+	};
+
+	const dbWithTransaction = ctx.db as typeof ctx.db & {
+		transaction?: <T>(
+			callback: (tx: typeof ctx.db) => Promise<T>,
+		) => Promise<T>;
+	};
+
+	if (!dbWithTransaction.transaction) {
+		await ctx.db.insert(auditLog).values(values);
+		return;
+	}
+
+	await dbWithTransaction.transaction(async (tx) => {
+		await tx.execute(sql`select pg_advisory_xact_lock(994218610)`);
+		const [previous] = await tx
+			.select({ entryHash: auditLog.entryHash })
+			.from(auditLog)
+			.orderBy(desc(auditLog.sequence))
+			.limit(1);
+		const [created] = await tx.insert(auditLog).values(values).returning();
+		if (!created) return;
+		const previousHash = previous?.entryHash ?? null;
+		const entryHash = hashAuditEntry(
+			{
+				...created,
+				previousHash,
+				entryHash: null,
+				hashAlgorithm: auditHashAlgorithm,
+			},
+			previousHash,
+		);
+		await tx
+			.update(auditLog)
+			.set({ previousHash, entryHash, hashAlgorithm: auditHashAlgorithm })
+			.where(eq(auditLog.id, created.id));
 	});
 }

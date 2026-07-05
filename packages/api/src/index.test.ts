@@ -1,0 +1,128 @@
+import { describe, expect, test } from "bun:test";
+import { TRPCError } from "@trpc/server";
+import { makeCurrentUser, makeSession } from "./test/helpers";
+
+process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
+process.env.BETTER_AUTH_SECRET ??= "x".repeat(32);
+process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
+process.env.CORS_ORIGIN ??= "http://localhost:3001";
+process.env.ADMIN_EMAILS = "bootstrap@example.com";
+process.env.META_WEBHOOK_VERIFY_TOKEN ??= "verify-token";
+process.env.NODE_ENV = "test";
+
+const { adminProcedure, protectedProcedure, router } = await import("./index");
+
+const testRouter = router({
+	protected: protectedProcedure.query(({ ctx }) => ctx.currentUser),
+	admin: adminProcedure.query(({ ctx }) => ctx.currentUser),
+});
+
+function createDbForCurrentUser(
+	currentUser: unknown,
+	permissionRows: Array<{ permissionKey: string }> = [],
+) {
+	return {
+		select: () => ({
+			joined: false,
+			from() {
+				return this;
+			},
+			innerJoin() {
+				this.joined = true;
+				return this;
+			},
+			where() {
+				if (this.joined) return Promise.resolve(permissionRows);
+				return this;
+			},
+			limit() {
+				return Promise.resolve(currentUser ? [currentUser] : []);
+			},
+		}),
+	};
+}
+
+function createCaller(currentUser: unknown, session = makeSession()) {
+	return testRouter.createCaller({
+		auth: null,
+		session,
+		db: createDbForCurrentUser(currentUser),
+		requestIp: null,
+		requestUserAgent: null,
+	} as never);
+}
+
+async function expectProcedureError(
+	value: Promise<unknown>,
+	code: TRPCError["code"],
+	message: string,
+) {
+	try {
+		await value;
+	} catch (error) {
+		expect(error).toBeInstanceOf(TRPCError);
+		expect((error as TRPCError).code).toBe(code);
+		expect((error as TRPCError).message).toContain(message);
+		return;
+	}
+	throw new Error(`Expected ${code}`);
+}
+
+describe("protectedProcedure", () => {
+	test("rejects unauthenticated users", async () => {
+		await expectProcedureError(
+			createCaller(null, null as never).protected(),
+			"UNAUTHORIZED",
+			"Authentication required",
+		);
+	});
+
+	test("rejects missing users", async () => {
+		await expectProcedureError(
+			createCaller(null).protected(),
+			"UNAUTHORIZED",
+			"User not found",
+		);
+	});
+
+	test("rejects suspended users", async () => {
+		await expectProcedureError(
+			createCaller(makeCurrentUser({ status: "suspended" })).protected(),
+			"FORBIDDEN",
+			"Account suspended",
+		);
+	});
+
+	test("allows active users", async () => {
+		await expect(
+			createCaller(makeCurrentUser()).protected(),
+		).resolves.toMatchObject({
+			id: "user-1",
+			status: "active",
+		});
+	});
+});
+
+describe("adminProcedure", () => {
+	test("allows persisted admins", async () => {
+		await expect(
+			createCaller(makeCurrentUser({ role: "admin" })).admin(),
+		).resolves.toMatchObject({ role: "admin" });
+	});
+
+	test("allows ADMIN_EMAILS bootstrap admins", async () => {
+		await expect(
+			createCaller(
+				makeCurrentUser({ email: "bootstrap@example.com", role: "member" }),
+			).admin(),
+		).resolves.toMatchObject({ email: "bootstrap@example.com" });
+	});
+
+	test("rejects members without bootstrap admin email", async () => {
+		await expectProcedureError(
+			createCaller(makeCurrentUser({ role: "member" })).admin(),
+			"FORBIDDEN",
+			"Permission required",
+		);
+	});
+});

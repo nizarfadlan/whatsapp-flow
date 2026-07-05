@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import type { createDb } from "@whatsapp-flow/db";
 import { account, session, user } from "@whatsapp-flow/db/schema/auth";
+import { userRoleAssignment } from "@whatsapp-flow/db/schema/rbac";
 import { and, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
-import { adminProcedure, router } from "../index";
+import { permissionProcedure, router } from "../index";
 
 const roleSchema = z.enum(["admin", "member"]);
 const statusSchema = z.enum(["active", "suspended"]);
@@ -52,7 +53,8 @@ async function countActiveAdmins(db: ReturnType<typeof createDb>) {
 	const [row] = await db
 		.select({ total: count() })
 		.from(user)
-		.where(and(eq(user.role, "admin"), eq(user.status, "active")));
+		.where(and(eq(user.role, "admin"), eq(user.status, "active")))
+		.limit(1);
 	return Number(row?.total ?? 0);
 }
 
@@ -84,7 +86,7 @@ async function ensureCanRemoveActiveAdmin(
 }
 
 export const userRouter = router({
-	list: adminProcedure
+	list: permissionProcedure("users.read")
 		.input(listUsersInputSchema)
 		.query(async ({ ctx, input }) => {
 			const where = listWhere(input);
@@ -134,7 +136,7 @@ export const userRouter = router({
 			};
 		}),
 
-	updateRole: adminProcedure
+	updateRole: permissionProcedure("roles.assign")
 		.input(z.object({ userId: z.string().min(1), role: roleSchema }))
 		.mutation(async ({ ctx, input }) => {
 			const target = await getUserOrThrow(ctx.db, input.userId);
@@ -162,6 +164,23 @@ export const userRouter = router({
 				});
 			}
 
+			await ctx.db
+				.delete(userRoleAssignment)
+				.where(
+					and(
+						eq(userRoleAssignment.userId, updated.id),
+						inArray(userRoleAssignment.roleId, ["role_admin", "role_member"]),
+					),
+				);
+			await ctx.db
+				.insert(userRoleAssignment)
+				.values({
+					userId: updated.id,
+					roleId: updated.role === "admin" ? "role_admin" : "role_member",
+					assignedByUserId: ctx.session.user.id,
+				})
+				.onConflictDoNothing();
+
 			await writeAuditLog(ctx, {
 				action: "user.role_updated",
 				targetType: "user",
@@ -177,7 +196,7 @@ export const userRouter = router({
 			};
 		}),
 
-	revokeSessions: adminProcedure
+	revokeSessions: permissionProcedure("users.revoke_sessions")
 		.input(z.object({ userId: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
 			if (input.userId === ctx.session.user.id) {
@@ -203,7 +222,7 @@ export const userRouter = router({
 			return { success: true, revoked: revoked.length };
 		}),
 
-	suspend: adminProcedure
+	suspend: permissionProcedure("users.suspend")
 		.input(
 			z.object({
 				userId: z.string().min(1),
@@ -262,7 +281,7 @@ export const userRouter = router({
 			return { ...safeUser(updated), revoked: revoked.length };
 		}),
 
-	reactivate: adminProcedure
+	reactivate: permissionProcedure("users.suspend")
 		.input(
 			z.object({
 				userId: z.string().min(1),

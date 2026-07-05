@@ -3,5 +3,7 @@ export * from "./auth";
 export * from "./contact";
 export * from "./device";
 export * from "./inbox";
+export * from "./job";
+export * from "./rbac";
 export * from "./settings";
 export * from "./webhook";
