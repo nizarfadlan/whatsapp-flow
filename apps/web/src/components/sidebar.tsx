@@ -54,6 +54,7 @@ const navItems = [
 	},
 	{ to: "/dashboard/logs", label: "Logs", icon: Activity, exact: false },
 	{ to: "/dashboard/webhooks", label: "Webhooks", icon: Webhook, exact: false },
+	{ to: "/dashboard/users", label: "Users", icon: UserCircle, exact: false },
 	{
 		to: "/dashboard/settings",
 		label: "Settings",

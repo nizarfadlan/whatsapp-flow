@@ -9,6 +9,7 @@ import { groupRouter } from "./group";
 import { inboxRouter } from "./inbox";
 import { mediaRouter } from "./media";
 import { settingsRouter } from "./settings";
+import { userRouter } from "./user";
 import { webhookRouter } from "./webhook";
 
 export const appRouter = router({
@@ -32,6 +33,7 @@ export const appRouter = router({
 	media: mediaRouter,
 	webhook: webhookRouter,
 	settings: settingsRouter,
+	user: userRouter,
 });
 
 export type AppRouter = typeof appRouter;

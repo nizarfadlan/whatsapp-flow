@@ -67,6 +67,7 @@ import {
 	MoreHorizontal,
 	Plus,
 	Save,
+	ShieldAlert,
 	Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -350,6 +351,122 @@ function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
 	);
 }
 
+type EnterpriseAuditCheck = {
+	id: string;
+	category: "security" | "reliability" | "operations" | "data" | "auth";
+	title: string;
+	status: "pass" | "warn" | "fail" | "manual";
+	evidence: string;
+	recommendation: string;
+};
+
+const auditCategories: EnterpriseAuditCheck["category"][] = [
+	"security",
+	"auth",
+	"data",
+	"reliability",
+	"operations",
+];
+
+function auditStatusVariant(status: EnterpriseAuditCheck["status"]) {
+	if (status === "pass") return "default" as const;
+	if (status === "fail") return "destructive" as const;
+	if (status === "manual") return "outline" as const;
+	return "secondary" as const;
+}
+
+function auditStatusLabel(status: EnterpriseAuditCheck["status"]) {
+	return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function auditCategoryLabel(category: EnterpriseAuditCheck["category"]) {
+	return category.charAt(0).toUpperCase() + category.slice(1);
+}
+
+function EnterpriseAuditPanel({
+	audit,
+}: {
+	audit?: {
+		generatedAt: Date | string;
+		summary: Record<EnterpriseAuditCheck["status"], number>;
+		checks: EnterpriseAuditCheck[];
+	};
+}) {
+	if (!audit) {
+		return (
+			<div className="rounded-lg border bg-muted/30 p-4 text-muted-foreground text-sm">
+				Loading enterprise readiness checks...
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				{(["pass", "warn", "fail", "manual"] as const).map((status) => (
+					<div key={status} className="rounded-lg border bg-muted/30 p-3">
+						<p className="text-muted-foreground text-xs uppercase tracking-wide">
+							{auditStatusLabel(status)}
+						</p>
+						<p className="font-semibold text-2xl">{audit.summary[status]}</p>
+					</div>
+				))}
+			</div>
+
+			<div className="rounded-lg border">
+				<Table>
+					<TableHeader>
+						<TableRow>
+							<TableHead>Check</TableHead>
+							<TableHead>Status</TableHead>
+							<TableHead>Evidence</TableHead>
+							<TableHead>Recommendation</TableHead>
+						</TableRow>
+					</TableHeader>
+					<TableBody>
+						{auditCategories.map((category) => {
+							const checks = audit.checks.filter(
+								(check) => check.category === category,
+							);
+							if (checks.length === 0) return null;
+							return checks.map((check, index) => (
+								<TableRow key={check.id}>
+									<TableCell className="align-top">
+										<div className="space-y-1">
+											{index === 0 && (
+												<Badge variant="outline">
+													{auditCategoryLabel(category)}
+												</Badge>
+											)}
+											<p className="font-medium">{check.title}</p>
+										</div>
+									</TableCell>
+									<TableCell className="align-top">
+										<Badge variant={auditStatusVariant(check.status)}>
+											{auditStatusLabel(check.status)}
+										</Badge>
+									</TableCell>
+									<TableCell className="max-w-md align-top text-muted-foreground text-sm">
+										{check.evidence}
+									</TableCell>
+									<TableCell className="max-w-md align-top text-sm">
+										{check.recommendation}
+									</TableCell>
+								</TableRow>
+							));
+						})}
+					</TableBody>
+				</Table>
+			</div>
+
+			<p className="text-muted-foreground text-xs">
+				Generated {new Date(audit.generatedAt).toLocaleString()}. This is a
+				runtime readiness snapshot, not an immutable compliance report.
+			</p>
+		</div>
+	);
+}
+
 function isValidOptionalEmail(value: string) {
 	const trimmed = value.trim();
 	if (!trimmed) return true;
@@ -391,6 +508,7 @@ function SettingsPage() {
 	const providersQuery = useQuery(
 		trpc.settings.listAuthProviders.queryOptions(),
 	);
+	const auditQuery = useQuery(trpc.settings.getEnterpriseAudit.queryOptions());
 
 	const providerById = useMemo(
 		() =>
@@ -541,9 +659,11 @@ function SettingsPage() {
 		}),
 	);
 
-	if (brandingQuery.error || providersQuery.error) {
+	if (brandingQuery.error || providersQuery.error || auditQuery.error) {
 		const message =
-			brandingQuery.error?.message ?? providersQuery.error?.message;
+			brandingQuery.error?.message ??
+			providersQuery.error?.message ??
+			auditQuery.error?.message;
 		return (
 			<div className="space-y-2">
 				<h2 className="font-semibold text-xl">Settings unavailable</h2>
@@ -1032,6 +1152,21 @@ function SettingsPage() {
 							</Table>
 						</TabsContent>
 					</Tabs>
+				</CardContent>
+			</Card>
+
+			<Card>
+				<CardHeader>
+					<CardTitle className="flex items-center gap-2">
+						<ShieldAlert className="size-5" />
+						Enterprise Audit
+					</CardTitle>
+					<CardDescription>
+						Runtime readiness checks for enterprise production hardening.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<EnterpriseAuditPanel audit={auditQuery.data} />
 				</CardContent>
 			</Card>
 

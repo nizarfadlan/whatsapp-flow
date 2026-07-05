@@ -16,6 +16,7 @@ import {
 	appSettings,
 	authProviderSetting,
 } from "@whatsapp-flow/db/schema/settings";
+import { env } from "@whatsapp-flow/env/server";
 import { asc, count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { adminProcedure, publicProcedure, router } from "../index";
@@ -331,6 +332,170 @@ async function getBranding(db: ReturnType<typeof createDb>) {
 	};
 }
 
+type EnterpriseAuditStatus = "pass" | "warn" | "fail" | "manual";
+type EnterpriseAuditCategory =
+	| "security"
+	| "reliability"
+	| "operations"
+	| "data"
+	| "auth";
+
+type EnterpriseAuditCheck = {
+	id: string;
+	category: EnterpriseAuditCategory;
+	title: string;
+	status: EnterpriseAuditStatus;
+	evidence: string;
+	recommendation: string;
+};
+
+function createEnterpriseAudit() {
+	const isProduction = env.NODE_ENV === "production";
+	const storageDriver = env.STORAGE_DRIVER ?? "local";
+	const adminEmails =
+		env.ADMIN_EMAILS?.split(",")
+			.map((email) => email.trim())
+			.filter(Boolean) ?? [];
+	const checks: EnterpriseAuditCheck[] = [
+		{
+			id: "runtime-production-mode",
+			category: "operations",
+			title: "Runtime environment is explicit",
+			status: isProduction ? "pass" : "manual",
+			evidence: `NODE_ENV is ${env.NODE_ENV}.`,
+			recommendation:
+				"Run production deployments with NODE_ENV=production and validate environment variables during release.",
+		},
+		{
+			id: "settings-encryption-key",
+			category: "security",
+			title: "Settings encryption key is configured",
+			status: env.SETTINGS_ENCRYPTION_KEY
+				? "pass"
+				: isProduction
+					? "fail"
+					: "warn",
+			evidence: env.SETTINGS_ENCRYPTION_KEY
+				? "SETTINGS_ENCRYPTION_KEY is present."
+				: "SETTINGS_ENCRYPTION_KEY is missing.",
+			recommendation:
+				"Configure a strong SETTINGS_ENCRYPTION_KEY before storing OAuth, OIDC, or provider secrets.",
+		},
+		{
+			id: "admin-bootstrap",
+			category: "auth",
+			title: "Admin bootstrap is configured",
+			status: adminEmails.length > 0 ? "pass" : "warn",
+			evidence:
+				adminEmails.length > 0
+					? `${adminEmails.length} ADMIN_EMAILS entr${adminEmails.length === 1 ? "y" : "ies"} configured.`
+					: "ADMIN_EMAILS is empty; admin access depends only on persisted user roles.",
+			recommendation:
+				"Keep at least one audited bootstrap admin path and migrate long-term access to persisted admin roles.",
+		},
+		{
+			id: "storage-driver",
+			category: "data",
+			title: "Media storage is production durable",
+			status: isProduction && storageDriver !== "s3" ? "warn" : "pass",
+			evidence: `STORAGE_DRIVER resolves to ${storageDriver}.`,
+			recommendation:
+				"Use S3-compatible durable object storage for production media instead of local ephemeral disk.",
+		},
+		{
+			id: "baileys-session-encryption",
+			category: "security",
+			title: "Baileys session state requires encryption hardening",
+			status: "fail",
+			evidence:
+				"Baileys auth state is stored in device.sessionData JSONB, which is not encrypted at the schema boundary.",
+			recommendation:
+				"Encrypt Baileys credentials/keys or migrate them into the encrypted provider-secret storage model.",
+		},
+		{
+			id: "meta-secret-storage",
+			category: "security",
+			title: "Meta provider secrets use encrypted storage",
+			status: "pass",
+			evidence:
+				"Meta access tokens and app secrets are stored through the provider-secret encryption path.",
+			recommendation:
+				"Continue keeping token values server-only and display only non-secret metadata in the UI.",
+		},
+		{
+			id: "meta-graph-timeouts",
+			category: "reliability",
+			title: "Meta Graph calls need timeout and retry policy",
+			status: "warn",
+			evidence:
+				"Meta Graph fetch calls are direct network calls without a shared timeout/backoff policy.",
+			recommendation:
+				"Add AbortSignal timeouts, bounded retries, and provider-aware error classification for Meta requests.",
+		},
+		{
+			id: "in-process-dispatchers",
+			category: "reliability",
+			title: "Dispatchers are in-process",
+			status: "warn",
+			evidence:
+				"Flow and webhook dispatchers run in-process, which can double-run under multiple replicas and lose work on restarts.",
+			recommendation:
+				"Move flow execution, outbound sends, and webhook delivery to a durable queue/worker model.",
+		},
+		{
+			id: "audit-log",
+			category: "operations",
+			title: "Sensitive admin actions need immutable audit logs",
+			status: "warn",
+			evidence:
+				"There is no persistent audit-log table for auth settings, credential changes, user role changes, or device admin actions.",
+			recommendation:
+				"Add an append-only audit log before enabling broader enterprise admin workflows.",
+		},
+		{
+			id: "rbac-depth",
+			category: "auth",
+			title: "RBAC is coarse grained",
+			status: "warn",
+			evidence: "Authorization currently uses global admin/member roles.",
+			recommendation:
+				"Add scoped permissions or organization/team roles if enterprise customers need separation of duties.",
+		},
+		{
+			id: "automated-tests",
+			category: "operations",
+			title: "Enterprise paths need automated tests",
+			status: "manual",
+			evidence:
+				"No package-level automated test suite was found during repository audit.",
+			recommendation:
+				"Add integration and contract tests for Meta webhooks, admin auth, user role changes, and dispatchers.",
+		},
+		{
+			id: "migration-release-checks",
+			category: "operations",
+			title: "Migration and deployment checks need CI enforcement",
+			status: "manual",
+			evidence:
+				"Drizzle migrations exist, but production release should explicitly verify pending migrations and env readiness.",
+			recommendation:
+				"Run migration verification, typecheck, build, and env validation in CI before deploy.",
+		},
+	];
+	const summary = checks.reduce(
+		(acc, check) => {
+			acc[check.status] += 1;
+			return acc;
+		},
+		{ pass: 0, warn: 0, fail: 0, manual: 0 } satisfies Record<
+			EnterpriseAuditStatus,
+			number
+		>,
+	);
+
+	return { generatedAt: new Date(), summary, checks };
+}
+
 export const settingsRouter = router({
 	public: publicProcedure.query(async ({ ctx }) => {
 		const [branding, providerRows] = await Promise.all([
@@ -376,6 +541,8 @@ export const settingsRouter = router({
 	}),
 
 	getBranding: adminProcedure.query(async ({ ctx }) => getBranding(ctx.db)),
+
+	getEnterpriseAudit: adminProcedure.query(() => createEnterpriseAudit()),
 
 	updateBranding: adminProcedure
 		.input(brandingInputSchema)
