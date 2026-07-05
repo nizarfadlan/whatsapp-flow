@@ -91,6 +91,8 @@ export const userInvitation = pgTable(
 		expiresAt: timestamp("expires_at").notNull(),
 		acceptedAt: timestamp("accepted_at"),
 		revokedAt: timestamp("revoked_at"),
+		emailSentAt: timestamp("email_sent_at"),
+		emailError: text("email_error"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")
 			.defaultNow()

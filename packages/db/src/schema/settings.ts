@@ -31,6 +31,22 @@ export const appSettings = pgTable("app_settings", {
 		.notNull(),
 });
 
+export const smtpSetting = pgTable("smtp_setting", {
+	id: text("id").primaryKey(),
+	host: text("host"),
+	port: integer("port"),
+	secure: boolean("secure").default(false).notNull(),
+	user: text("user"),
+	passwordEncrypted: text("password_encrypted"),
+	passwordUpdatedAt: timestamp("password_updated_at"),
+	fromAddress: text("from_address"),
+	createdAt: timestamp("created_at").defaultNow().notNull(),
+	updatedAt: timestamp("updated_at")
+		.defaultNow()
+		.$onUpdate(() => /* @__PURE__ */ new Date())
+		.notNull(),
+});
+
 export const authProviderSetting = pgTable(
 	"auth_provider_setting",
 	{

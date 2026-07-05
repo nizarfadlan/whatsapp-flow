@@ -16,12 +16,23 @@ import { device } from "@whatsapp-flow/db/schema/device";
 import {
 	appSettings,
 	authProviderSetting,
+	smtpSetting,
 } from "@whatsapp-flow/db/schema/settings";
 import { env } from "@whatsapp-flow/env/server";
 import { and, asc, count, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
-import { adminProcedure, publicProcedure, router } from "../index";
+import {
+	isEnvSmtpConfigured,
+	SMTP_SETTINGS_ID,
+	sendSmtpTestEmail,
+} from "../email";
+import {
+	adminProcedure,
+	permissionProcedure,
+	publicProcedure,
+	router,
+} from "../index";
 
 const APP_SETTINGS_ID = "global";
 const DEFAULT_BRANDING = {
@@ -125,6 +136,59 @@ const brandingInputSchema = z.object({
 	faviconUrl: optionalUrlSchema,
 	primaryColor: optionalHexColorSchema,
 	supportEmail: optionalEmailSchema,
+});
+
+const optionalSmtpTextSchema = z
+	.string()
+	.nullable()
+	.optional()
+	.transform(emptyToNull)
+	.pipe(z.string().max(512).nullable());
+
+const optionalSmtpHostSchema = z
+	.string()
+	.nullable()
+	.optional()
+	.transform(emptyToNull)
+	.pipe(z.string().max(253).nullable());
+
+const optionalSmtpPasswordSchema = z
+	.string()
+	.max(4096)
+	.optional()
+	.transform((value) => emptyToNull(value) ?? undefined);
+
+const smtpInputSchema = z
+	.object({
+		host: optionalSmtpHostSchema,
+		port: z.coerce.number().int().min(1).max(65535).default(587),
+		secure: z.boolean().default(false),
+		user: optionalSmtpTextSchema,
+		password: optionalSmtpPasswordSchema,
+		clearPassword: z.boolean().default(false),
+		fromAddress: optionalEmailSchema,
+	})
+	.superRefine((input, ctx) => {
+		const hasDatabaseConfig = Boolean(input.host || input.fromAddress);
+		if (!hasDatabaseConfig) return;
+		if (!input.host) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["host"],
+				message: "SMTP host is required when configuring database SMTP",
+			});
+		}
+		if (!input.fromAddress) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["fromAddress"],
+				message: "From email is required when configuring database SMTP",
+			});
+		}
+	});
+
+const smtpTestInputSchema = z.object({
+	to: z.email(),
 });
 
 const createOidcProviderInputSchema = z.object({
@@ -334,6 +398,43 @@ async function getBranding(db: ReturnType<typeof createDb>) {
 	};
 }
 
+async function getSmtpRow(db: ReturnType<typeof createDb>) {
+	const [row] = await db
+		.select()
+		.from(smtpSetting)
+		.where(eq(smtpSetting.id, SMTP_SETTINGS_ID))
+		.limit(1);
+	return row ?? null;
+}
+
+function isDatabaseSmtpConfigured(row: typeof smtpSetting.$inferSelect | null) {
+	return Boolean(row?.host && row.port && row.fromAddress);
+}
+
+function safeSmtpSetting(row: typeof smtpSetting.$inferSelect | null) {
+	const databaseConfigured = isDatabaseSmtpConfigured(row);
+	const envConfigured = isEnvSmtpConfigured();
+	const source = databaseConfigured
+		? "database"
+		: envConfigured
+			? "environment"
+			: "none";
+
+	return {
+		host: row?.host ?? "",
+		port: row?.port ?? 587,
+		secure: row?.secure ?? false,
+		user: row?.user ?? "",
+		fromAddress: row?.fromAddress ?? "",
+		hasPassword: Boolean(row?.passwordEncrypted),
+		passwordUpdatedAt: row?.passwordUpdatedAt ?? null,
+		databaseConfigured,
+		envConfigured,
+		configured: databaseConfigured || envConfigured,
+		source,
+	};
+}
+
 type EnterpriseAuditStatus = "pass" | "warn" | "fail" | "manual";
 type EnterpriseAuditCategory =
 	| "security"
@@ -358,6 +459,7 @@ async function createEnterpriseAudit(db: ReturnType<typeof createDb>) {
 		env.ADMIN_EMAILS?.split(",")
 			.map((email) => email.trim())
 			.filter(Boolean) ?? [];
+	const smtpStatus = safeSmtpSetting(await getSmtpRow(db));
 	const [legacyBaileysRows] = await db
 		.select({ total: count() })
 		.from(device)
@@ -456,6 +558,17 @@ async function createEnterpriseAudit(db: ReturnType<typeof createDb>) {
 				"Meta Graph requests use bounded AbortSignal timeouts and retry only transient network/status failures.",
 			recommendation:
 				"Monitor retryable Meta failures and tune timeouts only if production telemetry shows a need.",
+		},
+		{
+			id: "smtp-delivery",
+			category: "operations",
+			title: "Invite email SMTP delivery is configured",
+			status: smtpStatus.configured ? "pass" : "warn",
+			evidence: smtpStatus.configured
+				? `SMTP delivery is configured through ${smtpStatus.source === "database" ? "database settings" : "environment fallback"}.`
+				: "SMTP delivery is not configured; invite links must be copied manually.",
+			recommendation:
+				"Configure SMTP in Settings or via SMTP_* environment variables so user invitations can be emailed automatically.",
 		},
 		{
 			id: "in-process-dispatchers",
@@ -580,6 +693,100 @@ export const settingsRouter = router({
 	getEnterpriseAudit: adminProcedure.query(async ({ ctx }) =>
 		createEnterpriseAudit(ctx.db),
 	),
+
+	getSmtpSettings: permissionProcedure("settings.read").query(async ({ ctx }) =>
+		safeSmtpSetting(await getSmtpRow(ctx.db)),
+	),
+
+	updateSmtpSettings: permissionProcedure("settings.manage")
+		.input(smtpInputSchema)
+		.mutation(async ({ ctx, input }) => {
+			const existing = await getSmtpRow(ctx.db);
+			const before = safeSmtpSetting(existing);
+			const encryptedPassword = input.password
+				? encryptSecret(input.password)
+				: undefined;
+			const passwordFields = input.clearPassword
+				? {
+						passwordEncrypted: null,
+						passwordUpdatedAt: null,
+					}
+				: encryptedPassword
+					? {
+							passwordEncrypted: encryptedPassword,
+							passwordUpdatedAt: new Date(),
+						}
+					: {};
+
+			const [row] = await ctx.db
+				.insert(smtpSetting)
+				.values({
+					id: SMTP_SETTINGS_ID,
+					host: input.host,
+					port: input.port,
+					secure: input.secure,
+					user: input.user,
+					fromAddress: input.fromAddress,
+					passwordEncrypted: encryptedPassword ?? null,
+					passwordUpdatedAt: encryptedPassword ? new Date() : null,
+				})
+				.onConflictDoUpdate({
+					target: smtpSetting.id,
+					set: {
+						host: input.host,
+						port: input.port,
+						secure: input.secure,
+						user: input.user,
+						fromAddress: input.fromAddress,
+						updatedAt: new Date(),
+						...passwordFields,
+					},
+				})
+				.returning();
+
+			if (!row) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "SMTP settings were not saved",
+				});
+			}
+
+			const after = safeSmtpSetting(row);
+			await writeAuditLog(ctx, {
+				action: "settings.smtp_updated",
+				targetType: "settings",
+				targetId: SMTP_SETTINGS_ID,
+				targetDisplay: "SMTP settings",
+				before,
+				after,
+				metadata: {
+					passwordRotated: Boolean(encryptedPassword),
+					passwordCleared: input.clearPassword,
+				},
+			});
+
+			return after;
+		}),
+
+	sendSmtpTestEmail: permissionProcedure("settings.manage")
+		.input(smtpTestInputSchema)
+		.mutation(async ({ ctx, input }) => {
+			const result = await sendSmtpTestEmail(ctx.db, input);
+			await writeAuditLog(ctx, {
+				action: result.sent
+					? "settings.smtp_test_succeeded"
+					: "settings.smtp_test_failed",
+				targetType: "settings",
+				targetId: SMTP_SETTINGS_ID,
+				targetDisplay: "SMTP settings",
+				metadata: {
+					recipient: input.to,
+					source: result.source,
+					error: result.sent ? null : result.error,
+				},
+			});
+			return result;
+		}),
 
 	updateBranding: adminProcedure
 		.input(brandingInputSchema)

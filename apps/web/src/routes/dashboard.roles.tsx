@@ -106,7 +106,7 @@ function RolesPage() {
 	);
 
 	const togglePermission = (permissionKey: string, checked: boolean) => {
-		if (!selectedRole) return;
+		if (!selectedRole || selectedRole.isSystem) return;
 		const next = new Set(selectedPermissions);
 		if (checked) next.add(permissionKey);
 		else next.delete(permissionKey);
@@ -233,8 +233,10 @@ function RolesPage() {
 					<CardHeader>
 						<CardTitle>{selectedRole?.name ?? "Select a role"}</CardTitle>
 						<CardDescription>
-							{selectedRole?.description ??
-								"Choose a role to edit its permissions."}
+							{selectedRole?.isSystem
+								? "System role permissions are managed by the application and cannot be changed here. Create a custom role for editable permissions."
+								: (selectedRole?.description ??
+									"Choose a role to edit its permissions.")}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -247,12 +249,16 @@ function RolesPage() {
 											{items.map((permission) => (
 												<div
 													key={permission.key}
-													className="flex items-start gap-3 rounded-lg border p-3"
+													className={`flex items-start gap-3 rounded-lg border p-3 ${selectedRole?.isSystem ? "bg-muted/30 opacity-60" : ""}`}
 												>
 													<Checkbox
 														aria-label={`Toggle ${permission.key}`}
 														checked={selectedPermissionSet.has(permission.key)}
-														disabled={!selectedRole || setPermissions.isPending}
+														disabled={
+															!selectedRole ||
+															selectedRole.isSystem ||
+															setPermissions.isPending
+														}
 														onCheckedChange={(checked) =>
 															togglePermission(permission.key, checked === true)
 														}

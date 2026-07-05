@@ -13,16 +13,18 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@trpc/client": "catalog:",
+		"@trpc/server": "catalog:",
+		"@types/nodemailer": "^8.0.1",
 		"@whatsapp-flow/auth": "workspace:*",
 		"@whatsapp-flow/db": "workspace:*",
 		"@whatsapp-flow/env": "workspace:*",
+		"@whatsapp-flow/storage": "workspace:*",
 		"@whatsapp-flow/whatsapp": "workspace:*",
-		"@trpc/client": "catalog:",
-		"@trpc/server": "catalog:",
 		"dotenv": "catalog:",
 		"drizzle-orm": "^0.45.1",
-		"zod": "catalog:",
-		"@whatsapp-flow/storage": "workspace:*"
+		"nodemailer": "^9.0.3",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@whatsapp-flow/config": "workspace:*",

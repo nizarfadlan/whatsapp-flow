@@ -209,6 +209,12 @@ export const rbacRouter = router({
 		)
 		.mutation(async ({ ctx, input }) => {
 			const existing = await ensureRoleExists(ctx.db, input.roleId);
+			if (existing.isSystem) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "System role permissions cannot be changed",
+				});
+			}
 			if (!input.permissions.includes("roles.manage")) {
 				await ensureCanRemoveAdminEquivalent(ctx.db, existing.id);
 			}

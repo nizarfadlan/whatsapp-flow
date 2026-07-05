@@ -64,6 +64,7 @@ import {
 	Bot,
 	Edit3,
 	KeyRound,
+	Mail,
 	MoreHorizontal,
 	Plus,
 	Save,
@@ -127,6 +128,17 @@ type BrandingForm = {
 	supportEmail: string;
 };
 
+type SmtpForm = {
+	host: string;
+	port: number;
+	secure: boolean;
+	user: string;
+	password: string;
+	clearPassword: boolean;
+	fromAddress: string;
+	testTo: string;
+};
+
 type ProviderForm = {
 	type: ProviderType;
 	providerId: string;
@@ -154,6 +166,17 @@ const emptyBrandingForm: BrandingForm = {
 	faviconUrl: "",
 	primaryColor: "",
 	supportEmail: "",
+};
+
+const emptySmtpForm: SmtpForm = {
+	host: "",
+	port: 587,
+	secure: false,
+	user: "",
+	password: "",
+	clearPassword: false,
+	fromAddress: "",
+	testTo: "",
 };
 
 const defaultProviderForms: Record<OAuthProviderId, ProviderForm> = {
@@ -332,6 +355,18 @@ function providerStatusVariant(
 	return provider?.enabled ? "default" : "secondary";
 }
 
+function smtpSourceLabel(source?: string) {
+	if (source === "database") return "Database";
+	if (source === "environment") return "Environment fallback";
+	return "Not configured";
+}
+
+function smtpSourceVariant(source?: string) {
+	if (source === "database") return "default" as const;
+	if (source === "environment") return "secondary" as const;
+	return "outline" as const;
+}
+
 function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
 	if (iconUrl) {
 		return (
@@ -497,6 +532,7 @@ function SettingsPage() {
 	const queryClient = useQueryClient();
 	const [brandingForm, setBrandingForm] =
 		useState<BrandingForm>(emptyBrandingForm);
+	const [smtpForm, setSmtpForm] = useState<SmtpForm>(emptySmtpForm);
 	const [providerTab, setProviderTab] = useState<ProviderTab>("oauth");
 	const [providerSheetOpen, setProviderSheetOpen] = useState(false);
 	const [providerForm, setProviderForm] = useState<ProviderForm | null>(null);
@@ -505,6 +541,7 @@ function SettingsPage() {
 	const [deleteProviderId, setDeleteProviderId] = useState<string | null>(null);
 
 	const brandingQuery = useQuery(trpc.settings.getBranding.queryOptions());
+	const smtpQuery = useQuery(trpc.settings.getSmtpSettings.queryOptions());
 	const providersQuery = useQuery(
 		trpc.settings.listAuthProviders.queryOptions(),
 	);
@@ -544,6 +581,8 @@ function SettingsPage() {
 		? providerById.get(deleteProviderId)
 		: null;
 	const supportEmailInvalid = !isValidOptionalEmail(brandingForm.supportEmail);
+	const smtpFromInvalid = !isValidOptionalEmail(smtpForm.fromAddress);
+	const smtpTestInvalid = !isValidOptionalEmail(smtpForm.testTo);
 
 	const openProviderSheet = (form: ProviderForm) => {
 		setProviderForm(form);
@@ -579,12 +618,58 @@ function SettingsPage() {
 		});
 	}, [brandingQuery.data]);
 
+	useEffect(() => {
+		if (!smtpQuery.data) return;
+		setSmtpForm((current) => ({
+			...current,
+			host: smtpQuery.data.host ?? "",
+			port: smtpQuery.data.port ?? 587,
+			secure: smtpQuery.data.secure,
+			user: smtpQuery.data.user ?? "",
+			password: "",
+			clearPassword: false,
+			fromAddress: smtpQuery.data.fromAddress ?? "",
+		}));
+	}, [smtpQuery.data]);
+
 	const saveBranding = useMutation(
 		trpc.settings.updateBranding.mutationOptions({
 			onSuccess: () => {
 				toast.success("Branding settings saved");
 				brandingQuery.refetch();
 				invalidatePublicSettings();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+
+	const saveSmtp = useMutation(
+		trpc.settings.updateSmtpSettings.mutationOptions({
+			onSuccess: () => {
+				toast.success("SMTP settings saved");
+				setSmtpForm((current) => ({
+					...current,
+					password: "",
+					clearPassword: false,
+				}));
+				smtpQuery.refetch();
+				auditQuery.refetch();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+
+	const testSmtp = useMutation(
+		trpc.settings.sendSmtpTestEmail.mutationOptions({
+			onSuccess: (result) => {
+				if (result.sent) {
+					toast.success(
+						`SMTP test email sent via ${smtpSourceLabel(result.source)}`,
+					);
+				} else {
+					toast.error(result.error);
+				}
+				auditQuery.refetch();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -659,9 +744,15 @@ function SettingsPage() {
 		}),
 	);
 
-	if (brandingQuery.error || providersQuery.error || auditQuery.error) {
+	if (
+		brandingQuery.error ||
+		smtpQuery.error ||
+		providersQuery.error ||
+		auditQuery.error
+	) {
 		const message =
 			brandingQuery.error?.message ??
+			smtpQuery.error?.message ??
 			providersQuery.error?.message ??
 			auditQuery.error?.message;
 		return (
@@ -690,6 +781,38 @@ function SettingsPage() {
 			primaryColor: brandingForm.primaryColor.trim(),
 			supportEmail: brandingForm.supportEmail.trim(),
 		});
+	};
+
+	const submitSmtp = () => {
+		const host = smtpForm.host.trim();
+		const fromAddress = smtpForm.fromAddress.trim();
+		if ((host || fromAddress) && (!host || !fromAddress)) {
+			toast.error("SMTP host and from email are required together");
+			return;
+		}
+		if (smtpFromInvalid) {
+			toast.error("Enter a valid from email address");
+			return;
+		}
+
+		saveSmtp.mutate({
+			host,
+			port: smtpForm.port,
+			secure: smtpForm.secure,
+			user: smtpForm.user.trim(),
+			password: smtpForm.password,
+			clearPassword: smtpForm.clearPassword,
+			fromAddress,
+		});
+	};
+
+	const submitSmtpTest = () => {
+		const to = smtpForm.testTo.trim();
+		if (!to || smtpTestInvalid) {
+			toast.error("Enter a valid test recipient email");
+			return;
+		}
+		testSmtp.mutate({ to });
 	};
 
 	const submitProvider = () => {
@@ -959,6 +1082,205 @@ function SettingsPage() {
 				</CardContent>
 			</Card>
 
+			<Card>
+				<CardHeader>
+					<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+						<div className="space-y-1">
+							<CardTitle className="flex items-center gap-2">
+								<Mail className="size-5" />
+								Email / SMTP
+							</CardTitle>
+							<CardDescription>
+								Configure outbound email for user invitations and operational
+								notifications.
+							</CardDescription>
+						</div>
+						<Badge variant={smtpSourceVariant(smtpQuery.data?.source)}>
+							{smtpSourceLabel(smtpQuery.data?.source)}
+						</Badge>
+					</div>
+				</CardHeader>
+				<CardContent className="space-y-5">
+					<div className="rounded-lg border bg-muted/40 p-4 text-muted-foreground text-sm">
+						Database SMTP settings override environment variables when host,
+						port, and from email are set. Clear host/from email to restore
+						environment fallback. The password is write-only and never shown
+						after saving.
+					</div>
+					<div className="grid gap-4 md:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="smtpHost">SMTP host</Label>
+							<Input
+								id="smtpHost"
+								placeholder="smtp.example.com"
+								value={smtpForm.host}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										host: event.target.value,
+									}))
+								}
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="smtpPort">Port</Label>
+							<Input
+								id="smtpPort"
+								type="number"
+								min={1}
+								max={65535}
+								value={smtpForm.port}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										port: Number(event.target.value) || 587,
+									}))
+								}
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="smtpUser">Username</Label>
+							<Input
+								id="smtpUser"
+								value={smtpForm.user}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										user: event.target.value,
+									}))
+								}
+							/>
+						</div>
+						<div className="space-y-2">
+							<div className="flex items-center justify-between gap-3">
+								<Label htmlFor="smtpPassword">Password</Label>
+								<Badge
+									variant={
+										smtpQuery.data?.hasPassword ? "secondary" : "outline"
+									}
+								>
+									{smtpQuery.data?.hasPassword ? "Stored" : "Missing"}
+								</Badge>
+							</div>
+							<Input
+								id="smtpPassword"
+								type="password"
+								placeholder="Leave blank to keep existing password"
+								value={smtpForm.password}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										password: event.target.value,
+										clearPassword: false,
+									}))
+								}
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="smtpFrom">From email</Label>
+							<Input
+								id="smtpFrom"
+								type="email"
+								aria-invalid={smtpFromInvalid || undefined}
+								placeholder="noreply@example.com"
+								value={smtpForm.fromAddress}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										fromAddress: event.target.value,
+									}))
+								}
+							/>
+							{smtpFromInvalid && (
+								<p className="text-destructive text-xs">
+									Enter a valid email address.
+								</p>
+							)}
+						</div>
+						<div className="space-y-3 rounded-lg border p-3">
+							<div className="flex items-center justify-between gap-3">
+								<div className="space-y-1">
+									<Label htmlFor="smtpSecure">Secure TLS</Label>
+									<p className="text-muted-foreground text-xs">
+										Use implicit TLS, commonly port 465.
+									</p>
+								</div>
+								<Switch
+									id="smtpSecure"
+									checked={smtpForm.secure}
+									onCheckedChange={(checked) =>
+										setSmtpForm((current) => ({ ...current, secure: checked }))
+									}
+								/>
+							</div>
+							{smtpQuery.data?.hasPassword && (
+								<div className="flex items-center justify-between gap-3 border-t pt-3">
+									<div className="space-y-1">
+										<Label htmlFor="smtpClearPassword">
+											Clear stored password
+										</Label>
+										<p className="text-muted-foreground text-xs">
+											Use this for unauthenticated SMTP relay.
+										</p>
+									</div>
+									<Switch
+										id="smtpClearPassword"
+										checked={smtpForm.clearPassword}
+										onCheckedChange={(checked) =>
+											setSmtpForm((current) => ({
+												...current,
+												clearPassword: checked,
+												password: checked ? "" : current.password,
+											}))
+										}
+									/>
+								</div>
+							)}
+						</div>
+					</div>
+					<Button
+						type="button"
+						onClick={submitSmtp}
+						disabled={saveSmtp.isPending || smtpFromInvalid}
+					>
+						<Save />
+						{saveSmtp.isPending ? "Saving..." : "Save SMTP"}
+					</Button>
+					<div className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-end">
+						<div className="space-y-2">
+							<Label htmlFor="smtpTestTo">Test recipient</Label>
+							<Input
+								id="smtpTestTo"
+								type="email"
+								aria-invalid={smtpTestInvalid || undefined}
+								placeholder="admin@example.com"
+								value={smtpForm.testTo}
+								onChange={(event) =>
+									setSmtpForm((current) => ({
+										...current,
+										testTo: event.target.value,
+									}))
+								}
+							/>
+							{smtpTestInvalid && (
+								<p className="text-destructive text-xs">
+									Enter a valid email address.
+								</p>
+							)}
+						</div>
+						<Button
+							type="button"
+							variant="outline"
+							disabled={
+								testSmtp.isPending || smtpTestInvalid || !smtpForm.testTo
+							}
+							onClick={submitSmtpTest}
+						>
+							{testSmtp.isPending ? "Sending..." : "Send test email"}
+						</Button>
+					</div>
+				</CardContent>
+			</Card>
 			<Card>
 				<CardHeader>
 					<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

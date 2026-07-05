@@ -7,9 +7,11 @@ import {
 	userInvitation,
 	userRoleAssignment,
 } from "@whatsapp-flow/db/schema/rbac";
+import { env } from "@whatsapp-flow/env/server";
 import { and, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
+import { sendInviteEmail } from "../email";
 import {
 	permissionProcedure,
 	protectedProcedure,
@@ -71,6 +73,11 @@ function createInviteToken() {
 
 function hashInviteToken(token: string) {
 	return createHash("sha256").update(token).digest("hex");
+}
+
+function createInviteLink(token: string) {
+	const baseUrl = env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL;
+	return `${baseUrl.replace(/\/$/, "")}/login?invite=${encodeURIComponent(token)}`;
 }
 
 async function countActiveAdmins(db: ReturnType<typeof createDb>) {
@@ -265,6 +272,26 @@ export const userRouter = router({
 				});
 			}
 
+			const inviteLink = createInviteLink(token);
+			const emailResult = await sendInviteEmail(
+				{
+					to: email,
+					inviteLink,
+					roleName: targetRole.name,
+					expiresAt: created.expiresAt,
+					invitedByEmail: ctx.currentUser.email,
+				},
+				{ db: ctx.db },
+			);
+			await ctx.db
+				.update(userInvitation)
+				.set({
+					emailSentAt: emailResult.sent ? new Date() : null,
+					emailError: emailResult.sent ? null : emailResult.error,
+					updatedAt: new Date(),
+				})
+				.where(eq(userInvitation.id, created.id));
+
 			await writeAuditLog(ctx, {
 				action: "user.invited",
 				targetType: "user_invitation",
@@ -280,6 +307,9 @@ export const userRouter = router({
 				roleName: targetRole.name,
 				expiresAt: created.expiresAt,
 				token,
+				inviteLink,
+				emailSent: emailResult.sent,
+				emailError: emailResult.sent ? null : emailResult.error,
 			};
 		}),
 
@@ -293,6 +323,8 @@ export const userRouter = router({
 				createdAt: userInvitation.createdAt,
 				acceptedAt: userInvitation.acceptedAt,
 				revokedAt: userInvitation.revokedAt,
+				emailSentAt: userInvitation.emailSentAt,
+				emailError: userInvitation.emailError,
 				roleName: role.name,
 			})
 			.from(userInvitation)

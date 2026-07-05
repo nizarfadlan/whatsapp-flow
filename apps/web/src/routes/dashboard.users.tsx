@@ -162,11 +162,16 @@ function UsersPage() {
 	const createInvite = useMutation(
 		trpc.user.createInvite.mutationOptions({
 			onSuccess: (result) => {
-				const link = `${window.location.origin}/login?invite=${encodeURIComponent(result.token)}`;
-				setInviteLink(link);
+				setInviteLink(result.inviteLink);
 				setInviteEmail("");
 				void invitesQuery.refetch();
-				toast.success("Invite created");
+				if (result.emailSent) {
+					toast.success("Invite created and email sent");
+				} else {
+					toast.warning(
+						result.emailError ?? "Invite created; email was not sent",
+					);
+				}
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -385,6 +390,7 @@ function UsersPage() {
 											<TableHead>Email</TableHead>
 											<TableHead>Role</TableHead>
 											<TableHead>Status</TableHead>
+											<TableHead>Email delivery</TableHead>
 											<TableHead>Expires</TableHead>
 											<TableHead className="text-right">Actions</TableHead>
 										</TableRow>
@@ -396,6 +402,15 @@ function UsersPage() {
 												<TableCell>{invite.roleName}</TableCell>
 												<TableCell>
 													<Badge variant="outline">{invite.status}</Badge>
+												</TableCell>
+												<TableCell>
+													{invite.emailSentAt ? (
+														<Badge variant="secondary">Sent</Badge>
+													) : invite.emailError ? (
+														<Badge variant="destructive">Failed</Badge>
+													) : (
+														<Badge variant="outline">Not sent</Badge>
+													)}
 												</TableCell>
 												<TableCell className="text-muted-foreground text-sm">
 													{new Date(invite.expiresAt).toLocaleDateString()}
