@@ -1,5 +1,6 @@
+import { decryptSecret, encryptSecret } from "@whatsapp-flow/auth/crypto";
 import { db } from "@whatsapp-flow/db";
-import { device } from "@whatsapp-flow/db/schema/device";
+import { device, deviceProviderSecret } from "@whatsapp-flow/db/schema/device";
 import {
 	type AuthenticationCreds,
 	type AuthenticationState,
@@ -9,7 +10,7 @@ import {
 	type SignalDataSet,
 	type SignalDataTypeMap,
 } from "baileys";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 type StoredAuthState = {
 	creds?: unknown;
@@ -20,6 +21,7 @@ type StoredAuthState = {
 
 type KeyStore = NonNullable<StoredAuthState["keys"]>;
 
+const BAILEYS_AUTH_STATE_KEY = "auth_state";
 const authStateWriteQueues = new Map<string, Promise<void>>();
 
 function enqueueAuthStateWrite(deviceId: string, write: () => Promise<void>) {
@@ -43,6 +45,24 @@ function deserialize<T>(value: unknown): T {
 }
 
 async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
+	const [encrypted] = await db
+		.select({ encryptedValue: deviceProviderSecret.encryptedValue })
+		.from(deviceProviderSecret)
+		.where(
+			and(
+				eq(deviceProviderSecret.deviceId, deviceId),
+				eq(deviceProviderSecret.key, BAILEYS_AUTH_STATE_KEY),
+			),
+		)
+		.limit(1);
+
+	if (encrypted) {
+		return JSON.parse(
+			decryptSecret(encrypted.encryptedValue),
+			BufferJSON.reviver,
+		) as StoredAuthState;
+	}
+
 	const rows = await db
 		.select({ sessionData: device.sessionData })
 		.from(device)
@@ -55,14 +75,43 @@ async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
 async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
 	await enqueueAuthStateWrite(deviceId, async () => {
 		await db
+			.insert(deviceProviderSecret)
+			.values({
+				id: crypto.randomUUID(),
+				deviceId,
+				provider: "baileys",
+				key: BAILEYS_AUTH_STATE_KEY,
+				encryptedValue: encryptSecret(
+					JSON.stringify(state, BufferJSON.replacer),
+				),
+			})
+			.onConflictDoUpdate({
+				target: [deviceProviderSecret.deviceId, deviceProviderSecret.key],
+				set: {
+					provider: "baileys",
+					encryptedValue: encryptSecret(
+						JSON.stringify(state, BufferJSON.replacer),
+					),
+					updatedAt: new Date(),
+				},
+			});
+		await db
 			.update(device)
-			.set({ sessionData: state, updatedAt: new Date() })
+			.set({ sessionData: null, updatedAt: new Date() })
 			.where(eq(device.id, deviceId));
 	});
 }
 
 export async function clearDbAuthState(deviceId: string) {
 	await enqueueAuthStateWrite(deviceId, async () => {
+		await db
+			.delete(deviceProviderSecret)
+			.where(
+				and(
+					eq(deviceProviderSecret.deviceId, deviceId),
+					eq(deviceProviderSecret.key, BAILEYS_AUTH_STATE_KEY),
+				),
+			);
 		await db
 			.update(device)
 			.set({ sessionData: null, updatedAt: new Date() })

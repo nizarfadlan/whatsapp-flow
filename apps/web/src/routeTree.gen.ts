@@ -23,6 +23,7 @@ import { Route as DashboardGroupsRouteImport } from './routes/dashboard.groups'
 import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
 import { Route as DashboardDevicesRouteImport } from './routes/dashboard.devices'
 import { Route as DashboardContactsRouteImport } from './routes/dashboard.contacts'
+import { Route as DashboardAuditRouteImport } from './routes/dashboard.audit'
 import { Route as DashboardAccountRouteImport } from './routes/dashboard.account'
 import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flows.index'
 import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.new'
@@ -101,6 +102,11 @@ const DashboardContactsRoute = DashboardContactsRouteImport.update({
   path: '/contacts',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardAuditRoute = DashboardAuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardAccountRoute = DashboardAccountRouteImport.update({
   id: '/account',
   path: '/account',
@@ -144,6 +150,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
   '/dashboard/account': typeof DashboardAccountRoute
+  '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
@@ -166,6 +173,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard/account': typeof DashboardAccountRoute
+  '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/groups': typeof DashboardGroupsRoute
@@ -189,6 +197,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
   '/dashboard/account': typeof DashboardAccountRoute
+  '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/contacts': typeof DashboardContactsRoute
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
@@ -214,6 +223,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/dashboard/account'
+    | '/dashboard/audit'
     | '/dashboard/contacts'
     | '/dashboard/devices'
     | '/dashboard/flows'
@@ -236,6 +246,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard/account'
+    | '/dashboard/audit'
     | '/dashboard/contacts'
     | '/dashboard/devices'
     | '/dashboard/groups'
@@ -258,6 +269,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/dashboard/account'
+    | '/dashboard/audit'
     | '/dashboard/contacts'
     | '/dashboard/devices'
     | '/dashboard/flows'
@@ -383,6 +395,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardContactsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/audit': {
+      id: '/dashboard/audit'
+      path: '/audit'
+      fullPath: '/dashboard/audit'
+      preLoaderRoute: typeof DashboardAuditRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/account': {
       id: '/dashboard/account'
       path: '/account'
@@ -477,6 +496,7 @@ const DashboardFlowsRouteWithChildren = DashboardFlowsRoute._addFileChildren(
 
 interface DashboardRouteChildren {
   DashboardAccountRoute: typeof DashboardAccountRoute
+  DashboardAuditRoute: typeof DashboardAuditRoute
   DashboardContactsRoute: typeof DashboardContactsRoute
   DashboardDevicesRoute: typeof DashboardDevicesRouteWithChildren
   DashboardFlowsRoute: typeof DashboardFlowsRouteWithChildren
@@ -492,6 +512,7 @@ interface DashboardRouteChildren {
 
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardAccountRoute: DashboardAccountRoute,
+  DashboardAuditRoute: DashboardAuditRoute,
   DashboardContactsRoute: DashboardContactsRoute,
   DashboardDevicesRoute: DashboardDevicesRouteWithChildren,
   DashboardFlowsRoute: DashboardFlowsRouteWithChildren,

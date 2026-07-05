@@ -11,7 +11,7 @@ export const router = t.router;
 
 export const publicProcedure = t.procedure;
 
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 	if (!ctx.session) {
 		throw new TRPCError({
 			code: "UNAUTHORIZED",
@@ -19,30 +19,46 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 			cause: "No session",
 		});
 	}
+
+	const [currentUser] = await ctx.db
+		.select({
+			id: user.id,
+			email: user.email,
+			role: user.role,
+			status: user.status,
+		})
+		.from(user)
+		.where(eq(user.id, ctx.session.user.id))
+		.limit(1);
+
+	if (!currentUser) {
+		throw new TRPCError({ code: "UNAUTHORIZED", message: "User not found" });
+	}
+	if (currentUser.status === "suspended") {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "Account suspended",
+		});
+	}
+
 	return next({
 		ctx: {
 			...ctx,
 			session: ctx.session,
+			currentUser,
 		},
 	});
 });
 
 export const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-	const [currentUser] = await ctx.db
-		.select({ email: user.email, role: user.role })
-		.from(user)
-		.where(eq(user.id, ctx.session.user.id))
-		.limit(1);
 	const adminEmails = new Set(
 		env.ADMIN_EMAILS?.split(",")
 			.map((email) => email.trim().toLowerCase())
 			.filter(Boolean) ?? [],
 	);
 	const isAdmin =
-		currentUser?.role === "admin" ||
-		(currentUser?.email
-			? adminEmails.has(currentUser.email.toLowerCase())
-			: false);
+		ctx.currentUser.role === "admin" ||
+		adminEmails.has(ctx.currentUser.email.toLowerCase());
 
 	if (!isAdmin) {
 		throw new TRPCError({

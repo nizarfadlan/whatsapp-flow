@@ -10,6 +10,7 @@ import { startWebhookDispatcher } from "@whatsapp-flow/api/engine/webhook-dispat
 import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
+import { user } from "@whatsapp-flow/db/schema/auth";
 import {
 	channel,
 	chatGroup,
@@ -18,7 +19,7 @@ import {
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
-import { storage } from "@whatsapp-flow/storage";
+import { isLocalStorageDriver, storage } from "@whatsapp-flow/storage";
 import {
 	connectionManager,
 	downloadMetaDeviceMedia,
@@ -26,13 +27,46 @@ import {
 	verifyMetaWebhookChallenge,
 } from "@whatsapp-flow/whatsapp";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context as HonoContext } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 
+function validateProductionSecrets() {
+	if (env.NODE_ENV !== "production") return;
+	const key = env.SETTINGS_ENCRYPTION_KEY;
+	if (!key) {
+		throw new Error("SETTINGS_ENCRYPTION_KEY is required in production");
+	}
+	if (Buffer.from(key, "base64").length !== 32) {
+		throw new Error(
+			"SETTINGS_ENCRYPTION_KEY must be a base64-encoded 32-byte key in production",
+		);
+	}
+}
+
+validateProductionSecrets();
+
 const app = new Hono();
+
+async function requireActiveSession(c: HonoContext) {
+	const session = await auth.api.getSession({ headers: c.req.raw.headers });
+	if (!session) return { response: c.text("Unauthorized", 401) };
+
+	const db = createDb();
+	const [currentUser] = await db
+		.select({ id: user.id, status: user.status })
+		.from(user)
+		.where(eq(user.id, session.user.id))
+		.limit(1);
+	if (!currentUser) return { response: c.text("Unauthorized", 401) };
+	if (currentUser.status === "suspended") {
+		return { response: c.text("Account suspended", 403) };
+	}
+
+	return { session, db };
+}
 
 app.use(logger());
 app.use(
@@ -68,8 +102,12 @@ app.use(
 
 // Local-driver direct upload endpoint (POST multipart or raw body)
 app.post("/api/uploads/local/:key{.+}", async (c) => {
-	const session = await auth.api.getSession({ headers: c.req.raw.headers });
-	if (!session) return c.text("Unauthorized", 401);
+	if (!isLocalStorageDriver()) {
+		return c.text("Local uploads are disabled", 404);
+	}
+
+	const authResult = await requireActiveSession(c);
+	if (authResult.response) return authResult.response;
 
 	const key = c.req.param("key");
 	const contentType =
@@ -167,16 +205,12 @@ app.post("/api/flows/:flowId/webhook", async (c) => {
 app.get("/api/devices/:deviceId/events", async (c) => {
 	const deviceId = c.req.param("deviceId");
 
-	// Verify session (SSE carries cookies)
-	const session = await auth.api.getSession({
-		headers: c.req.raw.headers,
-	});
-	if (!session) {
-		return c.text("Unauthorized", 401);
-	}
+	// Verify active session (SSE carries cookies)
+	const authResult = await requireActiveSession(c);
+	if (authResult.response) return authResult.response;
 
 	// Verify device ownership
-	const db = createDb();
+	const { db, session } = authResult;
 	const [owned] = await db
 		.select({ id: device.id })
 		.from(device)
@@ -245,14 +279,10 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 
 // Global SSE endpoint: all device events for user
 app.get("/api/events", async (c) => {
-	const session = await auth.api.getSession({
-		headers: c.req.raw.headers,
-	});
-	if (!session) {
-		return c.text("Unauthorized", 401);
-	}
+	const authResult = await requireActiveSession(c);
+	if (authResult.response) return authResult.response;
 
-	const db = createDb();
+	const { db, session } = authResult;
 	const userDevices = await db
 		.select({ id: device.id })
 		.from(device)

@@ -12,13 +12,15 @@ import {
 } from "@whatsapp-flow/auth/provider-settings";
 import type { createDb } from "@whatsapp-flow/db";
 import { account } from "@whatsapp-flow/db/schema/auth";
+import { device } from "@whatsapp-flow/db/schema/device";
 import {
 	appSettings,
 	authProviderSetting,
 } from "@whatsapp-flow/db/schema/settings";
 import { env } from "@whatsapp-flow/env/server";
-import { asc, count, eq } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
+import { writeAuditLog } from "../audit-log";
 import { adminProcedure, publicProcedure, router } from "../index";
 
 const APP_SETTINGS_ID = "global";
@@ -349,13 +351,18 @@ type EnterpriseAuditCheck = {
 	recommendation: string;
 };
 
-function createEnterpriseAudit() {
+async function createEnterpriseAudit(db: ReturnType<typeof createDb>) {
 	const isProduction = env.NODE_ENV === "production";
-	const storageDriver = env.STORAGE_DRIVER ?? "local";
+	const storageDriver = env.STORAGE_DRIVER ?? null;
 	const adminEmails =
 		env.ADMIN_EMAILS?.split(",")
 			.map((email) => email.trim())
 			.filter(Boolean) ?? [];
+	const [legacyBaileysRows] = await db
+		.select({ total: count() })
+		.from(device)
+		.where(and(eq(device.provider, "baileys"), isNotNull(device.sessionData)));
+	const legacyBaileysSessionCount = Number(legacyBaileysRows?.total ?? 0);
 	const checks: EnterpriseAuditCheck[] = [
 		{
 			id: "runtime-production-mode",
@@ -369,7 +376,7 @@ function createEnterpriseAudit() {
 		{
 			id: "settings-encryption-key",
 			category: "security",
-			title: "Settings encryption key is configured",
+			title: "Encrypted secret key is configured",
 			status: env.SETTINGS_ENCRYPTION_KEY
 				? "pass"
 				: isProduction
@@ -379,7 +386,7 @@ function createEnterpriseAudit() {
 				? "SETTINGS_ENCRYPTION_KEY is present."
 				: "SETTINGS_ENCRYPTION_KEY is missing.",
 			recommendation:
-				"Configure a strong SETTINGS_ENCRYPTION_KEY before storing OAuth, OIDC, or provider secrets.",
+				"Configure a strong SETTINGS_ENCRYPTION_KEY before storing OAuth, OIDC, Meta, or Baileys encrypted secrets.",
 		},
 		{
 			id: "admin-bootstrap",
@@ -396,21 +403,39 @@ function createEnterpriseAudit() {
 		{
 			id: "storage-driver",
 			category: "data",
-			title: "Media storage is production durable",
-			status: isProduction && storageDriver !== "s3" ? "warn" : "pass",
-			evidence: `STORAGE_DRIVER resolves to ${storageDriver}.`,
+			title: "Media storage choice is explicit",
+			status: !storageDriver && isProduction ? "fail" : "pass",
+			evidence: storageDriver
+				? `STORAGE_DRIVER is explicitly set to ${storageDriver}.`
+				: "STORAGE_DRIVER is not set; development/test may use fallback local storage.",
 			recommendation:
-				"Use S3-compatible durable object storage for production media instead of local ephemeral disk.",
+				"Set STORAGE_DRIVER explicitly in production. Use S3-compatible storage for durable multi-replica media, or choose local deliberately for OSS/self-hosted single-node deployments.",
+		},
+		{
+			id: "storage-durability",
+			category: "data",
+			title: "Media storage is production durable",
+			status: isProduction && storageDriver === "local" ? "warn" : "pass",
+			evidence: `Configured storage driver is ${storageDriver ?? "fallback-local"}.`,
+			recommendation:
+				"Use S3-compatible durable object storage for production media when running multiple replicas or ephemeral compute.",
 		},
 		{
 			id: "baileys-session-encryption",
 			category: "security",
-			title: "Baileys session state requires encryption hardening",
-			status: "fail",
+			title: "Baileys session state uses encrypted storage",
+			status:
+				legacyBaileysSessionCount === 0
+					? "pass"
+					: isProduction
+						? "fail"
+						: "warn",
 			evidence:
-				"Baileys auth state is stored in device.sessionData JSONB, which is not encrypted at the schema boundary.",
+				legacyBaileysSessionCount === 0
+					? "No legacy Baileys device.sessionData rows were found."
+					: `${legacyBaileysSessionCount} Baileys device.sessionData row${legacyBaileysSessionCount === 1 ? "" : "s"} still need lazy encrypted migration.`,
 			recommendation:
-				"Encrypt Baileys credentials/keys or migrate them into the encrypted provider-secret storage model.",
+				"Reconnect or allow active Baileys devices to save credentials so auth state migrates into encrypted provider-secret storage, then verify no plaintext session rows remain.",
 		},
 		{
 			id: "meta-secret-storage",
@@ -425,12 +450,12 @@ function createEnterpriseAudit() {
 		{
 			id: "meta-graph-timeouts",
 			category: "reliability",
-			title: "Meta Graph calls need timeout and retry policy",
-			status: "warn",
+			title: "Meta Graph calls have timeout and retry policy",
+			status: "pass",
 			evidence:
-				"Meta Graph fetch calls are direct network calls without a shared timeout/backoff policy.",
+				"Meta Graph requests use bounded AbortSignal timeouts and retry only transient network/status failures.",
 			recommendation:
-				"Add AbortSignal timeouts, bounded retries, and provider-aware error classification for Meta requests.",
+				"Monitor retryable Meta failures and tune timeouts only if production telemetry shows a need.",
 		},
 		{
 			id: "in-process-dispatchers",
@@ -440,17 +465,27 @@ function createEnterpriseAudit() {
 			evidence:
 				"Flow and webhook dispatchers run in-process, which can double-run under multiple replicas and lose work on restarts.",
 			recommendation:
-				"Move flow execution, outbound sends, and webhook delivery to a durable queue/worker model.",
+				"Move flow execution, outbound sends, and webhook delivery to a durable queue/worker model when horizontal scaling becomes required.",
 		},
 		{
 			id: "audit-log",
 			category: "operations",
-			title: "Sensitive admin actions need immutable audit logs",
-			status: "warn",
+			title: "Sensitive admin actions have immutable audit logs",
+			status: "pass",
 			evidence:
-				"There is no persistent audit-log table for auth settings, credential changes, user role changes, or device admin actions.",
+				"An append-only audit_log table and admin audit router capture user, auth-provider, settings, and device actions.",
 			recommendation:
-				"Add an append-only audit log before enabling broader enterprise admin workflows.",
+				"Add SIEM/export and tamper-evidence if regulated enterprise deployments require external retention.",
+		},
+		{
+			id: "user-suspension",
+			category: "auth",
+			title: "Suspended users are blocked server-side",
+			status: "pass",
+			evidence:
+				"User status is enforced in tRPC protected procedures and authenticated Hono endpoints, with session revocation on suspension.",
+			recommendation:
+				"Add scoped permissions or organization/team roles if enterprise customers need separation of duties beyond admin/member.",
 		},
 		{
 			id: "rbac-depth",
@@ -469,7 +504,7 @@ function createEnterpriseAudit() {
 			evidence:
 				"No package-level automated test suite was found during repository audit.",
 			recommendation:
-				"Add integration and contract tests for Meta webhooks, admin auth, user role changes, and dispatchers.",
+				"Add integration and contract tests for Meta webhooks, admin auth, user role changes, audit logs, and dispatchers.",
 		},
 		{
 			id: "migration-release-checks",
@@ -542,11 +577,14 @@ export const settingsRouter = router({
 
 	getBranding: adminProcedure.query(async ({ ctx }) => getBranding(ctx.db)),
 
-	getEnterpriseAudit: adminProcedure.query(() => createEnterpriseAudit()),
+	getEnterpriseAudit: adminProcedure.query(async ({ ctx }) =>
+		createEnterpriseAudit(ctx.db),
+	),
 
 	updateBranding: adminProcedure
 		.input(brandingInputSchema)
 		.mutation(async ({ ctx, input }) => {
+			const before = await getBranding(ctx.db);
 			const [row] = await ctx.db
 				.insert(appSettings)
 				.values({
@@ -561,6 +599,15 @@ export const settingsRouter = router({
 					},
 				})
 				.returning();
+
+			await writeAuditLog(ctx, {
+				action: "settings.branding_updated",
+				targetType: "settings",
+				targetId: APP_SETTINGS_ID,
+				targetDisplay: "Application branding",
+				before,
+				after: row,
+			});
 
 			return row;
 		}),
@@ -616,7 +663,16 @@ export const settingsRouter = router({
 				});
 			}
 
-			return safeProvider(row);
+			const provider = safeProvider(row);
+			await writeAuditLog(ctx, {
+				action: "auth_provider.created",
+				targetType: "auth_provider",
+				targetId: row.providerId,
+				targetDisplay: row.displayName,
+				after: provider,
+			});
+
+			return provider;
 		}),
 
 	upsertAuthProvider: adminProcedure
@@ -736,7 +792,17 @@ export const settingsRouter = router({
 			}
 
 			clearProviderCache(input.providerId);
-			return safeProvider(row);
+			const provider = safeProvider(row);
+			await writeAuditLog(ctx, {
+				action: existing ? "auth_provider.updated" : "auth_provider.created",
+				targetType: "auth_provider",
+				targetId: row.providerId,
+				targetDisplay: row.displayName,
+				before: existing ? safeProvider(existing) : null,
+				after: provider,
+				metadata: { secretRotated: Boolean(encryptedSecret) },
+			});
+			return provider;
 		}),
 
 	toggleAuthProvider: adminProcedure
@@ -792,28 +858,66 @@ export const settingsRouter = router({
 			}
 
 			clearProviderCache(input.providerId);
-			return safeProvider(updated);
+			const provider = safeProvider(updated);
+			await writeAuditLog(ctx, {
+				action: input.enabled
+					? "auth_provider.enabled"
+					: "auth_provider.disabled",
+				targetType: "auth_provider",
+				targetId: updated.providerId,
+				targetDisplay: updated.displayName,
+				before: safeProvider(row),
+				after: provider,
+			});
+			return provider;
 		}),
 
 	deleteAuthProvider: adminProcedure
 		.input(z.object({ providerId: providerIdSchema }))
 		.mutation(async ({ ctx, input }) => {
+			const [row] = await ctx.db
+				.select()
+				.from(authProviderSetting)
+				.where(eq(authProviderSetting.providerId, input.providerId))
+				.limit(1);
+
+			if (!row) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Provider not found",
+				});
+			}
+
 			const [linkedAccounts] = await ctx.db
 				.select({ total: count() })
 				.from(account)
 				.where(eq(account.providerId, input.providerId));
+			const linkedAccountCount = Number(linkedAccounts?.total ?? 0);
 
-			if ((linkedAccounts?.total ?? 0) > 0) {
+			if (linkedAccountCount > 0) {
 				const [updated] = await ctx.db
 					.update(authProviderSetting)
 					.set({ enabled: false, updatedAt: new Date() })
 					.where(eq(authProviderSetting.providerId, input.providerId))
 					.returning();
 
+				const provider = updated ? safeProvider(updated) : null;
 				clearProviderCache(input.providerId);
+				await writeAuditLog(ctx, {
+					action: "auth_provider.disabled",
+					targetType: "auth_provider",
+					targetId: row.providerId,
+					targetDisplay: row.displayName,
+					before: safeProvider(row),
+					after: provider,
+					metadata: {
+						deleteRequested: true,
+						linkedAccounts: linkedAccountCount,
+					},
+				});
 				return {
 					deleted: false,
-					provider: updated ? safeProvider(updated) : null,
+					provider,
 				};
 			}
 
@@ -822,6 +926,13 @@ export const settingsRouter = router({
 				.where(eq(authProviderSetting.providerId, input.providerId));
 
 			clearProviderCache(input.providerId);
+			await writeAuditLog(ctx, {
+				action: "auth_provider.deleted",
+				targetType: "auth_provider",
+				targetId: row.providerId,
+				targetDisplay: row.displayName,
+				before: safeProvider(row),
+			});
 			return { deleted: true, provider: null };
 		}),
 });

@@ -40,6 +40,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@whatsapp-flow/ui/components/table";
+import { Textarea } from "@whatsapp-flow/ui/components/textarea";
 import { MoreHorizontal, ShieldCheck, UserCog, UsersRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -51,9 +52,12 @@ export const Route = createFileRoute("/dashboard/users")({
 });
 
 type RoleFilter = "all" | "admin" | "member";
+type StatusFilter = "all" | "active" | "suspended";
 type UserAction =
 	| { type: "role"; userId: string; name: string; role: "admin" | "member" }
-	| { type: "sessions"; userId: string; name: string };
+	| { type: "sessions"; userId: string; name: string }
+	| { type: "suspend"; userId: string; name: string }
+	| { type: "reactivate"; userId: string; name: string };
 
 type AdminUser = {
 	id: string;
@@ -62,6 +66,9 @@ type AdminUser = {
 	emailVerified: boolean;
 	image?: string | null;
 	role: "admin" | "member";
+	status: "active" | "suspended";
+	suspendedAt?: Date | string | null;
+	suspensionReason?: string | null;
 	createdAt: Date | string;
 	sessionCount: number;
 	accountCount: number;
@@ -82,9 +89,15 @@ function roleBadgeVariant(role: AdminUser["role"]) {
 	return role === "admin" ? "default" : "secondary";
 }
 
+function statusBadgeVariant(status: AdminUser["status"]) {
+	return status === "active" ? "secondary" : "destructive";
+}
+
 function actionTitle(action: UserAction | null) {
 	if (!action) return "Confirm action";
 	if (action.type === "sessions") return "Revoke user sessions?";
+	if (action.type === "suspend") return "Suspend user account?";
+	if (action.type === "reactivate") return "Reactivate user account?";
 	return action.role === "admin"
 		? "Promote user to admin?"
 		: "Demote admin to member?";
@@ -94,6 +107,12 @@ function actionDescription(action: UserAction | null) {
 	if (!action) return "";
 	if (action.type === "sessions") {
 		return `This will sign ${action.name} out of all active sessions. They can sign in again if their account remains valid.`;
+	}
+	if (action.type === "suspend") {
+		return `This will block ${action.name} from dashboard access and revoke all active sessions. A reason is required for the audit log.`;
+	}
+	if (action.type === "reactivate") {
+		return `${action.name} will regain access and their suspension metadata will be cleared.`;
 	}
 	if (action.role === "admin") {
 		return `${action.name} will gain access to admin settings, enterprise audit, and user management.`;
@@ -105,15 +124,18 @@ function UsersPage() {
 	const trpc = useTRPC();
 	const [query, setQuery] = useState("");
 	const [role, setRole] = useState<RoleFilter>("all");
+	const [status, setStatus] = useState<StatusFilter>("all");
 	const [pendingAction, setPendingAction] = useState<UserAction | null>(null);
+	const [reason, setReason] = useState("");
 	const listInput = useMemo(
 		() => ({
 			query: query.trim() || undefined,
 			role,
+			status,
 			limit: 50,
 			offset: 0,
 		}),
-		[query, role],
+		[query, role, status],
 	);
 	const usersQuery = useQuery(trpc.user.list.queryOptions(listInput));
 	const updateRole = useMutation(
@@ -140,13 +162,63 @@ function UsersPage() {
 			onError: (error) => toast.error(error.message),
 		}),
 	);
+	const suspendUser = useMutation(
+		trpc.user.suspend.mutationOptions({
+			onSuccess: (result) => {
+				toast.success(
+					`User suspended${result.revoked > 0 ? ` and ${result.revoked} session${result.revoked === 1 ? "" : "s"} revoked` : ""}`,
+				);
+				setPendingAction(null);
+				setReason("");
+				usersQuery.refetch();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const reactivateUser = useMutation(
+		trpc.user.reactivate.mutationOptions({
+			onSuccess: () => {
+				toast.success("User reactivated");
+				setPendingAction(null);
+				setReason("");
+				usersQuery.refetch();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
 	const users = usersQuery.data?.users ?? [];
-	const actionPending = updateRole.isPending || revokeSessions.isPending;
+	const actionPending =
+		updateRole.isPending ||
+		revokeSessions.isPending ||
+		suspendUser.isPending ||
+		reactivateUser.isPending;
+	const reasonRequired = pendingAction?.type === "suspend";
+	const confirmDisabled =
+		actionPending || (reasonRequired && reason.trim().length === 0);
+
+	const openAction = (action: UserAction) => {
+		setReason("");
+		setPendingAction(action);
+	};
 
 	const confirmAction = () => {
 		if (!pendingAction) return;
 		if (pendingAction.type === "sessions") {
 			revokeSessions.mutate({ userId: pendingAction.userId });
+			return;
+		}
+		if (pendingAction.type === "suspend") {
+			suspendUser.mutate({
+				userId: pendingAction.userId,
+				reason: reason.trim(),
+			});
+			return;
+		}
+		if (pendingAction.type === "reactivate") {
+			reactivateUser.mutate({
+				userId: pendingAction.userId,
+				reason: reason.trim() || undefined,
+			});
 			return;
 		}
 		updateRole.mutate({
@@ -177,7 +249,8 @@ function UsersPage() {
 						Users
 					</h2>
 					<p className="text-muted-foreground text-sm">
-						Manage dashboard users, administrator access, and active sessions.
+						Manage dashboard users, administrator access, suspensions, and
+						active sessions.
 					</p>
 				</div>
 			</div>
@@ -189,26 +262,42 @@ function UsersPage() {
 						User management
 					</CardTitle>
 					<CardDescription>
-						Role changes are admin-only. Destructive account deletion is
-						intentionally not available here.
+						Role and suspension changes are audit logged. Destructive account
+						deletion is intentionally not available here.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
-					<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					<div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
 						<Input
-							className="sm:max-w-sm"
+							className="lg:max-w-sm"
 							placeholder="Search by name or email"
 							value={query}
 							onChange={(event) => setQuery(event.target.value)}
 						/>
-						<NativeSelect
-							value={role}
-							onChange={(event) => setRole(event.target.value as RoleFilter)}
-						>
-							<NativeSelectOption value="all">All roles</NativeSelectOption>
-							<NativeSelectOption value="admin">Admins</NativeSelectOption>
-							<NativeSelectOption value="member">Members</NativeSelectOption>
-						</NativeSelect>
+						<div className="grid gap-3 sm:grid-cols-2">
+							<NativeSelect
+								value={role}
+								onChange={(event) => setRole(event.target.value as RoleFilter)}
+							>
+								<NativeSelectOption value="all">All roles</NativeSelectOption>
+								<NativeSelectOption value="admin">Admins</NativeSelectOption>
+								<NativeSelectOption value="member">Members</NativeSelectOption>
+							</NativeSelect>
+							<NativeSelect
+								value={status}
+								onChange={(event) =>
+									setStatus(event.target.value as StatusFilter)
+								}
+							>
+								<NativeSelectOption value="all">
+									All statuses
+								</NativeSelectOption>
+								<NativeSelectOption value="active">Active</NativeSelectOption>
+								<NativeSelectOption value="suspended">
+									Suspended
+								</NativeSelectOption>
+							</NativeSelect>
+						</div>
 					</div>
 
 					{usersQuery.isPending ? (
@@ -224,6 +313,7 @@ function UsersPage() {
 									<TableRow>
 										<TableHead>User</TableHead>
 										<TableHead>Role</TableHead>
+										<TableHead>Status</TableHead>
 										<TableHead>Email</TableHead>
 										<TableHead>Sessions</TableHead>
 										<TableHead>Accounts</TableHead>
@@ -262,6 +352,19 @@ function UsersPage() {
 												</Badge>
 											</TableCell>
 											<TableCell>
+												<div className="space-y-1">
+													<Badge variant={statusBadgeVariant(user.status)}>
+														{user.status}
+													</Badge>
+													{user.suspendedAt && (
+														<p className="text-muted-foreground text-xs">
+															Since{" "}
+															{new Date(user.suspendedAt).toLocaleDateString()}
+														</p>
+													)}
+												</div>
+											</TableCell>
+											<TableCell>
 												{user.emailVerified ? (
 													<Badge variant="secondary">Verified</Badge>
 												) : (
@@ -291,7 +394,7 @@ function UsersPage() {
 															<DropdownMenuItem
 																disabled={user.isCurrentUser}
 																onClick={() =>
-																	setPendingAction({
+																	openAction({
 																		type: "role",
 																		userId: user.id,
 																		name: user.name || user.email,
@@ -304,7 +407,7 @@ function UsersPage() {
 														) : (
 															<DropdownMenuItem
 																onClick={() =>
-																	setPendingAction({
+																	openAction({
 																		type: "role",
 																		userId: user.id,
 																		name: user.name || user.email,
@@ -318,7 +421,7 @@ function UsersPage() {
 														<DropdownMenuItem
 															disabled={user.isCurrentUser}
 															onClick={() =>
-																setPendingAction({
+																openAction({
 																	type: "sessions",
 																	userId: user.id,
 																	name: user.name || user.email,
@@ -327,6 +430,32 @@ function UsersPage() {
 														>
 															Revoke sessions
 														</DropdownMenuItem>
+														{user.status === "suspended" ? (
+															<DropdownMenuItem
+																onClick={() =>
+																	openAction({
+																		type: "reactivate",
+																		userId: user.id,
+																		name: user.name || user.email,
+																	})
+																}
+															>
+																Reactivate
+															</DropdownMenuItem>
+														) : (
+															<DropdownMenuItem
+																disabled={user.isCurrentUser}
+																onClick={() =>
+																	openAction({
+																		type: "suspend",
+																		userId: user.id,
+																		name: user.name || user.email,
+																	})
+																}
+															>
+																Suspend
+															</DropdownMenuItem>
+														)}
 													</DropdownMenuContent>
 												</DropdownMenu>
 											</TableCell>
@@ -334,7 +463,7 @@ function UsersPage() {
 									))}
 									{users.length === 0 && (
 										<TableRow>
-											<TableCell colSpan={7}>
+											<TableCell colSpan={8}>
 												<div className="py-8 text-center text-muted-foreground text-sm">
 													No users match the current filters.
 												</div>
@@ -360,8 +489,7 @@ function UsersPage() {
 						Production safety notes
 					</CardTitle>
 					<CardDescription>
-						Additional enterprise controls intentionally deferred from this
-						first user-management phase.
+						User management now favors reversible controls with audit evidence.
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -371,12 +499,12 @@ function UsersPage() {
 							cascade.
 						</li>
 						<li>
-							Account suspension should be added with a dedicated DB column and
-							auth middleware checks.
+							Suspension revokes sessions and blocks protected tRPC plus
+							authenticated server routes.
 						</li>
 						<li>
-							Immutable audit logs should be added before broad enterprise admin
-							workflows.
+							Role changes, session revocations, suspensions, and reactivations
+							are written to the immutable audit log.
 						</li>
 					</ul>
 				</CardContent>
@@ -385,7 +513,10 @@ function UsersPage() {
 			<AlertDialog
 				open={Boolean(pendingAction)}
 				onOpenChange={(open) => {
-					if (!open && !actionPending) setPendingAction(null);
+					if (!open && !actionPending) {
+						setPendingAction(null);
+						setReason("");
+					}
 				}}
 			>
 				<AlertDialogContent>
@@ -395,11 +526,27 @@ function UsersPage() {
 							{actionDescription(pendingAction)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
+					{(pendingAction?.type === "suspend" ||
+						pendingAction?.type === "reactivate") && (
+						<Textarea
+							placeholder={
+								pendingAction.type === "suspend"
+									? "Reason for suspension"
+									: "Optional reason for reactivation"
+							}
+							value={reason}
+							onChange={(event) => setReason(event.target.value)}
+							maxLength={500}
+						/>
+					)}
 					<AlertDialogFooter>
 						<AlertDialogCancel disabled={actionPending}>
 							Cancel
 						</AlertDialogCancel>
-						<AlertDialogAction disabled={actionPending} onClick={confirmAction}>
+						<AlertDialogAction
+							disabled={confirmDisabled}
+							onClick={confirmAction}
+						>
 							{actionPending ? "Working..." : "Confirm"}
 						</AlertDialogAction>
 					</AlertDialogFooter>

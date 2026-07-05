@@ -10,6 +10,7 @@ import {
 } from "@whatsapp-flow/whatsapp";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { writeAuditLog } from "../audit-log";
 import { protectedProcedure, router } from "../index";
 
 const requiredTrimmedString = z.string().trim().min(1);
@@ -204,7 +205,23 @@ export const deviceRouter = router({
 					status: device.status,
 				});
 
-			return rows[0];
+			const row = rows[0];
+			if (!row) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Device was not created",
+				});
+			}
+
+			await writeAuditLog(ctx, {
+				action: "device.created",
+				targetType: "device",
+				targetId: row.id,
+				targetDisplay: row.name,
+				after: row,
+			});
+
+			return row;
 		}),
 
 	createMeta: protectedProcedure
@@ -225,7 +242,7 @@ export const deviceRouter = router({
 			});
 
 			try {
-				return await configureMetaDevice({
+				const configured = await configureMetaDevice({
 					deviceId: id,
 					phoneNumberId: input.phoneNumberId,
 					accessToken: input.accessToken,
@@ -234,6 +251,23 @@ export const deviceRouter = router({
 					displayPhoneNumber: input.displayPhoneNumber,
 					graphApiVersion: input.graphApiVersion,
 				});
+				await writeAuditLog(ctx, {
+					action: "device.created",
+					targetType: "device",
+					targetId: id,
+					targetDisplay: input.name,
+					after: {
+						name: input.name,
+						provider: "meta_cloud",
+						phoneNumberId: input.phoneNumberId,
+						businessAccountId: input.businessAccountId,
+						displayPhoneNumber: input.displayPhoneNumber,
+						graphApiVersion: input.graphApiVersion,
+						hasAccessToken: Boolean(input.accessToken),
+						hasAppSecret: Boolean(input.appSecret || env.META_APP_SECRET),
+					},
+				});
+				return configured;
 			} catch (error) {
 				await ctx.db.delete(device).where(eq(device.id, id));
 				throw toMetaConfigError(error);
@@ -267,7 +301,7 @@ export const deviceRouter = router({
 			});
 
 			try {
-				return await configureMetaDeviceFromEmbeddedSignup({
+				const configured = await configureMetaDeviceFromEmbeddedSignup({
 					deviceId: id,
 					code: input.code,
 					redirectUri: input.redirectUri,
@@ -276,6 +310,22 @@ export const deviceRouter = router({
 					displayPhoneNumber: input.displayPhoneNumber,
 					graphApiVersion: input.graphApiVersion,
 				});
+				await writeAuditLog(ctx, {
+					action: "device.created",
+					targetType: "device",
+					targetId: id,
+					targetDisplay: input.name,
+					after: {
+						name: input.name,
+						provider: "meta_cloud",
+						setup: "embedded_signup",
+						phoneNumberId: input.phoneNumberId,
+						businessAccountId: input.businessAccountId,
+						displayPhoneNumber: input.displayPhoneNumber,
+						graphApiVersion: input.graphApiVersion,
+					},
+				});
+				return configured;
 			} catch (error) {
 				await ctx.db.delete(device).where(eq(device.id, id));
 				throw toMetaConfigError(error);
@@ -321,7 +371,7 @@ export const deviceRouter = router({
 			}
 
 			try {
-				return await configureMetaDevice({
+				const configured = await configureMetaDevice({
 					deviceId: input.id,
 					phoneNumberId: input.phoneNumberId,
 					accessToken: input.accessToken,
@@ -330,6 +380,32 @@ export const deviceRouter = router({
 					displayPhoneNumber: input.displayPhoneNumber,
 					graphApiVersion: input.graphApiVersion,
 				});
+				await writeAuditLog(ctx, {
+					action: "device.meta_configured",
+					targetType: "device",
+					targetId: found.id,
+					targetDisplay: found.name,
+					before: existingConfig,
+					after: {
+						phoneNumberId: input.phoneNumberId,
+						businessAccountId: input.businessAccountId,
+						displayPhoneNumber: input.displayPhoneNumber,
+						graphApiVersion: input.graphApiVersion,
+						hasAccessToken: Boolean(
+							input.accessToken || existingConfig?.hasAccessToken,
+						),
+						hasAppSecret: Boolean(
+							input.appSecret ||
+								env.META_APP_SECRET ||
+								existingConfig?.hasAppSecret,
+						),
+					},
+					metadata: {
+						accessTokenRotated: Boolean(input.accessToken),
+						appSecretRotated: Boolean(input.appSecret),
+					},
+				});
+				return configured;
 			} catch (error) {
 				throw toMetaConfigError(error);
 			}
@@ -350,17 +426,48 @@ export const deviceRouter = router({
 	delete: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 			await connectionManager.disconnect(input.id);
 			await ctx.db.delete(device).where(eq(device.id, input.id));
+			await writeAuditLog(ctx, {
+				action: "device.deleted",
+				targetType: "device",
+				targetId: found.id,
+				targetDisplay: found.name,
+				before: {
+					id: found.id,
+					name: found.name,
+					provider: found.provider,
+					status: found.status,
+				},
+			});
 			return { success: true };
 		}),
 
 	connect: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 			const connection = await connectionManager.connect(input.id);
+			await writeAuditLog(ctx, {
+				action: "device.connected",
+				targetType: "device",
+				targetId: found.id,
+				targetDisplay: found.name,
+				metadata: {
+					provider: found.provider,
+					status: connection.status,
+					requiresQr: Boolean(connection.qrCode),
+				},
+			});
 			return {
 				id: input.id,
 				status: connection.status,
@@ -387,16 +494,38 @@ export const deviceRouter = router({
 	disconnect: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 			await connectionManager.disconnect(input.id);
+			await writeAuditLog(ctx, {
+				action: "device.disconnected",
+				targetType: "device",
+				targetId: found.id,
+				targetDisplay: found.name,
+				metadata: { provider: found.provider },
+			});
 			return { success: true };
 		}),
 
 	logout: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 			await connectionManager.logout(input.id);
+			await writeAuditLog(ctx, {
+				action: "device.logged_out",
+				targetType: "device",
+				targetId: found.id,
+				targetDisplay: found.name,
+				metadata: { provider: found.provider },
+			});
 			return { success: true };
 		}),
 

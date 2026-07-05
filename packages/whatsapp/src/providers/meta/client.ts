@@ -3,6 +3,10 @@ import type { OutgoingMessage } from "../../message-sender";
 
 const GRAPH_BASE_URL = "https://graph.facebook.com";
 const MAX_META_MEDIA_BYTES = 64 * 1024 * 1024;
+const GRAPH_REQUEST_TIMEOUT_MS = 10_000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
+const MAX_TRANSIENT_ATTEMPTS = 3;
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 
 type GraphErrorResponse = {
 	error?: {
@@ -50,6 +54,8 @@ export class MetaGraphError extends Error {
 			type?: string;
 			fbtraceId?: string;
 			path: string;
+			retryable?: boolean;
+			attempts?: number;
 		},
 	) {
 		super(message);
@@ -108,8 +114,11 @@ export async function downloadMetaMedia(input: {
 		throw new Error("Meta media file exceeds the inbound download limit");
 	}
 
-	const response = await fetch(metadata.url, {
-		headers: { Authorization: `Bearer ${input.credentials.accessToken}` },
+	const { response } = await fetchWithRetry(metadata.url, {
+		timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+		init: {
+			headers: { Authorization: `Bearer ${input.credentials.accessToken}` },
+		},
 	});
 	if (!response.ok) {
 		throw new Error(
@@ -165,6 +174,49 @@ export async function exchangeMetaOAuthCode(input: {
 	};
 }
 
+async function fetchWithRetry(
+	url: URL | string,
+	options: { init?: RequestInit; timeoutMs: number },
+) {
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt++) {
+		try {
+			const response = await fetch(url, {
+				...options.init,
+				signal: AbortSignal.timeout(options.timeoutMs),
+			});
+			if (
+				attempt < MAX_TRANSIENT_ATTEMPTS &&
+				isRetryableStatus(response.status)
+			) {
+				await response.arrayBuffer().catch(() => undefined);
+				await backoff(attempt);
+				continue;
+			}
+			return { response, attempts: attempt };
+		} catch (error) {
+			lastError = error;
+			if (attempt >= MAX_TRANSIENT_ATTEMPTS) break;
+			await backoff(attempt);
+		}
+	}
+
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Meta Graph API request failed");
+}
+
+function isRetryableStatus(status: number) {
+	return RETRYABLE_STATUS_CODES.has(status);
+}
+
+async function backoff(attempt: number) {
+	const jitter = Math.floor(Math.random() * 100);
+	await new Promise((resolve) =>
+		setTimeout(resolve, 200 * 2 ** (attempt - 1) + jitter),
+	);
+}
+
 async function graphRequest<T>(
 	credentials: MetaCredentials,
 	path: string,
@@ -180,13 +232,16 @@ async function graphRequest<T>(
 		url.searchParams.set(key, value);
 	}
 
-	const response = await fetch(url, {
-		method: options.method,
-		headers: {
-			Authorization: `Bearer ${credentials.accessToken}`,
-			...(options.body ? { "Content-Type": "application/json" } : {}),
+	const { response, attempts } = await fetchWithRetry(url, {
+		timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
+		init: {
+			method: options.method,
+			headers: {
+				Authorization: `Bearer ${credentials.accessToken}`,
+				...(options.body ? { "Content-Type": "application/json" } : {}),
+			},
+			body: options.body ? JSON.stringify(options.body) : undefined,
 		},
-		body: options.body ? JSON.stringify(options.body) : undefined,
 	});
 
 	const json = (await response.json().catch(() => null)) as
@@ -205,6 +260,8 @@ async function graphRequest<T>(
 			type: graphError?.type,
 			fbtraceId: graphError?.fbtrace_id,
 			path,
+			retryable: isRetryableStatus(response.status),
+			attempts,
 		});
 	}
 
@@ -224,10 +281,13 @@ async function appGraphRequest<T>(
 	const url = new URL(`${GRAPH_BASE_URL}/${version}${path}`);
 	const form = new URLSearchParams(body);
 
-	const response = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: form,
+	const { response, attempts } = await fetchWithRetry(url, {
+		timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
+		init: {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: form,
+		},
 	});
 	const json = (await response.json().catch(() => null)) as
 		| (T & GraphErrorResponse)
@@ -245,6 +305,8 @@ async function appGraphRequest<T>(
 			type: graphError?.type,
 			fbtraceId: graphError?.fbtrace_id,
 			path,
+			retryable: isRetryableStatus(response.status),
+			attempts,
 		});
 	}
 

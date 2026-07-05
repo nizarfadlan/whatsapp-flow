@@ -1,4 +1,5 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
+import { auditRouter } from "./audit";
 import { channelRouter } from "./channel";
 import { contactRouter } from "./contact";
 import { deviceRouter } from "./device";
@@ -13,6 +14,7 @@ import { userRouter } from "./user";
 import { webhookRouter } from "./webhook";
 
 export const appRouter = router({
+	audit: auditRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";
 	}),

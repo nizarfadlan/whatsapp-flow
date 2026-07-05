@@ -9,20 +9,29 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", ["admin", "member"]);
+export const userStatusEnum = pgEnum("user_status", ["active", "suspended"]);
 
-export const user = pgTable("user", {
-	id: text("id").primaryKey(),
-	name: text("name").notNull(),
-	email: text("email").notNull().unique(),
-	emailVerified: boolean("email_verified").default(false).notNull(),
-	image: text("image"),
-	role: userRoleEnum("role").default("member").notNull(),
-	createdAt: timestamp("created_at").defaultNow().notNull(),
-	updatedAt: timestamp("updated_at")
-		.defaultNow()
-		.$onUpdate(() => /* @__PURE__ */ new Date())
-		.notNull(),
-});
+export const user = pgTable(
+	"user",
+	{
+		id: text("id").primaryKey(),
+		name: text("name").notNull(),
+		email: text("email").notNull().unique(),
+		emailVerified: boolean("email_verified").default(false).notNull(),
+		image: text("image"),
+		role: userRoleEnum("role").default("member").notNull(),
+		status: userStatusEnum("status").default("active").notNull(),
+		suspendedAt: timestamp("suspended_at"),
+		suspendedByUserId: text("suspended_by_user_id"),
+		suspensionReason: text("suspension_reason"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull(),
+	},
+	(table) => [index("user_status_idx").on(table.status)],
+);
 
 export const session = pgTable(
 	"session",

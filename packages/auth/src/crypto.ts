@@ -8,7 +8,7 @@ function getEncryptionKey() {
 	const rawKey = env.SETTINGS_ENCRYPTION_KEY;
 	if (!rawKey) {
 		throw new Error(
-			"SETTINGS_ENCRYPTION_KEY is required to store auth provider secrets",
+			"SETTINGS_ENCRYPTION_KEY is required to store encrypted secrets",
 		);
 	}
 
