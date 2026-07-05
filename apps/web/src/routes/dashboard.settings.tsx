@@ -94,6 +94,29 @@ const oauthProviderIds = [
 ] as const;
 type OAuthProviderId = (typeof oauthProviderIds)[number];
 
+const THE_SVG_CDN =
+	"https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons";
+const theSvgDefaults: Record<
+	OAuthProviderId,
+	{ slug: string; variant: string }
+> = {
+	google: { slug: "google", variant: "color.svg" },
+	github: { slug: "github", variant: "dark.svg" },
+	discord: { slug: "discord", variant: "default.svg" },
+	facebook: { slug: "facebook", variant: "default.svg" },
+	microsoft: { slug: "microsoft", variant: "color.svg" },
+	gitlab: { slug: "gitlab", variant: "default.svg" },
+	slack: { slug: "slack", variant: "default.svg" },
+	linkedin: { slug: "linkedin", variant: "default.svg" },
+	notion: { slug: "notion", variant: "default.svg" },
+};
+
+function defaultProviderIconUrl(providerId: string) {
+	if (!isOAuthProviderId(providerId)) return null;
+	const icon = theSvgDefaults[providerId];
+	return `${THE_SVG_CDN}/${icon.slug}/${icon.variant}`;
+}
+
 type BrandingForm = {
 	appName: string;
 	appTagline: string;
@@ -107,6 +130,7 @@ type ProviderForm = {
 	type: ProviderType;
 	providerId: string;
 	displayName: string;
+	iconUrl: string;
 	enabled: boolean;
 	clientId: string;
 	clientSecret: string;
@@ -168,6 +192,7 @@ function oauthProviderForm(
 		type: "social",
 		providerId,
 		displayName,
+		iconUrl: "",
 		enabled: false,
 		clientId: "",
 		clientSecret: "",
@@ -193,6 +218,7 @@ function oidcProviderForm(
 		type: "oidc",
 		providerId,
 		displayName,
+		iconUrl: "",
 		enabled: false,
 		clientId: "",
 		clientSecret: "",
@@ -218,6 +244,8 @@ function providerToForm(
 		providerId: string;
 		type: "social" | "oidc" | "sso";
 		displayName: string;
+		iconUrl: string | null;
+		customIconUrl: string | null;
 		enabled: boolean;
 		clientId: string;
 		discoveryUrl: string | null;
@@ -252,6 +280,7 @@ function providerToForm(
 		type: provider.type === "oidc" ? "oidc" : "social",
 		providerId: provider.providerId,
 		displayName: provider.displayName,
+		iconUrl: provider.customIconUrl ?? "",
 		enabled: provider.enabled,
 		clientId: provider.clientId,
 		clientSecret: "",
@@ -300,6 +329,25 @@ function providerStatusVariant(
 ) {
 	if (!configured) return "outline" as const;
 	return provider?.enabled ? "default" : "secondary";
+}
+
+function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
+	if (iconUrl) {
+		return (
+			<img
+				src={iconUrl}
+				alt=""
+				aria-hidden="true"
+				className="size-8 rounded-md border bg-background object-contain p-1"
+			/>
+		);
+	}
+
+	return (
+		<span className="flex size-8 items-center justify-center rounded-md border bg-muted text-muted-foreground">
+			<KeyRound className="size-4" />
+		</span>
+	);
 }
 
 function isValidOptionalEmail(value: string) {
@@ -395,6 +443,12 @@ function SettingsPage() {
 		);
 	};
 
+	const invalidatePublicSettings = () => {
+		queryClient.invalidateQueries({
+			queryKey: trpc.settings.public.queryKey(),
+		});
+	};
+
 	useEffect(() => {
 		if (!brandingQuery.data) return;
 		setBrandingForm({
@@ -412,9 +466,7 @@ function SettingsPage() {
 			onSuccess: () => {
 				toast.success("Branding settings saved");
 				brandingQuery.refetch();
-				queryClient.invalidateQueries({
-					queryKey: trpc.settings.public.queryKey(),
-				});
+				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -428,6 +480,7 @@ function SettingsPage() {
 				setCreateOidcDialogOpen(false);
 				openProviderSheet(providerToForm(provider, provider.providerId));
 				providersQuery.refetch();
+				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -443,6 +496,7 @@ function SettingsPage() {
 				);
 				closeProviderSheet();
 				providersQuery.refetch();
+				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -457,6 +511,7 @@ function SettingsPage() {
 						: "Provider status updated",
 				);
 				providersQuery.refetch();
+				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -480,6 +535,7 @@ function SettingsPage() {
 				}
 				setDeleteProviderId(null);
 				providersQuery.refetch();
+				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -527,6 +583,7 @@ function SettingsPage() {
 			type: providerForm.type,
 			providerId: providerForm.providerId,
 			displayName: providerForm.displayName,
+			iconUrl: normalizeBrandingAssetUrl(providerForm.iconUrl),
 			enabled: providerForm.enabled,
 			clientId: providerForm.clientId,
 			clientSecret: providerForm.clientSecret || undefined,
@@ -833,11 +890,19 @@ function SettingsPage() {
 										({ configured, form, provider, providerId }) => (
 											<TableRow key={providerId}>
 												<TableCell>
-													<div className="space-y-1">
-														<p className="font-medium">{form.displayName}</p>
-														<p className="font-mono text-muted-foreground text-xs">
-															{providerId}
-														</p>
+													<div className="flex items-center gap-3">
+														<ProviderIcon
+															iconUrl={
+																provider?.iconUrl ??
+																defaultProviderIconUrl(providerId)
+															}
+														/>
+														<div className="space-y-1">
+															<p className="font-medium">{form.displayName}</p>
+															<p className="font-mono text-muted-foreground text-xs">
+																{providerId}
+															</p>
+														</div>
 													</div>
 												</TableCell>
 												<TableCell>
@@ -895,13 +960,16 @@ function SettingsPage() {
 										return (
 											<TableRow key={provider.providerId}>
 												<TableCell>
-													<div className="space-y-1">
-														<p className="font-medium">
-															{provider.displayName}
-														</p>
-														<p className="font-mono text-muted-foreground text-xs">
-															{provider.providerId}
-														</p>
+													<div className="flex items-center gap-3">
+														<ProviderIcon iconUrl={provider.iconUrl} />
+														<div className="space-y-1">
+															<p className="font-medium">
+																{provider.displayName}
+															</p>
+															<p className="font-mono text-muted-foreground text-xs">
+																{provider.providerId}
+															</p>
+														</div>
 													</div>
 												</TableCell>
 												<TableCell>
@@ -1083,6 +1151,25 @@ function SettingsPage() {
 											updateProviderForm({ displayName: event.target.value })
 										}
 									/>
+								</div>
+								<div className="space-y-2">
+									<Label>Provider icon</Label>
+									<MediaUpload
+										label="Provider icon"
+										accept="image/png,image/jpeg,image/webp,image/gif,image/x-icon,image/vnd.microsoft.icon,.ico"
+										maxSizeMb={1}
+										value={providerForm.iconUrl}
+										onUploaded={(media) =>
+											updateProviderForm({
+												iconUrl: normalizeBrandingAssetUrl(media.url),
+											})
+										}
+										onUrlChange={(url) => updateProviderForm({ iconUrl: url })}
+									/>
+									<p className="text-muted-foreground text-xs">
+										Default icon uses TheSVG when available. Upload a custom
+										icon to override.
+									</p>
 								</div>
 								<div className="space-y-2">
 									<Label htmlFor="clientId">Client ID</Label>

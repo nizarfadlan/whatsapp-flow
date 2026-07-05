@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { Label } from "@whatsapp-flow/ui/components/label";
+import { KeyRound } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
@@ -12,6 +13,21 @@ import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
 import Loader from "./loader";
+
+function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
+	if (iconUrl) {
+		return (
+			<img
+				src={iconUrl}
+				alt=""
+				aria-hidden="true"
+				className="size-4 rounded-sm object-contain"
+			/>
+		);
+	}
+
+	return <KeyRound className="size-4" aria-hidden="true" />;
+}
 
 export default function SignInForm({
 	onSwitchToSignUp,
@@ -112,9 +128,14 @@ export default function SignInForm({
 							disabled={Boolean(socialProviderPending)}
 							onClick={() => signInWithProvider(provider)}
 						>
-							{socialProviderPending === provider.providerId
-								? "Redirecting..."
-								: `Continue with ${provider.displayName}`}
+							{socialProviderPending === provider.providerId ? (
+								"Redirecting..."
+							) : (
+								<>
+									<ProviderIcon iconUrl={provider.iconUrl} />
+									Continue with {provider.displayName}
+								</>
+							)}
 						</Button>
 					))}
 					<div className="relative py-1 text-center">

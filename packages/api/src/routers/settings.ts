@@ -30,6 +30,21 @@ const DEFAULT_BRANDING = {
 	supportEmail: null,
 };
 const OIDC_DISPLAY_NAME = "OIDC Connection";
+const THE_SVG_CDN =
+	"https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons";
+const THE_SVG_DEFAULTS: Partial<
+	Record<SupportedSocialProvider, { slug: string; variant: string }>
+> = {
+	google: { slug: "google", variant: "color.svg" },
+	github: { slug: "github", variant: "dark.svg" },
+	discord: { slug: "discord", variant: "default.svg" },
+	facebook: { slug: "facebook", variant: "default.svg" },
+	microsoft: { slug: "microsoft", variant: "color.svg" },
+	gitlab: { slug: "gitlab", variant: "default.svg" },
+	slack: { slug: "slack", variant: "default.svg" },
+	linkedin: { slug: "linkedin", variant: "default.svg" },
+	notion: { slug: "notion", variant: "default.svg" },
+};
 
 const providerIdSchema = z
 	.string()
@@ -128,6 +143,7 @@ const providerInputSchema = z
 		tokenEndpoint: optionalHttpsUrlSchema,
 		userinfoEndpoint: optionalHttpsUrlSchema,
 		jwksEndpoint: optionalHttpsUrlSchema,
+		iconUrl: optionalUrlSchema,
 		scopes: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
 		allowSignUp: z.boolean().optional(),
 		overrideUserInfoOnSignIn: z.boolean().optional(),
@@ -176,12 +192,52 @@ const providerInputSchema = z
 		}
 	});
 
+function providerCustomIconUrl(metadata: Record<string, unknown> | null) {
+	const iconUrl = metadata?.iconUrl;
+	return typeof iconUrl === "string" && iconUrl.trim().length > 0
+		? iconUrl
+		: null;
+}
+
+function defaultProviderIconUrl(providerId: string) {
+	if (!isSupportedSocialProvider(providerId)) return null;
+	const icon = THE_SVG_DEFAULTS[providerId];
+	return icon ? `${THE_SVG_CDN}/${icon.slug}/${icon.variant}` : null;
+}
+
+function providerIconUrl(row: typeof authProviderSetting.$inferSelect) {
+	return (
+		providerCustomIconUrl(row.metadata) ??
+		defaultProviderIconUrl(row.providerId)
+	);
+}
+
+function providerMetadataWithIconUrl(
+	metadata: Record<string, unknown> | null,
+	iconUrl: string | null | undefined,
+) {
+	if (iconUrl === undefined) return metadata;
+
+	const next = { ...(metadata ?? {}) };
+	if (iconUrl) {
+		next.iconUrl = iconUrl;
+	} else {
+		delete next.iconUrl;
+	}
+
+	return Object.keys(next).length > 0 ? next : null;
+}
+
 function safeProvider(row: typeof authProviderSetting.$inferSelect) {
+	const customIconUrl = providerCustomIconUrl(row.metadata);
+
 	return {
 		id: row.id,
 		providerId: row.providerId,
 		type: row.type,
 		displayName: row.displayName,
+		iconUrl: providerIconUrl(row),
+		customIconUrl,
 		enabled: row.enabled,
 		clientId: row.clientId ?? "",
 		hasClientSecret: Boolean(row.clientSecretEncrypted),
@@ -284,21 +340,31 @@ export const settingsRouter = router({
 					providerId: authProviderSetting.providerId,
 					type: authProviderSetting.type,
 					displayName: authProviderSetting.displayName,
+					metadata: authProviderSetting.metadata,
 				})
 				.from(authProviderSetting)
 				.where(eq(authProviderSetting.enabled, true))
 				.orderBy(asc(authProviderSetting.sortOrder)),
 		]);
 
-		const providers = providerRows.filter((provider) => {
-			if (provider.type === "social") {
-				return isSupportedSocialProvider(provider.providerId);
-			}
-			if (provider.type === "oidc") {
-				return isLoadedGenericOAuthProvider(provider.providerId);
-			}
-			return false;
-		});
+		const providers = providerRows
+			.filter((provider) => {
+				if (provider.type === "social") {
+					return isSupportedSocialProvider(provider.providerId);
+				}
+				if (provider.type === "oidc") {
+					return isLoadedGenericOAuthProvider(provider.providerId);
+				}
+				return false;
+			})
+			.map((provider) => ({
+				providerId: provider.providerId,
+				type: provider.type,
+				displayName: provider.displayName,
+				iconUrl:
+					providerCustomIconUrl(provider.metadata) ??
+					defaultProviderIconUrl(provider.providerId),
+			}));
 
 		return {
 			branding,
@@ -450,6 +516,10 @@ export const settingsRouter = router({
 						clientSecretUpdatedAt: new Date(),
 					}
 				: {};
+			const metadata = providerMetadataWithIconUrl(
+				existing?.metadata ?? null,
+				input.iconUrl,
+			);
 
 			const [row] = await ctx.db
 				.insert(authProviderSetting)
@@ -467,6 +537,7 @@ export const settingsRouter = router({
 					allowSignUp: input.allowSignUp ?? true,
 					overrideUserInfoOnSignIn: input.overrideUserInfoOnSignIn ?? false,
 					sortOrder: input.sortOrder ?? 0,
+					metadata,
 				})
 				.onConflictDoUpdate({
 					target: authProviderSetting.providerId,
@@ -483,6 +554,7 @@ export const settingsRouter = router({
 							existing?.overrideUserInfoOnSignIn ??
 							false,
 						sortOrder: input.sortOrder ?? existing?.sortOrder ?? 0,
+						metadata,
 						updatedAt: new Date(),
 						...secretUpdates,
 					},
