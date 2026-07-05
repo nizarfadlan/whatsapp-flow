@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "inbox_message_thread_provider_message_unique_idx" ON "inbox_message" USING btree ("thread_id","provider_message_id") WHERE "inbox_message"."provider_message_id" is not null;

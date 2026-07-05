@@ -17,6 +17,7 @@ export type DeviceCapabilities = {
 	pairingCode: boolean;
 	requiresWebhook: boolean;
 	deliveryReceipts: boolean;
+	outboundTemplates: boolean;
 	interactiveMessages: "native" | "text_fallback" | "unsupported";
 };
 
@@ -44,6 +45,7 @@ export const baileysCapabilities: DeviceCapabilities = {
 	pairingCode: true,
 	requiresWebhook: false,
 	deliveryReceipts: false,
+	outboundTemplates: false,
 	interactiveMessages: "text_fallback",
 };
 
@@ -60,5 +62,6 @@ export const metaCloudCapabilities: DeviceCapabilities = {
 	pairingCode: false,
 	requiresWebhook: true,
 	deliveryReceipts: true,
+	outboundTemplates: true,
 	interactiveMessages: "text_fallback",
 };

@@ -1,13 +1,43 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { device } from "@whatsapp-flow/db/schema/device";
+import { env } from "@whatsapp-flow/env/server";
 import {
 	configureMetaDevice,
+	configureMetaDeviceFromEmbeddedSignup,
 	connectionManager,
 	getMetaConfigSummary,
 } from "@whatsapp-flow/whatsapp";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
+
+const requiredTrimmedString = z.string().trim().min(1);
+const optionalTrimmedString = z.preprocess((value) => {
+	if (typeof value !== "string") return value;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}, z.string().min(1).optional());
+
+const metaConfigInput = z.object({
+	phoneNumberId: requiredTrimmedString,
+	accessToken: optionalTrimmedString,
+	appSecret: optionalTrimmedString,
+	businessAccountId: optionalTrimmedString,
+	displayPhoneNumber: optionalTrimmedString,
+	graphApiVersion: optionalTrimmedString.transform((value) =>
+		value ? normalizeGraphApiVersion(value) : undefined,
+	),
+});
+
+const metaEmbeddedSignupInput = metaConfigInput
+	.omit({ accessToken: true, appSecret: true })
+	.extend({
+		name: requiredTrimmedString,
+		code: requiredTrimmedString,
+		state: requiredTrimmedString,
+		redirectUri: optionalTrimmedString,
+	});
 
 async function requireDeviceOwnership(
 	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
@@ -26,6 +56,104 @@ async function requireDeviceOwnership(
 	}
 
 	return found;
+}
+
+function normalizeGraphApiVersion(value: string) {
+	return value.startsWith("v") ? value : `v${value}`;
+}
+
+function createEmbeddedSignupState(userId: string) {
+	const expiresAt = String(Date.now() + 10 * 60 * 1000);
+	const payload = `meta.${userId}.${expiresAt}`;
+	const signature = createHmac("sha256", env.BETTER_AUTH_SECRET)
+		.update(payload)
+		.digest("hex");
+	return `${payload}.${signature}`;
+}
+
+function requireValidEmbeddedSignupState(state: string, userId: string) {
+	const [prefix, stateUserId, expiresAt, signature] = state.split(".");
+	if (prefix !== "meta" || stateUserId !== userId || !expiresAt || !signature) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid Meta Embedded Signup state",
+		});
+	}
+
+	if (Number(expiresAt) < Date.now()) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Meta Embedded Signup state has expired",
+		});
+	}
+
+	const payload = `${prefix}.${stateUserId}.${expiresAt}`;
+	const expected = createHmac("sha256", env.BETTER_AUTH_SECRET)
+		.update(payload)
+		.digest("hex");
+	if (!safeEqual(signature, expected)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid Meta Embedded Signup state",
+		});
+	}
+}
+
+function requireAllowedEmbeddedRedirectUri(value?: string) {
+	if (!value) return;
+	let redirectOrigin: string;
+	try {
+		redirectOrigin = new URL(value).origin;
+	} catch {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Meta Embedded Signup redirect URI is invalid",
+		});
+	}
+
+	const allowedOrigins = [env.CORS_ORIGIN, env.BETTER_AUTH_URL].map(
+		(origin) => new URL(origin).origin,
+	);
+	if (!allowedOrigins.includes(redirectOrigin)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Meta Embedded Signup redirect URI is not allowed",
+		});
+	}
+}
+
+function safeEqual(a: string, b: string) {
+	const aBuffer = Buffer.from(a);
+	const bBuffer = Buffer.from(b);
+	if (aBuffer.length !== bBuffer.length) return false;
+	return timingSafeEqual(aBuffer, bBuffer);
+}
+
+function requireInitialMetaCredentials(input: z.infer<typeof metaConfigInput>) {
+	if (!input.accessToken) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Meta access token is required",
+		});
+	}
+
+	if (!input.appSecret && !env.META_APP_SECRET) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Meta app secret is required unless META_APP_SECRET is configured on the server",
+		});
+	}
+}
+
+function toMetaConfigError(error: unknown) {
+	return new TRPCError({
+		code: "BAD_REQUEST",
+		message:
+			error instanceof Error
+				? error.message
+				: "Failed to configure Meta connection",
+	});
 }
 
 export const deviceRouter = router({
@@ -79,16 +207,85 @@ export const deviceRouter = router({
 			return rows[0];
 		}),
 
+	createMeta: protectedProcedure
+		.input(
+			metaConfigInput.extend({
+				name: requiredTrimmedString,
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			requireInitialMetaCredentials(input);
+
+			const id = crypto.randomUUID();
+			await ctx.db.insert(device).values({
+				id,
+				userId: ctx.session.user.id,
+				name: input.name,
+				provider: "meta_cloud",
+			});
+
+			try {
+				return await configureMetaDevice({
+					deviceId: id,
+					phoneNumberId: input.phoneNumberId,
+					accessToken: input.accessToken,
+					appSecret: input.appSecret,
+					businessAccountId: input.businessAccountId,
+					displayPhoneNumber: input.displayPhoneNumber,
+					graphApiVersion: input.graphApiVersion,
+				});
+			} catch (error) {
+				await ctx.db.delete(device).where(eq(device.id, id));
+				throw toMetaConfigError(error);
+			}
+		}),
+
+	getMetaEmbeddedSignupConfig: protectedProcedure.query(({ ctx }) => ({
+		configured: Boolean(
+			env.META_APP_ID &&
+				env.META_APP_SECRET &&
+				env.META_EMBEDDED_SIGNUP_CONFIG_ID,
+		),
+		appId: env.META_APP_ID ?? null,
+		configId: env.META_EMBEDDED_SIGNUP_CONFIG_ID ?? null,
+		state: createEmbeddedSignupState(ctx.session.user.id),
+		graphApiVersion: env.META_GRAPH_API_VERSION,
+	})),
+
+	createMetaEmbedded: protectedProcedure
+		.input(metaEmbeddedSignupInput)
+		.mutation(async ({ ctx, input }) => {
+			requireValidEmbeddedSignupState(input.state, ctx.session.user.id);
+			requireAllowedEmbeddedRedirectUri(input.redirectUri);
+
+			const id = crypto.randomUUID();
+			await ctx.db.insert(device).values({
+				id,
+				userId: ctx.session.user.id,
+				name: input.name,
+				provider: "meta_cloud",
+			});
+
+			try {
+				return await configureMetaDeviceFromEmbeddedSignup({
+					deviceId: id,
+					code: input.code,
+					redirectUri: input.redirectUri,
+					phoneNumberId: input.phoneNumberId,
+					businessAccountId: input.businessAccountId,
+					displayPhoneNumber: input.displayPhoneNumber,
+					graphApiVersion: input.graphApiVersion,
+				});
+			} catch (error) {
+				await ctx.db.delete(device).where(eq(device.id, id));
+				throw toMetaConfigError(error);
+			}
+		}),
+
 	configureMeta: protectedProcedure
 		.input(
-			z.object({
+			metaConfigInput.extend({
 				id: z.string().min(1),
-				phoneNumberId: z.string().min(1),
-				accessToken: z.string().min(1).optional(),
-				appSecret: z.string().min(1).optional(),
-				businessAccountId: z.string().optional(),
-				displayPhoneNumber: z.string().optional(),
-				graphApiVersion: z.string().optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -104,6 +301,25 @@ export const deviceRouter = router({
 				});
 			}
 
+			const existingConfig = await getMetaConfigSummary(input.id);
+			if (!input.accessToken && !existingConfig?.hasAccessToken) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Meta access token is required",
+				});
+			}
+			if (
+				!input.appSecret &&
+				!env.META_APP_SECRET &&
+				!existingConfig?.hasAppSecret
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						"Meta app secret is required unless META_APP_SECRET is configured on the server",
+				});
+			}
+
 			try {
 				return await configureMetaDevice({
 					deviceId: input.id,
@@ -115,13 +331,7 @@ export const deviceRouter = router({
 					graphApiVersion: input.graphApiVersion,
 				});
 			} catch (error) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message:
-						error instanceof Error
-							? error.message
-							: "Failed to configure Meta connection",
-				});
+				throw toMetaConfigError(error);
 			}
 		}),
 

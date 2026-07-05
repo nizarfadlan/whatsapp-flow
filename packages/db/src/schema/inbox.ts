@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	index,
 	integer,
@@ -103,6 +103,9 @@ export const inboxMessage = pgTable(
 		index("inbox_message_threadId_idx").on(table.threadId),
 		index("inbox_message_createdAt_idx").on(table.createdAt),
 		index("inbox_message_provider_message_idx").on(table.providerMessageId),
+		uniqueIndex("inbox_message_thread_provider_message_unique_idx")
+			.on(table.threadId, table.providerMessageId)
+			.where(sql`${table.providerMessageId} is not null`),
 	],
 );
 

@@ -10,13 +10,34 @@ import {
 } from "../../secrets";
 import { metaCloudCapabilities } from "../types";
 import {
+	downloadMetaMedia,
+	exchangeMetaOAuthCode,
 	type MetaCredentials,
+	MetaGraphError,
 	sendMetaMessage,
 	validateMetaPhoneNumber,
 } from "./client";
 
 export const META_ACCESS_TOKEN_SECRET = "meta_access_token";
 export const META_APP_SECRET_SECRET = "meta_app_secret";
+
+type MetaTokenSource = "manual" | "embedded_signup";
+
+type MetaTokenMetadata = {
+	source?: MetaTokenSource;
+	type?: string | null;
+	receivedAt?: string;
+	expiresAt?: string | null;
+	lastValidatedAt?: string;
+};
+
+type MetaProviderConfig = {
+	graphApiVersion?: string | null;
+	verifiedName?: string | null;
+	qualityRating?: string | null;
+	token?: MetaTokenMetadata;
+	[key: string]: unknown;
+};
 
 export type ConfigureMetaDeviceInput = {
 	deviceId: string;
@@ -26,9 +47,17 @@ export type ConfigureMetaDeviceInput = {
 	businessAccountId?: string | null;
 	displayPhoneNumber?: string | null;
 	graphApiVersion?: string | null;
+	tokenSource?: MetaTokenSource;
+	tokenType?: string | null;
+	tokenExpiresAt?: Date | null;
 };
 
 export async function configureMetaDevice(input: ConfigureMetaDeviceInput) {
+	const existingConfig = await getMetaProviderConfig(input.deviceId);
+	const credentials = await getCandidateMetaCredentials(input);
+	const phone = await validateMetaDevice(input.deviceId, credentials);
+	const validatedAt = new Date();
+
 	if (input.accessToken) {
 		await upsertProviderSecret({
 			deviceId: input.deviceId,
@@ -45,11 +74,6 @@ export async function configureMetaDevice(input: ConfigureMetaDeviceInput) {
 			value: input.appSecret,
 		});
 	}
-	const credentials = await getMetaCredentials(input.deviceId, {
-		phoneNumberId: input.phoneNumberId,
-		graphApiVersion: input.graphApiVersion,
-	});
-	const phone = await validateMetaPhoneNumber(credentials);
 	const displayPhoneNumber =
 		phone.display_phone_number ?? input.displayPhoneNumber ?? null;
 
@@ -64,12 +88,13 @@ export async function configureMetaDevice(input: ConfigureMetaDeviceInput) {
 			status: "connected",
 			statusReason: null,
 			lastError: null,
-			lastConnectedAt: new Date(),
-			providerConfig: {
-				graphApiVersion: input.graphApiVersion ?? null,
+			lastConnectedAt: validatedAt,
+			providerConfig: buildMetaProviderConfig(existingConfig, input, {
+				graphApiVersion: credentials.graphApiVersion ?? null,
 				verifiedName: phone.verified_name ?? null,
 				qualityRating: phone.quality_rating ?? null,
-			},
+				validatedAt,
+			}),
 			capabilities: metaCloudCapabilities,
 		})
 		.where(eq(device.id, input.deviceId));
@@ -77,10 +102,41 @@ export async function configureMetaDevice(input: ConfigureMetaDeviceInput) {
 	return getMetaConfigSummary(input.deviceId);
 }
 
+export type ConfigureMetaDeviceFromEmbeddedSignupInput = Omit<
+	ConfigureMetaDeviceInput,
+	"accessToken" | "appSecret"
+> & {
+	code: string;
+	redirectUri?: string | null;
+};
+
+export async function configureMetaDeviceFromEmbeddedSignup(
+	input: ConfigureMetaDeviceFromEmbeddedSignupInput,
+) {
+	const token = await exchangeMetaOAuthCode({
+		code: input.code,
+		redirectUri: input.redirectUri,
+		graphApiVersion: input.graphApiVersion,
+	});
+
+	return configureMetaDevice({
+		...input,
+		accessToken: token.accessToken,
+		appSecret: undefined,
+		tokenSource: "embedded_signup",
+		tokenType: token.tokenType,
+		tokenExpiresAt: token.expiresIn
+			? new Date(Date.now() + token.expiresIn * 1000)
+			: null,
+	});
+}
+
 export async function connectMetaDevice(deviceId: string) {
+	const existingConfig = await getMetaProviderConfig(deviceId);
 	const credentials = await getMetaCredentials(deviceId);
-	const phone = await validateMetaPhoneNumber(credentials);
+	const phone = await validateMetaDevice(deviceId, credentials);
 	const displayPhoneNumber = phone.display_phone_number ?? null;
+	const validatedAt = new Date();
 
 	await db
 		.update(device)
@@ -90,12 +146,17 @@ export async function connectMetaDevice(deviceId: string) {
 			status: "connected",
 			statusReason: null,
 			lastError: null,
-			lastConnectedAt: new Date(),
-			providerConfig: {
-				graphApiVersion: credentials.graphApiVersion ?? null,
-				verifiedName: phone.verified_name ?? null,
-				qualityRating: phone.quality_rating ?? null,
-			},
+			lastConnectedAt: validatedAt,
+			providerConfig: buildMetaProviderConfig(
+				existingConfig,
+				{},
+				{
+					graphApiVersion: credentials.graphApiVersion ?? null,
+					verifiedName: phone.verified_name ?? null,
+					qualityRating: phone.quality_rating ?? null,
+					validatedAt,
+				},
+			),
 			capabilities: metaCloudCapabilities,
 		})
 		.where(eq(device.id, deviceId));
@@ -161,8 +222,10 @@ export async function getMetaConfigSummary(deviceId: string) {
 	if (!row) return null;
 
 	const secrets = await getProviderSecretSummary(deviceId);
+	const providerConfig = row.providerConfig as MetaProviderConfig | null;
 	return {
 		...row,
+		tokenMetadata: providerConfig?.token ?? null,
 		hasAccessToken: secrets.has(META_ACCESS_TOKEN_SECRET),
 		hasAppSecret: secrets.has(META_APP_SECRET_SECRET),
 	};
@@ -170,6 +233,89 @@ export async function getMetaConfigSummary(deviceId: string) {
 
 export async function getMetaAppSecret(deviceId: string) {
 	return getProviderSecret(deviceId, META_APP_SECRET_SECRET);
+}
+
+export async function downloadMetaDeviceMedia(
+	deviceId: string,
+	mediaId: string,
+) {
+	const credentials = await getMetaCredentials(deviceId);
+	return downloadMetaMedia({ credentials, mediaId });
+}
+
+async function getMetaProviderConfig(deviceId: string) {
+	const [row] = await db
+		.select({ providerConfig: device.providerConfig })
+		.from(device)
+		.where(eq(device.id, deviceId))
+		.limit(1);
+	return (row?.providerConfig as MetaProviderConfig | null) ?? null;
+}
+
+function buildMetaProviderConfig(
+	existingConfig: MetaProviderConfig | null,
+	input: Partial<ConfigureMetaDeviceInput>,
+	phone: {
+		graphApiVersion: string | null;
+		verifiedName: string | null;
+		qualityRating: string | null;
+		validatedAt: Date;
+	},
+): MetaProviderConfig {
+	return {
+		...(existingConfig ?? {}),
+		graphApiVersion: phone.graphApiVersion,
+		verifiedName: phone.verifiedName,
+		qualityRating: phone.qualityRating,
+		token: buildTokenMetadata(existingConfig?.token, input, phone.validatedAt),
+	};
+}
+
+function buildTokenMetadata(
+	existingToken: MetaTokenMetadata | undefined,
+	input: Partial<ConfigureMetaDeviceInput>,
+	validatedAt: Date,
+): MetaTokenMetadata | undefined {
+	if (!input.accessToken && !existingToken) return undefined;
+	const lastValidatedAt = validatedAt.toISOString();
+	if (!input.accessToken) {
+		return { ...existingToken, lastValidatedAt };
+	}
+
+	return {
+		source: input.tokenSource ?? "manual",
+		type: input.tokenType ?? existingToken?.type ?? null,
+		receivedAt: validatedAt.toISOString(),
+		expiresAt: input.tokenExpiresAt?.toISOString() ?? null,
+		lastValidatedAt,
+	};
+}
+
+async function getCandidateMetaCredentials(
+	input: ConfigureMetaDeviceInput,
+): Promise<MetaCredentials> {
+	const [row] = await db
+		.select({ providerConfig: device.providerConfig })
+		.from(device)
+		.where(eq(device.id, input.deviceId))
+		.limit(1);
+	const providerConfig = row?.providerConfig as {
+		graphApiVersion?: string | null;
+	} | null;
+	const accessToken =
+		input.accessToken ??
+		(await getProviderSecret(input.deviceId, META_ACCESS_TOKEN_SECRET));
+
+	if (!accessToken || !input.phoneNumberId) {
+		throw new Error("Meta WhatsApp credentials are incomplete");
+	}
+
+	return {
+		accessToken,
+		phoneNumberId: input.phoneNumberId,
+		graphApiVersion:
+			input.graphApiVersion ?? providerConfig?.graphApiVersion ?? null,
+	};
 }
 
 async function getMetaCredentials(
@@ -204,6 +350,42 @@ async function getMetaCredentials(
 		graphApiVersion:
 			overrides.graphApiVersion ?? providerConfig?.graphApiVersion ?? null,
 	};
+}
+
+async function validateMetaDevice(
+	deviceId: string,
+	credentials: MetaCredentials,
+) {
+	try {
+		return await validateMetaPhoneNumber(credentials);
+	} catch (error) {
+		await db
+			.update(device)
+			.set({
+				status: "disconnected",
+				statusReason: "meta_validation_failed",
+				lastError: describeMetaError(error),
+			})
+			.where(eq(device.id, deviceId));
+		throw error;
+	}
+}
+
+function describeMetaError(error: unknown) {
+	if (error instanceof MetaGraphError) {
+		const suffix = [
+			error.details.code ? `code ${error.details.code}` : null,
+			error.details.subcode ? `subcode ${error.details.subcode}` : null,
+			error.details.fbtraceId ? `fbtrace ${error.details.fbtraceId}` : null,
+		]
+			.filter(Boolean)
+			.join(", ");
+		return suffix ? `${error.message} (${suffix})` : error.message;
+	}
+
+	return error instanceof Error
+		? error.message
+		: "Failed to validate Meta device";
 }
 
 function normalizePhone(value: string | null) {

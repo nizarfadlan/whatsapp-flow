@@ -1,15 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@whatsapp-flow/db";
+import { contact as contactTable } from "@whatsapp-flow/db/schema/contact";
 import { device } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { ConnectionManagerEvents } from "../../types";
 import { getMetaAppSecret } from "./transport";
 
 type EmitDeviceMessage = (
 	event: ConnectionManagerEvents["device:message"],
 ) => void;
+
+type EmitInboxUpdated = (event: {
+	deviceId: string;
+	threadId?: string;
+}) => void;
 
 type MetaWebhookPayload = {
 	entry?: {
@@ -102,24 +108,42 @@ export async function handleMetaWebhook(input: {
 	rawBody: string;
 	signature: string | null;
 	emitDeviceMessage: EmitDeviceMessage;
+	emitInboxUpdated?: EmitInboxUpdated;
 }) {
 	const payload = JSON.parse(input.rawBody) as MetaWebhookPayload;
 	const values = getWebhookValues(payload);
 	let processed = 0;
+	let statusUpdates = 0;
+
+	console.info("Meta WhatsApp webhook received", { valueCount: values.length });
 
 	for (const value of values) {
 		const phoneNumberId = value.metadata?.phone_number_id;
 		if (!phoneNumberId) continue;
 
 		const deviceRow = await getMetaDeviceByPhoneNumberId(phoneNumberId);
-		if (!deviceRow) continue;
+		if (!deviceRow) {
+			console.warn(
+				"Meta WhatsApp webhook ignored for unknown phone number ID",
+				{
+					phoneNumberId,
+				},
+			);
+			continue;
+		}
 
 		const appSecret =
-			env.META_APP_SECRET ?? (await getMetaAppSecret(deviceRow.id));
+			(await getMetaAppSecret(deviceRow.id)) ?? env.META_APP_SECRET;
 		if (
 			!appSecret ||
 			!verifyMetaWebhookSignature(input.rawBody, input.signature, appSecret)
 		) {
+			console.warn("Meta WhatsApp webhook signature verification failed", {
+				deviceId: deviceRow.id,
+				phoneNumberId,
+				hasSignature: Boolean(input.signature),
+				hasAppSecret: Boolean(appSecret),
+			});
 			throw new Error("Invalid Meta webhook signature");
 		}
 
@@ -128,9 +152,27 @@ export async function handleMetaWebhook(input: {
 			.set({ lastWebhookAt: new Date() })
 			.where(eq(device.id, deviceRow.id));
 
-		if (deviceRow.status !== "connected") continue;
+		const deliveryUpdates = await updateDeliveryStatuses(
+			deviceRow.id,
+			value.statuses ?? [],
+		);
+		statusUpdates += deliveryUpdates.count;
+		for (const threadId of deliveryUpdates.threadIds) {
+			input.emitInboxUpdated?.({ deviceId: deviceRow.id, threadId });
+		}
 
-		await updateDeliveryStatuses(deviceRow.id, value.statuses ?? []);
+		if (deviceRow.status !== "connected") {
+			console.info(
+				"Meta WhatsApp inbound messages ignored for disconnected device",
+				{
+					deviceId: deviceRow.id,
+					phoneNumberId,
+					status: deviceRow.status,
+				},
+			);
+			continue;
+		}
+
 		const contacts = new Map(
 			(value.contacts ?? [])
 				.filter((contact) => contact.wa_id)
@@ -140,7 +182,19 @@ export async function handleMetaWebhook(input: {
 		for (const message of value.messages ?? []) {
 			const from = message.from;
 			if (!from || !message.id) continue;
-			if (await wasMessageProcessed(deviceRow.id, message.id)) continue;
+			const reserved = await reserveInboundMetaMessage({
+				deviceId: deviceRow.id,
+				from,
+				contactName: contacts.get(from),
+				message,
+			});
+			if (!reserved) {
+				console.info("Meta WhatsApp duplicate message ignored", {
+					deviceId: deviceRow.id,
+					providerMessageId: message.id,
+				});
+				continue;
+			}
 
 			input.emitDeviceMessage({
 				deviceId: deviceRow.id,
@@ -161,6 +215,11 @@ export async function handleMetaWebhook(input: {
 			processed++;
 		}
 	}
+
+	console.info("Meta WhatsApp webhook processed", {
+		messageCount: processed,
+		statusUpdateCount: statusUpdates,
+	});
 
 	return { processed };
 }
@@ -208,10 +267,12 @@ async function updateDeliveryStatuses(
 	deviceId: string,
 	statuses: MetaWebhookStatus[],
 ) {
+	let count = 0;
+	const threadIds = new Set<string>();
 	for (const status of statuses) {
 		if (!status.id || !status.status) continue;
 		const [messageRow] = await db
-			.select({ id: inboxMessage.id })
+			.select({ id: inboxMessage.id, threadId: inboxMessage.threadId })
 			.from(inboxMessage)
 			.innerJoin(inboxThread, eq(inboxMessage.threadId, inboxThread.id))
 			.where(
@@ -227,7 +288,10 @@ async function updateDeliveryStatuses(
 			.update(inboxMessage)
 			.set(statusToInboxUpdates(status))
 			.where(eq(inboxMessage.id, messageRow.id));
+		threadIds.add(messageRow.threadId);
+		count++;
 	}
+	return { count, threadIds: [...threadIds] };
 }
 
 function statusToInboxUpdates(status: MetaWebhookStatus) {
@@ -245,22 +309,97 @@ function statusToInboxUpdates(status: MetaWebhookStatus) {
 	};
 }
 
-async function wasMessageProcessed(
-	deviceId: string,
-	providerMessageId: string,
-) {
-	const [row] = await db
-		.select({ id: inboxMessage.id })
-		.from(inboxMessage)
-		.innerJoin(inboxThread, eq(inboxMessage.threadId, inboxThread.id))
-		.where(
-			and(
-				eq(inboxThread.deviceId, deviceId),
-				eq(inboxMessage.providerMessageId, providerMessageId),
-			),
-		)
-		.limit(1);
-	return Boolean(row);
+async function reserveInboundMetaMessage(input: {
+	deviceId: string;
+	from: string;
+	contactName?: string;
+	message: MetaWebhookMessage;
+}) {
+	const now = new Date();
+	const chatJid = toPhoneJid(input.from);
+	const text = extractMetaMessageText(input.message);
+	const [savedContact] = await db
+		.insert(contactTable)
+		.values({
+			id: crypto.randomUUID(),
+			deviceId: input.deviceId,
+			jid: chatJid,
+			phoneNumber: input.from,
+			name: input.contactName ?? null,
+			pushName: input.contactName ?? null,
+			profileName: input.contactName ?? null,
+			providerContactId: input.from,
+			source: "message",
+		})
+		.onConflictDoUpdate({
+			target: [contactTable.deviceId, contactTable.jid],
+			set: {
+				phoneNumber: input.from,
+				name: input.contactName ?? null,
+				pushName: input.contactName ?? null,
+				profileName: input.contactName ?? null,
+				providerContactId: input.from,
+				updatedAt: now,
+			},
+		})
+		.returning({ id: contactTable.id });
+
+	const [savedThread] = await db
+		.insert(inboxThread)
+		.values({
+			id: crypto.randomUUID(),
+			deviceId: input.deviceId,
+			chatType: "private",
+			chatJid,
+			contactId: savedContact?.id ?? null,
+			contactNumber: input.from,
+			contactName: input.contactName ?? null,
+			lastMessageText: text ?? `[${input.message.type ?? "unknown"}]`,
+			lastMessageAt: now,
+			unreadCount: 0,
+		})
+		.onConflictDoUpdate({
+			target: [inboxThread.deviceId, inboxThread.chatJid],
+			set: {
+				chatType: "private",
+				contactId: savedContact?.id ?? null,
+				contactNumber: input.from,
+				contactName: input.contactName ?? null,
+			},
+		})
+		.returning({ id: inboxThread.id });
+
+	const threadId = savedThread?.id;
+	if (!threadId || !input.message.id) return false;
+
+	const [insertedMessage] = await db
+		.insert(inboxMessage)
+		.values({
+			id: crypto.randomUUID(),
+			threadId,
+			direction: "inbound",
+			messageType: input.message.type ?? "unknown",
+			text: text ?? null,
+			providerMessageId: input.message.id,
+			deliveryStatus: "received",
+			raw: input.message as Record<string, unknown>,
+		})
+		.onConflictDoNothing()
+		.returning({ id: inboxMessage.id });
+
+	if (!insertedMessage) return false;
+
+	await db
+		.update(inboxThread)
+		.set({
+			lastMessageText: text ?? `[${input.message.type ?? "unknown"}]`,
+			lastMessageAt: now,
+			unreadCount: sql`${inboxThread.unreadCount} + 1`,
+			updatedAt: now,
+		})
+		.where(eq(inboxThread.id, threadId));
+
+	return true;
 }
 
 function extractMetaMessageText(message: MetaWebhookMessage) {

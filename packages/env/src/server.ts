@@ -22,6 +22,8 @@ export const env = createEnv({
 		META_GRAPH_API_VERSION: z.string().default("v23.0"),
 		META_APP_SECRET: z.string().optional(),
 		META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+		META_APP_ID: z.string().optional(),
+		META_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional(),
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),

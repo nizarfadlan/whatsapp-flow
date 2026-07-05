@@ -98,6 +98,109 @@ function formatTime(dateStr: string) {
 	return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+type DeliveryStatusInput = {
+	direction: string;
+	deliveryStatus?: string | null;
+	error?: string | null;
+	sentAt?: Date | string | null;
+	deliveredAt?: Date | string | null;
+	readAt?: Date | string | null;
+};
+
+function getDeliveryStatusLabel(message: DeliveryStatusInput) {
+	if (message.direction !== "outbound") return null;
+	if (message.error || message.deliveryStatus === "failed") return "Failed";
+	if (message.readAt || message.deliveryStatus === "read") return "Read";
+	if (message.deliveredAt || message.deliveryStatus === "delivered") {
+		return "Delivered";
+	}
+	if (message.sentAt || message.deliveryStatus === "sent") return "Sent";
+	if (message.deliveryStatus === "accepted") return "Accepted";
+	return message.deliveryStatus ?? null;
+}
+
+type StoredMedia = {
+	url?: string | null;
+	mimeType?: string | null;
+	fileName?: string | null;
+};
+
+type MessageContentInput = {
+	messageType: string;
+	text?: string | null;
+	raw?: unknown;
+};
+
+function getMessageMedia(raw: unknown): StoredMedia | null {
+	if (!raw || typeof raw !== "object" || !("media" in raw)) return null;
+	const media = (raw as { media?: unknown }).media;
+	return media && typeof media === "object" ? (media as StoredMedia) : null;
+}
+
+function getTemplateSummary(raw: unknown) {
+	if (!raw || typeof raw !== "object" || !("template" in raw)) return null;
+	const template = (
+		raw as { template?: { name?: unknown; languageCode?: unknown } }
+	).template;
+	if (!template || typeof template.name !== "string") return null;
+	return `Template: ${template.name}${
+		typeof template.languageCode === "string"
+			? ` (${template.languageCode})`
+			: ""
+	}`;
+}
+
+function MessageContent({ message }: { message: MessageContentInput }) {
+	const media = getMessageMedia(message.raw);
+	const templateSummary = getTemplateSummary(message.raw);
+	if (media?.url && message.messageType === "image") {
+		return (
+			<div className="space-y-1">
+				<img
+					src={media.url}
+					alt={media.fileName ?? "WhatsApp image"}
+					className="max-h-64 rounded-lg object-cover"
+				/>
+				{message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+			</div>
+		);
+	}
+	if (media?.url && message.messageType === "video") {
+		return (
+			<div className="space-y-1">
+				<video src={media.url} controls className="max-h-64 rounded-lg">
+					<track kind="captions" />
+				</video>
+				{message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
+			</div>
+		);
+	}
+	if (media?.url && message.messageType === "audio") {
+		return (
+			<audio src={media.url} controls className="w-64 max-w-full">
+				<track kind="captions" />
+			</audio>
+		);
+	}
+	if (media?.url && message.messageType === "document") {
+		return (
+			<a
+				href={media.url}
+				target="_blank"
+				rel="noreferrer"
+				className="font-medium underline underline-offset-2"
+			>
+				{media.fileName ?? message.text ?? "Download document"}
+			</a>
+		);
+	}
+	return (
+		<p className="whitespace-pre-wrap leading-relaxed">
+			{templateSummary ?? message.text ?? `[${message.messageType}]`}
+		</p>
+	);
+}
+
 function ThreadList({
 	threads,
 	selectedId,
@@ -263,38 +366,50 @@ function ThreadView({ thread }: { thread: ThreadRow }) {
 	return (
 		<ScrollArea className="flex-1 bg-muted/20">
 			<div className="flex flex-col gap-2 p-4">
-				{messages.map((msg) => (
-					<div
-						key={msg.id}
-						className={cn(
-							"flex",
-							msg.direction === "outbound" ? "justify-end" : "justify-start",
-						)}
-					>
+				{messages.map((msg) => {
+					const deliveryStatus = getDeliveryStatusLabel(msg);
+					return (
 						<div
+							key={msg.id}
 							className={cn(
-								"max-w-[72%] rounded-xl border px-3 py-2 text-xs shadow-xs",
-								msg.direction === "outbound"
-									? "rounded-br-sm bg-primary text-primary-foreground"
-									: "rounded-bl-sm bg-card",
+								"flex",
+								msg.direction === "outbound" ? "justify-end" : "justify-start",
 							)}
 						>
-							<p className="whitespace-pre-wrap leading-relaxed">
-								{msg.text ?? `[${msg.messageType}]`}
-							</p>
-							<p
+							<div
 								className={cn(
-									"mt-1 text-[10px]",
+									"max-w-[72%] rounded-xl border px-3 py-2 text-xs shadow-xs",
 									msg.direction === "outbound"
-										? "text-primary-foreground/70"
-										: "text-muted-foreground",
+										? "rounded-br-sm bg-primary text-primary-foreground"
+										: "rounded-bl-sm bg-card",
 								)}
 							>
-								{formatTime(msg.createdAt.toString())}
-							</p>
+								<MessageContent message={msg} />
+								<div
+									className={cn(
+										"mt-1 flex items-center justify-between gap-2 text-[10px]",
+										msg.direction === "outbound"
+											? "text-primary-foreground/70"
+											: "text-muted-foreground",
+									)}
+								>
+									<span>{formatTime(msg.createdAt.toString())}</span>
+									{deliveryStatus && (
+										<span className="inline-flex items-center gap-1">
+											<CheckCheck className="size-3" />
+											{deliveryStatus}
+										</span>
+									)}
+								</div>
+								{msg.error && (
+									<p className="mt-1 text-[10px] text-destructive">
+										{msg.error}
+									</p>
+								)}
+							</div>
 						</div>
-					</div>
-				))}
+					);
+				})}
 			</div>
 		</ScrollArea>
 	);

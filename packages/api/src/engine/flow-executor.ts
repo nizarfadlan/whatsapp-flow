@@ -189,6 +189,38 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 				});
 				return true;
 			}
+			case "send-template": {
+				const name = resolveTemplate(String(data.templateName ?? ""), ctx);
+				const languageCode = resolveTemplate(
+					String(data.languageCode ?? "en_US"),
+					ctx,
+				);
+				const bodyParameters = Array.isArray(data.templateBodyParams)
+					? data.templateBodyParams.map((param) =>
+							resolveTemplate(String(param), ctx),
+						)
+					: [];
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
+					type: "template",
+					name,
+					languageCode,
+					bodyParameters,
+				});
+				const text = `Template: ${name}`;
+				void recordOutboundMessage(
+					ctx,
+					"template",
+					text,
+					{ template: { name, languageCode, bodyParameters } },
+					sendResult,
+				);
+				ctx.nodeResults.push({
+					nodeId: node.id,
+					status: "success",
+					output: text,
+				});
+				return true;
+			}
 			case "send-image":
 			case "send-video":
 			case "send-audio": {
@@ -211,7 +243,7 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 					ctx,
 					messageType,
 					caption ?? url,
-					{ url },
+					{ media: { type: messageType, url } },
 					sendResult,
 				);
 				ctx.nodeResults.push({
@@ -224,11 +256,18 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 			case "send-document": {
 				const url = String(data.mediaUrl ?? "");
 				const fileName = String(data.fileName ?? "file");
-				await sendDeviceMessage(ctx.deviceId, jid, {
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "document",
 					url,
 					fileName,
 				});
+				void recordOutboundMessage(
+					ctx,
+					"document",
+					fileName,
+					{ media: { type: "document", url, fileName } },
+					sendResult,
+				);
 				ctx.nodeResults.push({
 					nodeId: node.id,
 					status: "success",

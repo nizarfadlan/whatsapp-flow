@@ -21,6 +21,7 @@ import { env } from "@whatsapp-flow/env/server";
 import { storage } from "@whatsapp-flow/storage";
 import {
 	connectionManager,
+	downloadMetaDeviceMedia,
 	handleMetaWebhook,
 	verifyMetaWebhookChallenge,
 } from "@whatsapp-flow/whatsapp";
@@ -97,6 +98,8 @@ app.post("/api/whatsapp/meta/webhook", async (c) => {
 			signature: c.req.header("x-hub-signature-256") ?? null,
 			emitDeviceMessage: (event) =>
 				connectionManager.emit("device:message", event),
+			emitInboxUpdated: (event) =>
+				connectionManager.emit("inbox:updated", event),
 		});
 		return c.text("OK");
 	} catch (error) {
@@ -472,9 +475,9 @@ connectionManager.on("device:message", async (ev) => {
 				channelJid: chatType === "channel" ? contact.jid : null,
 				contactNumber: chatType === "private" ? (contact.number ?? null) : null,
 				contactName: contact.name ?? null,
-				lastMessageText: message.text ?? null,
+				lastMessageText: message.text ?? `[${message.type}]`,
 				lastMessageAt: now,
-				unreadCount: 1,
+				unreadCount: 0,
 			})
 			.onConflictDoUpdate({
 				target: [inboxThread.deviceId, inboxThread.chatJid],
@@ -490,9 +493,6 @@ connectionManager.on("device:message", async (ev) => {
 					contactName: Object.hasOwn(contact, "name")
 						? (contact.name ?? null)
 						: undefined, // undefined skips updating if not present in payload
-					lastMessageText: message.text ?? null,
-					lastMessageAt: now,
-					unreadCount: sql`${inboxThread.unreadCount} + 1`,
 				},
 			})
 			.returning({ id: inboxThread.id });
@@ -500,16 +500,58 @@ connectionManager.on("device:message", async (ev) => {
 		const threadId = savedThread?.id;
 
 		if (threadId) {
-			await db.insert(inboxMessage).values({
-				id: crypto.randomUUID(),
-				threadId,
-				direction: "inbound",
+			const messageRaw = await maybeStoreInboundMetaMedia({
+				deviceId,
+				provider: ev.provider ?? "baileys",
+				providerMessageId: message.providerMessageId,
 				messageType: message.type,
-				text: message.text ?? null,
-				providerMessageId: message.providerMessageId ?? null,
-				deliveryStatus: "received",
-				raw: message.raw as Record<string, unknown> | null,
+				raw: message.raw,
 			});
+			const [insertedMessage] = await db
+				.insert(inboxMessage)
+				.values({
+					id: crypto.randomUUID(),
+					threadId,
+					direction: "inbound",
+					messageType: message.type,
+					text: message.text ?? null,
+					providerMessageId: message.providerMessageId ?? null,
+					deliveryStatus: "received",
+					raw: messageRaw,
+				})
+				.onConflictDoNothing()
+				.returning({ id: inboxMessage.id });
+
+			if (!insertedMessage) {
+				if (message.providerMessageId && messageRaw) {
+					await db
+						.update(inboxMessage)
+						.set({ raw: messageRaw, updatedAt: now })
+						.where(
+							and(
+								eq(inboxMessage.threadId, threadId),
+								eq(inboxMessage.providerMessageId, message.providerMessageId),
+							),
+						);
+					connectionManager.emit("inbox:updated", { deviceId, threadId });
+				}
+				console.info("Duplicate inbound WhatsApp message ignored", {
+					deviceId,
+					threadId,
+					providerMessageId: message.providerMessageId,
+				});
+				return;
+			}
+
+			await db
+				.update(inboxThread)
+				.set({
+					lastMessageText: message.text ?? `[${message.type}]`,
+					lastMessageAt: now,
+					unreadCount: sql`${inboxThread.unreadCount} + 1`,
+					updatedAt: now,
+				})
+				.where(eq(inboxThread.id, threadId));
 			connectionManager.emit("inbox:updated", { deviceId, threadId });
 		}
 	} catch (err) {
@@ -620,6 +662,112 @@ connectionManager.on("device:channels", async (ev) => {
 		console.error("Failed to persist channels sync", err);
 	}
 });
+
+type MetaInboundMediaInfo = {
+	type: "image" | "video" | "audio" | "document";
+	id: string;
+	mimeType?: string;
+	fileName?: string;
+	sha256?: string;
+};
+
+async function maybeStoreInboundMetaMedia(input: {
+	deviceId: string;
+	provider: string;
+	providerMessageId?: string;
+	messageType: string;
+	raw: unknown;
+}): Promise<Record<string, unknown> | null> {
+	if (!input.raw || typeof input.raw !== "object") return null;
+	const raw = input.raw as Record<string, unknown>;
+	if (input.provider !== "meta_cloud") return raw;
+
+	const media = getMetaInboundMedia(input.messageType, raw);
+	if (!media || !input.providerMessageId) return raw;
+
+	try {
+		const downloaded = await downloadMetaDeviceMedia(input.deviceId, media.id);
+		const fileName =
+			media.fileName ??
+			`${media.id}${extensionForMime(downloaded.mimeType ?? media.mimeType)}`;
+		const key = [
+			"whatsapp",
+			"meta",
+			input.deviceId,
+			input.providerMessageId,
+			`${media.id}-${sanitizeFileName(fileName)}`,
+		].join("/");
+		const stored = await storage.put(
+			key,
+			downloaded.bytes,
+			downloaded.mimeType ?? media.mimeType ?? "application/octet-stream",
+		);
+
+		return {
+			...raw,
+			media: {
+				type: media.type,
+				id: media.id,
+				mimeType: downloaded.mimeType ?? media.mimeType ?? null,
+				fileName,
+				key: stored.key,
+				url: stored.url,
+				size: downloaded.size ?? downloaded.bytes.byteLength,
+				sha256: media.sha256 ?? downloaded.sha256 ?? null,
+			},
+		};
+	} catch (error) {
+		console.warn("Failed to store inbound Meta WhatsApp media", {
+			deviceId: input.deviceId,
+			providerMessageId: input.providerMessageId,
+			mediaId: media.id,
+			error: error instanceof Error ? error.message : "Unknown error",
+		});
+		return {
+			...raw,
+			mediaDownloadError:
+				error instanceof Error ? error.message : "Failed to download media",
+		};
+	}
+}
+
+function getMetaInboundMedia(
+	messageType: string,
+	raw: Record<string, unknown>,
+): MetaInboundMediaInfo | null {
+	if (!["image", "video", "audio", "document"].includes(messageType)) {
+		return null;
+	}
+	const media = raw[messageType];
+	if (!media || typeof media !== "object") return null;
+	const mediaRecord = media as Record<string, unknown>;
+	const id = mediaRecord.id;
+	if (typeof id !== "string" || !id) return null;
+	return {
+		type: messageType as MetaInboundMediaInfo["type"],
+		id,
+		mimeType:
+			typeof mediaRecord.mime_type === "string"
+				? mediaRecord.mime_type
+				: undefined,
+		fileName:
+			typeof mediaRecord.filename === "string"
+				? mediaRecord.filename
+				: undefined,
+		sha256:
+			typeof mediaRecord.sha256 === "string" ? mediaRecord.sha256 : undefined,
+	};
+}
+
+function sanitizeFileName(value: string) {
+	return value.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "media";
+}
+
+function extensionForMime(value?: string | null) {
+	if (!value) return "";
+	const subtype = value.split("/")[1]?.split(";")[0];
+	return subtype ? `.${subtype.replace(/[^\w.-]+/g, "")}` : "";
+}
 
 async function reconnectDevices() {
 	const reconnectable = await db

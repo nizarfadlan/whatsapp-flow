@@ -7,6 +7,8 @@ export type { OutgoingMessage } from "./message-sender";
 export { sendWhatsAppMessage } from "./message-sender";
 export {
 	configureMetaDevice,
+	configureMetaDeviceFromEmbeddedSignup,
+	downloadMetaDeviceMedia,
 	getMetaConfigSummary,
 } from "./providers/meta/transport";
 export {

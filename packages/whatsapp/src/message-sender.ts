@@ -1,5 +1,10 @@
 import type { WAMessageKey, WASocket } from "baileys";
 
+export type TemplateHeaderParameter =
+	| { type: "text"; text: string }
+	| { type: "image" | "video"; url: string }
+	| { type: "document"; url: string; fileName?: string };
+
 export type OutgoingMessage =
 	| { type: "text"; text: string }
 	| { type: "image"; url: string; caption?: string }
@@ -18,6 +23,13 @@ export type OutgoingMessage =
 			text: string;
 			messageKey?: WAMessageKey;
 			providerMessageId?: string;
+	  }
+	| {
+			type: "template";
+			name: string;
+			languageCode: string;
+			bodyParameters?: string[];
+			header?: TemplateHeaderParameter;
 	  };
 
 export async function sendWhatsAppMessage(
@@ -67,5 +79,9 @@ export async function sendWhatsAppMessage(
 					key: message.messageKey,
 				},
 			});
+		case "template":
+			throw new Error(
+				"Template messages are only supported by Meta Cloud API devices",
+			);
 	}
 }

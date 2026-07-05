@@ -565,6 +565,83 @@ function ReactionConfig({
 	);
 }
 
+function TemplateConfig({
+	data,
+	onUpdate,
+}: {
+	data: MessageNodeData;
+	onUpdate: (d: Partial<FlowNodeData>) => void;
+}) {
+	const params = data.templateBodyParams ?? [];
+	const addParam = () => onUpdate({ templateBodyParams: [...params, ""] });
+	const removeParam = (index: number) =>
+		onUpdate({ templateBodyParams: params.filter((_, i) => i !== index) });
+	const updateParam = (index: number, value: string) => {
+		const next = [...params];
+		next[index] = value;
+		onUpdate({ templateBodyParams: next });
+	};
+
+	return (
+		<>
+			<Field label="Template Name">
+				<Input
+					className="h-7 text-xs"
+					placeholder="hello_world"
+					value={data.templateName ?? ""}
+					onChange={(e) => onUpdate({ templateName: e.target.value })}
+				/>
+			</Field>
+			<Field label="Language Code">
+				<Input
+					className="h-7 text-xs"
+					placeholder="en_US"
+					value={data.languageCode ?? "en_US"}
+					onChange={(e) => onUpdate({ languageCode: e.target.value })}
+				/>
+			</Field>
+			<div className="flex flex-col gap-1.5">
+				<div className="flex items-center justify-between">
+					<span className="text-[10px] text-muted-foreground">
+						Body parameters
+					</span>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-xs"
+						onClick={addParam}
+					>
+						<Plus className="size-3" />
+					</Button>
+				</div>
+				{params.map((param, index) => (
+					<div key={index} className="flex items-center gap-1">
+						<Input
+							className="h-7 flex-1 text-xs"
+							placeholder={`Parameter ${index + 1}`}
+							value={param}
+							onChange={(e) => updateParam(index, e.target.value)}
+						/>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-xs"
+							className="text-muted-foreground hover:text-destructive"
+							onClick={() => removeParam(index)}
+						>
+							<X className="size-3" />
+						</Button>
+					</div>
+				))}
+			</div>
+			<p className="text-[10px] text-muted-foreground">
+				Templates must already be approved in Meta Business Manager. Use
+				{"{{variable}}"} syntax in parameters to insert flow values.
+			</p>
+		</>
+	);
+}
+
 function InteractiveButtonsConfig({
 	data,
 	onUpdate,
@@ -1180,6 +1257,8 @@ function MessageConfigForm({
 			return <LocationConfig data={data} onUpdate={onUpdate} />;
 		case "send-reaction":
 			return <ReactionConfig data={data} onUpdate={onUpdate} />;
+		case "send-template":
+			return <TemplateConfig data={data} onUpdate={onUpdate} />;
 		default:
 			return null;
 	}

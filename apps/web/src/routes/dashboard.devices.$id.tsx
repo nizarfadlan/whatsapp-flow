@@ -20,15 +20,19 @@ import { Separator } from "@whatsapp-flow/ui/components/separator";
 import { Skeleton } from "@whatsapp-flow/ui/components/skeleton";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import {
+	AlertTriangle,
 	ArrowLeft,
+	Cloud,
 	LogOut,
 	Power,
 	PowerOff,
 	QrCode,
+	Settings,
 	Smartphone,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { MetaDeviceConfigDialog } from "@/components/meta-device-config-dialog";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/devices/$id")({
@@ -64,6 +68,38 @@ function DeviceStatusBadge({ status }: { status: string }) {
 			{status}
 		</Badge>
 	);
+}
+
+function ProviderBadge({ provider }: { provider?: string }) {
+	return provider === "meta_cloud" ? (
+		<Badge variant="secondary" className="gap-1 text-xs">
+			<Cloud className="size-3" />
+			Meta Cloud
+		</Badge>
+	) : (
+		<Badge variant="outline" className="gap-1 text-xs">
+			<Smartphone className="size-3" />
+			Baileys
+		</Badge>
+	);
+}
+
+function formatDate(value: string | Date | null) {
+	return value ? new Date(value).toLocaleString() : "—";
+}
+
+function getMetaWarnings(device: {
+	provider?: string;
+	status: string;
+	lastWebhookAt?: Date | string | null;
+	lastError?: string | null;
+}) {
+	if (device.provider !== "meta_cloud") return [];
+	return [
+		device.status === "disconnected" ? "Validation needed" : null,
+		!device.lastWebhookAt ? "No webhook received yet" : null,
+		device.lastError ? `Last error: ${device.lastError}` : null,
+	].filter(Boolean) as string[];
 }
 
 function QrModal({
@@ -182,12 +218,12 @@ function DeviceDetailPage() {
 	const device = devices.find((d) => d.id === id);
 
 	const [qrOpen, setQrOpen] = useState(false);
+	const [configureOpen, setConfigureOpen] = useState(false);
 
 	const connectMut = useMutation(
 		trpc.device.connect.mutationOptions({
 			onSuccess: () => {
 				refetch();
-				setQrOpen(true);
 				toast.success("Connecting...");
 			},
 		}),
@@ -226,6 +262,13 @@ function DeviceDetailPage() {
 		);
 	}
 
+	const isMeta = device.provider === "meta_cloud";
+	const metaWarnings = getMetaWarnings(device);
+	const handleConnect = () => {
+		connectMut.mutate({ id });
+		if (!isMeta) setQrOpen(true);
+	};
+
 	return (
 		<div className="space-y-4">
 			<Link
@@ -242,68 +285,88 @@ function DeviceDetailPage() {
 			<div className="flex items-start justify-between">
 				<div className="flex items-center gap-3">
 					<div className="flex size-10 items-center justify-center border bg-muted">
-						<Smartphone className="size-5 text-muted-foreground" />
+						{isMeta ? (
+							<Cloud className="size-5 text-muted-foreground" />
+						) : (
+							<Smartphone className="size-5 text-muted-foreground" />
+						)}
 					</div>
 					<div>
 						<h2 className="font-semibold text-lg">{device.name}</h2>
 						<p className="text-muted-foreground text-xs">
-							{device.phoneNumber ?? "No phone number"}
+							{device.displayPhoneNumber ??
+								device.phoneNumber ??
+								"No phone number"}
 						</p>
+						<div className="mt-1">
+							<ProviderBadge provider={device.provider} />
+						</div>
 					</div>
 				</div>
 				<DeviceStatusBadge status={device.status} />
 			</div>
 
+			{metaWarnings.length > 0 && (
+				<div className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 text-xs">
+					{metaWarnings.map((warning) => (
+						<p key={warning} className="flex items-center gap-2">
+							<AlertTriangle className="size-3.5" />
+							{warning}
+						</p>
+					))}
+				</div>
+			)}
+
 			<div className="flex items-center gap-2">
 				{device.status === "disconnected" && (
-					<>
-						<Button
-							size="sm"
-							className="h-7 text-xs"
-							onClick={() => connectMut.mutate({ id })}
-							disabled={connectMut.isPending}
-						>
+					<Button
+						size="sm"
+						className="h-7 text-xs"
+						onClick={handleConnect}
+						disabled={connectMut.isPending}
+					>
+						{isMeta ? (
+							<Settings className="size-3.5" />
+						) : (
 							<Power className="size-3.5" />
-							Connect
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							className="h-7 text-xs"
-							onClick={() => {
-								connectMut.mutate({ id });
-								setQrOpen(true);
-							}}
-						>
-							<QrCode className="size-3.5" />
-							QR Code
-						</Button>
-					</>
+						)}
+						{isMeta ? "Validate credentials" : "Connect"}
+					</Button>
 				)}
 				{device.status !== "disconnected" && (
-					<>
+					<Button
+						size="sm"
+						variant="outline"
+						className="h-7 text-xs"
+						onClick={() => disconnectMut.mutate({ id })}
+						disabled={disconnectMut.isPending}
+					>
+						<PowerOff className="size-3.5" />
+						Disconnect
+					</Button>
+				)}
+				{isMeta ? (
+					<Button
+						size="sm"
+						variant="outline"
+						className="h-7 text-xs"
+						onClick={() => setConfigureOpen(true)}
+					>
+						<Settings className="size-3.5" />
+						Configure
+					</Button>
+				) : (
+					device.status === "connecting" && (
 						<Button
 							size="sm"
 							variant="outline"
 							className="h-7 text-xs"
-							onClick={() => disconnectMut.mutate({ id })}
-							disabled={disconnectMut.isPending}
+							onClick={() => setQrOpen(true)}
 						>
-							<PowerOff className="size-3.5" />
-							Disconnect
+							<QrCode className="size-3.5" />
+							Show QR
 						</Button>
-						{device.status === "connecting" && (
-							<Button
-								size="sm"
-								variant="outline"
-								className="h-7 text-xs"
-								onClick={() => setQrOpen(true)}
-							>
-								<QrCode className="size-3.5" />
-								Show QR
-							</Button>
-						)}
-					</>
+					)
 				)}
 				<Button
 					size="sm"
@@ -313,7 +376,7 @@ function DeviceDetailPage() {
 					disabled={logoutMut.isPending}
 				>
 					<LogOut className="size-3.5" />
-					Reset session
+					{isMeta ? "Remove credentials" : "Reset session"}
 				</Button>
 			</div>
 
@@ -330,9 +393,47 @@ function DeviceDetailPage() {
 							<dd className="font-mono">{device.id}</dd>
 						</div>
 						<div className="flex justify-between">
-							<dt className="text-muted-foreground">Phone</dt>
-							<dd>{device.phoneNumber ?? "—"}</dd>
+							<dt className="text-muted-foreground">Provider</dt>
+							<dd>
+								<ProviderBadge provider={device.provider} />
+							</dd>
 						</div>
+						<div className="flex justify-between">
+							<dt className="text-muted-foreground">Phone</dt>
+							<dd>{device.displayPhoneNumber ?? device.phoneNumber ?? "—"}</dd>
+						</div>
+						{isMeta && (
+							<>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">Phone Number ID</dt>
+									<dd className="font-mono">{device.externalId ?? "—"}</dd>
+								</div>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">WABA ID</dt>
+									<dd className="font-mono">
+										{device.businessAccountId ?? "—"}
+									</dd>
+								</div>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">Last connected</dt>
+									<dd>{formatDate(device.lastConnectedAt)}</dd>
+								</div>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">Last webhook</dt>
+									<dd>{formatDate(device.lastWebhookAt)}</dd>
+								</div>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">Status reason</dt>
+									<dd>{device.statusReason ?? "—"}</dd>
+								</div>
+								<div className="flex justify-between gap-4">
+									<dt className="text-muted-foreground">Last error</dt>
+									<dd className="max-w-lg text-right text-destructive">
+										{device.lastError ?? "—"}
+									</dd>
+								</div>
+							</>
+						)}
 						<div className="flex justify-between">
 							<dt className="text-muted-foreground">Status</dt>
 							<dd>
@@ -351,7 +452,14 @@ function DeviceDetailPage() {
 				</CardContent>
 			</Card>
 
-			{qrOpen && (
+			<MetaDeviceConfigDialog
+				deviceId={isMeta ? id : null}
+				open={configureOpen}
+				onOpenChange={setConfigureOpen}
+				onSaved={() => refetch()}
+			/>
+
+			{!isMeta && qrOpen && (
 				<QrModal
 					deviceId={id}
 					open={qrOpen}

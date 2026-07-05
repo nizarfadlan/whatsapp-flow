@@ -67,7 +67,8 @@ export interface MessageNodeData {
 		| "send-audio"
 		| "send-document"
 		| "send-location"
-		| "send-reaction";
+		| "send-reaction"
+		| "send-template";
 	label: string;
 	category: "message" | "media";
 	text?: string;
@@ -78,6 +79,9 @@ export interface MessageNodeData {
 	longitude?: number;
 	address?: string;
 	emoji?: string;
+	templateName?: string;
+	languageCode?: string;
+	templateBodyParams?: string[];
 }
 
 export interface InteractiveNodeData {
@@ -399,6 +403,24 @@ export function SendReactionNode({ data, selected }: NodeProps) {
 	);
 }
 
+export function SendTemplateNode({ data, selected }: NodeProps) {
+	const d = data as unknown as MessageNodeData;
+	return (
+		<BaseFlowNode
+			data={d}
+			selected={selected}
+			icon={MessageSquare}
+			category="message"
+		>
+			{d.templateName && (
+				<span className="text-[10px] text-muted-foreground">
+					{d.templateName} · {d.languageCode ?? "en_US"}
+				</span>
+			)}
+		</BaseFlowNode>
+	);
+}
+
 // Interactive nodes
 export function SendButtonNode({ data, selected }: NodeProps) {
 	const d = data as unknown as InteractiveNodeData;
@@ -572,6 +594,7 @@ export const nodeTypes = {
 	"send-document": SendDocumentNode,
 	"send-location": SendLocationNode,
 	"send-reaction": SendReactionNode,
+	"send-template": SendTemplateNode,
 	"send-button": SendButtonNode,
 	"send-list": SendListNode,
 	"send-quick-reply": SendQuickReplyNode,
@@ -607,6 +630,12 @@ export const paletteCategories: PaletteCategory[] = [
 		label: "Messages",
 		items: [
 			{ type: "send-text", label: "Text", icon: Send, category: "message" },
+			{
+				type: "send-template",
+				label: "Template",
+				icon: MessageSquare,
+				category: "message",
+			},
 			{
 				type: "send-reaction",
 				label: "Reaction",
@@ -713,6 +742,7 @@ const defaultLabels: Record<NodeTypeName, string> = {
 	"send-document": "Send Document",
 	"send-location": "Send Location",
 	"send-reaction": "Send Reaction",
+	"send-template": "Send Template",
 	"send-button": "Send Buttons",
 	"send-list": "Send List",
 	"send-quick-reply": "Quick Reply",
@@ -776,6 +806,16 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 			};
 		case "send-reaction":
 			return { ...base, data: { ...base.data, emoji: "" } };
+		case "send-template":
+			return {
+				...base,
+				data: {
+					...base.data,
+					templateName: "",
+					languageCode: "en_US",
+					templateBodyParams: [],
+				},
+			};
 		case "send-button":
 			return {
 				...base,
