@@ -160,10 +160,10 @@ export const contactRouter = router({
 			await requireDeviceOwnership(ctx.db, input.deviceId, ctx.session.user.id);
 
 			const connection = connectionManager.getConnection(input.deviceId);
-			if (!connection) {
+			if (!connection?.socket) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Device must be connected to resolve LID contacts",
+					message: "Baileys device must be connected to resolve LID contacts",
 				});
 			}
 

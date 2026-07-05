@@ -54,7 +54,10 @@ export function startFlowDispatcher(): void {
 				contact.number,
 				text,
 				contact.jid,
-				message.messageKey,
+				{
+					messageKey: message.messageKey,
+					providerMessageId: message.providerMessageId,
+				},
 			);
 			if (resumed) return;
 
@@ -70,6 +73,7 @@ export function startFlowDispatcher(): void {
 					replyJid: contact.jid,
 					triggerSource: "message",
 					triggerMessageKey: message.messageKey,
+					triggerProviderMessageId: message.providerMessageId,
 				});
 				if (result.status === "failed") {
 					console.error("Message flow execution failed", {

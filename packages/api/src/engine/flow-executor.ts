@@ -13,11 +13,12 @@ import {
 	flowSession,
 } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
-import type { OutgoingMessage } from "@whatsapp-flow/whatsapp";
-import {
-	connectionManager,
-	sendWhatsAppMessage,
+import type {
+	OutgoingMessage,
+	ProviderMessageRef,
+	SendResult,
 } from "@whatsapp-flow/whatsapp";
+import { connectionManager, sendDeviceMessage } from "@whatsapp-flow/whatsapp";
 import { and, eq, inArray } from "drizzle-orm";
 
 type FlowNode = {
@@ -50,6 +51,7 @@ type ExecutionContext = {
 	variables: Record<string, string>;
 	nodeResults: NodeResult[];
 	triggerMessageKey?: import("baileys").WAMessageKey;
+	triggerProviderMessageId?: string;
 };
 
 type ExecutionStatus = "running" | "waiting" | "completed" | "failed";
@@ -77,6 +79,7 @@ type ExecutionOptions = {
 	replyJid?: string;
 	triggerSource?: TriggerSource;
 	triggerMessageKey?: import("baileys").WAMessageKey;
+	triggerProviderMessageId?: string;
 };
 
 type ExecutionResult = {
@@ -165,11 +168,7 @@ function evaluateCondition(
 	}
 }
 
-async function executeNode(
-	node: FlowNode,
-	ctx: ExecutionContext,
-	socket: Parameters<typeof sendWhatsAppMessage>[0],
-) {
+async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 	const type = node.type;
 	const data = node.data;
 	const jid = ctx.replyJid;
@@ -178,8 +177,11 @@ async function executeNode(
 		switch (type) {
 			case "send-text": {
 				const text = resolveTemplate(String(data.text ?? ""), ctx);
-				await sendWhatsAppMessage(socket, jid, { type: "text", text });
-				void recordOutboundMessage(ctx, "text", text);
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
+					type: "text",
+					text,
+				});
+				void recordOutboundMessage(ctx, "text", text, undefined, sendResult);
 				ctx.nodeResults.push({
 					nodeId: node.id,
 					status: "success",
@@ -200,12 +202,18 @@ async function executeNode(
 						: type === "send-video"
 							? "video"
 							: "audio";
-				await sendWhatsAppMessage(socket, jid, {
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: messageType,
 					url,
 					caption,
 				} as OutgoingMessage);
-				void recordOutboundMessage(ctx, messageType, caption ?? url, { url });
+				void recordOutboundMessage(
+					ctx,
+					messageType,
+					caption ?? url,
+					{ url },
+					sendResult,
+				);
 				ctx.nodeResults.push({
 					nodeId: node.id,
 					status: "success",
@@ -216,7 +224,7 @@ async function executeNode(
 			case "send-document": {
 				const url = String(data.mediaUrl ?? "");
 				const fileName = String(data.fileName ?? "file");
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "document",
 					url,
 					fileName,
@@ -229,7 +237,7 @@ async function executeNode(
 				return true;
 			}
 			case "send-location": {
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "location",
 					latitude: Number(data.latitude ?? 0),
 					longitude: Number(data.longitude ?? 0),
@@ -248,9 +256,9 @@ async function executeNode(
 					});
 					return false;
 				}
-				if (!ctx.triggerMessageKey) {
-					// Reaction requires the key of the triggering message.
-					// Gracefully skip when triggered by schedule/webhook (no message key).
+				if (!ctx.triggerMessageKey && !ctx.triggerProviderMessageId) {
+					// Reaction requires a provider reference for the triggering message.
+					// Gracefully skip when triggered by schedule/webhook (no message reference).
 					ctx.nodeResults.push({
 						nodeId: node.id,
 						status: "success",
@@ -258,10 +266,11 @@ async function executeNode(
 					});
 					return true;
 				}
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "reaction",
 					text: emoji,
 					messageKey: ctx.triggerMessageKey,
+					providerMessageId: ctx.triggerProviderMessageId,
 				});
 				ctx.nodeResults.push({
 					nodeId: node.id,
@@ -276,7 +285,7 @@ async function executeNode(
 				const footer = data.footerText
 					? resolveTemplate(String(data.footerText), ctx)
 					: undefined;
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: [
 						bodyText,
@@ -315,7 +324,7 @@ async function executeNode(
 					}
 				}
 				if (footer) lines.push(`\n_${footer}_`);
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: lines.join("\n"),
 				});
@@ -330,7 +339,7 @@ async function executeNode(
 				for (let i = 0; i < buttons.length; i++) {
 					lines.push(`${i + 1}. ${buttons[i]?.text ?? ""}`);
 				}
-				await sendWhatsAppMessage(socket, jid, {
+				await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: lines.join("\n"),
 				});
@@ -398,7 +407,10 @@ async function executeNode(
 						: `*Forwarded from ${ctx.contactNumber}* (media message)`;
 					const template = String(data.messageTemplate ?? "").trim();
 					const text = template ? resolveTemplate(template, ctx) : forwardBody;
-					await sendWhatsAppMessage(socket, targetJid, { type: "text", text });
+					await sendDeviceMessage(ctx.deviceId, targetJid, {
+						type: "text",
+						text,
+					});
 					ctx.nodeResults.push({
 						nodeId: node.id,
 						status: "success",
@@ -568,9 +580,17 @@ async function recordOutboundMessage(
 	messageType: string,
 	text?: string,
 	raw?: Record<string, unknown>,
+	sendResult?: SendResult,
 ) {
 	try {
 		const now = new Date();
+		const storedRaw = sendResult
+			? {
+					...(raw ?? {}),
+					provider: sendResult.provider,
+					response: sendResult.raw ?? null,
+				}
+			: raw;
 		const chatJid = ctx.replyJid;
 		let chatType: "private" | "group" | "channel" | "broadcast" = "private";
 		if (chatJid.endsWith("@g.us")) {
@@ -676,7 +696,13 @@ async function recordOutboundMessage(
 				direction: "outbound",
 				messageType,
 				text: text ?? null,
-				raw: raw ?? null,
+				providerMessageId: sendResult?.messageId ?? null,
+				deliveryStatus: sendResult
+					? sendResult.provider === "meta_cloud"
+						? "accepted"
+						: "sent"
+					: null,
+				raw: storedRaw ?? null,
 			});
 			connectionManager.emit("inbox:updated", {
 				deviceId: ctx.deviceId,
@@ -800,14 +826,12 @@ async function runFlowNodes({
 	edges,
 	startNodes,
 	ctx,
-	socket,
 	previousSessionId,
 }: {
 	nodes: FlowNode[];
 	edges: FlowEdge[];
 	startNodes: FlowNode[];
 	ctx: ExecutionContext;
-	socket: Parameters<typeof sendWhatsAppMessage>[0];
 	previousSessionId?: string;
 }): Promise<RunResult> {
 	const adjacency = buildAdjacencyMap(edges);
@@ -836,7 +860,7 @@ async function runFlowNodes({
 			return { status: "waiting", sessionId: session.id };
 		}
 
-		const ok = await executeNode(item.node, ctx, socket);
+		const ok = await executeNode(item.node, ctx);
 		let result: NodeResult | undefined;
 		for (let i = ctx.nodeResults.length - 1; i >= 0; i--) {
 			if (ctx.nodeResults[i]?.nodeId === item.node.id) {
@@ -1020,7 +1044,7 @@ export async function resumeWaitingSession(
 	contactNumber: string,
 	incomingText: string,
 	replyJid = `${contactNumber}@s.whatsapp.net`,
-	triggerMessageKey?: import("baileys").WAMessageKey,
+	triggerRef?: ProviderMessageRef,
 ): Promise<ExecutionResult | null> {
 	const [waiting] = await db
 		.select()
@@ -1072,14 +1096,14 @@ export async function resumeWaitingSession(
 
 	if (!claimed) return null;
 	emitFlowSessionUpdated(claimed);
-	return resumeFlowSession(claimed, incomingText, replyJid, triggerMessageKey);
+	return resumeFlowSession(claimed, incomingText, replyJid, triggerRef);
 }
 
 async function resumeFlowSession(
 	session: typeof flowSession.$inferSelect,
 	incomingText: string,
 	replyJid: string,
-	triggerMessageKey?: import("baileys").WAMessageKey,
+	triggerRef?: ProviderMessageRef,
 ): Promise<ExecutionResult> {
 	const [flowRow] = await db
 		.select()
@@ -1134,26 +1158,15 @@ async function resumeFlowSession(
 		logId: session.executionLogId,
 		variables,
 		nodeResults: normalizeNodeResults(session.nodeResults),
-		triggerMessageKey,
+		triggerMessageKey: triggerRef?.messageKey,
+		triggerProviderMessageId: triggerRef?.providerMessageId,
 	};
-
-	const connection = connectionManager.getConnection(ctx.deviceId);
-	if (!connection?.socket) {
-		await markSessionFailed(session, "Device not connected");
-		return {
-			status: "failed",
-			logId: ctx.logId,
-			sessionId: session.id,
-			error: "Device not connected",
-		};
-	}
 
 	const result = await runFlowNodes({
 		nodes,
 		edges,
 		startNodes: getNodesByIds(normalizeNodeIds(session.nextNodeIds), nodes),
 		ctx,
-		socket: connection.socket,
 		previousSessionId: session.id,
 	});
 
@@ -1271,42 +1284,8 @@ export async function executeFlow(
 		variables: {},
 		nodeResults: [],
 		triggerMessageKey: options.triggerMessageKey,
+		triggerProviderMessageId: options.triggerProviderMessageId,
 	};
-
-	const connection = connectionManager.getConnection(ctx.deviceId);
-	if (!connection?.socket) {
-		const [failedLog] = await db
-			.insert(flowExecutionLog)
-			.values({
-				id: logId,
-				flowId: flowRow.id,
-				deviceId: ctx.deviceId,
-				contactNumber,
-				triggerSource,
-				status: "failed",
-				error: "Device not connected",
-				nodeResults: [],
-				startedAt: new Date(),
-				completedAt: new Date(),
-			})
-			.returning({
-				id: flowExecutionLog.id,
-				flowId: flowExecutionLog.flowId,
-				deviceId: flowExecutionLog.deviceId,
-			});
-		if (failedLog) {
-			await recordFlowExecutionEvent({
-				executionLogId: logId,
-				flowId: flowRow.id,
-				deviceId: ctx.deviceId,
-				contactNumber,
-				type: "execution.failed",
-				message: "Device not connected",
-			});
-			emitLogCreated(failedLog);
-		}
-		return { status: "failed", logId, error: "Device not connected" };
-	}
 
 	const [createdLog] = await db
 		.insert(flowExecutionLog)
@@ -1344,7 +1323,6 @@ export async function executeFlow(
 		edges,
 		startNodes: getNextNodes(triggerNode.id, adjacency, nodes),
 		ctx,
-		socket: connection.socket,
 	});
 
 	if (result.status === "waiting") {

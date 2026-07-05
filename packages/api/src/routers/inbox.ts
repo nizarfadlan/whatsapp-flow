@@ -1,10 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { device } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
-import {
-	connectionManager,
-	sendWhatsAppMessage,
-} from "@whatsapp-flow/whatsapp";
+import { connectionManager, sendDeviceMessage } from "@whatsapp-flow/whatsapp";
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
@@ -170,18 +167,19 @@ export const inboxRouter = router({
 				});
 			}
 
-			const connection = connectionManager.getConnection(thread.deviceId);
-			if (!connection?.socket) {
+			let sendResult: Awaited<ReturnType<typeof sendDeviceMessage>>;
+			try {
+				sendResult = await sendDeviceMessage(thread.deviceId, jid, {
+					type: "text",
+					text: input.text,
+				});
+			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Device is not connected",
+					message:
+						error instanceof Error ? error.message : "Device is not connected",
 				});
 			}
-
-			await sendWhatsAppMessage(connection.socket, jid, {
-				type: "text",
-				text: input.text,
-			});
 
 			const now = new Date();
 			const [message] = await ctx.db
@@ -192,6 +190,10 @@ export const inboxRouter = router({
 					direction: "outbound",
 					messageType: "text",
 					text: input.text,
+					providerMessageId: sendResult.messageId ?? null,
+					deliveryStatus:
+						sendResult.provider === "meta_cloud" ? "accepted" : "sent",
+					raw: (sendResult.raw as Record<string, unknown> | null) ?? null,
 				})
 				.returning();
 

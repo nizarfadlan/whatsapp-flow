@@ -28,6 +28,8 @@ export const contact = pgTable(
 		phoneNumber: text("phone_number"),
 		name: text("name"),
 		pushName: text("push_name"),
+		profileName: text("profile_name"),
+		providerContactId: text("provider_contact_id"),
 		isWaContact: boolean("is_wa_contact").default(true).notNull(),
 		isBlocked: boolean("is_blocked").default(false).notNull(),
 		source: contactSourceEnum("source").default("sync").notNull(),
@@ -44,6 +46,10 @@ export const contact = pgTable(
 		index("contact_deviceId_idx").on(table.deviceId),
 		index("contact_device_phone_idx").on(table.deviceId, table.phoneNumber),
 		index("contact_device_lid_idx").on(table.deviceId, table.lid),
+		index("contact_device_provider_contact_idx").on(
+			table.deviceId,
+			table.providerContactId,
+		),
 	],
 );
 

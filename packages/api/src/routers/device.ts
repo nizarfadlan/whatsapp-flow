@@ -1,6 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import { device } from "@whatsapp-flow/db/schema/device";
-import { connectionManager } from "@whatsapp-flow/whatsapp";
+import {
+	configureMetaDevice,
+	connectionManager,
+	getMetaConfigSummary,
+} from "@whatsapp-flow/whatsapp";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
@@ -30,8 +34,16 @@ export const deviceRouter = router({
 			.select({
 				id: device.id,
 				name: device.name,
+				provider: device.provider,
+				externalId: device.externalId,
 				phoneNumber: device.phoneNumber,
+				businessAccountId: device.businessAccountId,
+				displayPhoneNumber: device.displayPhoneNumber,
 				status: device.status,
+				statusReason: device.statusReason,
+				lastError: device.lastError,
+				lastConnectedAt: device.lastConnectedAt,
+				lastWebhookAt: device.lastWebhookAt,
 				createdAt: device.createdAt,
 				updatedAt: device.updatedAt,
 			})
@@ -44,6 +56,7 @@ export const deviceRouter = router({
 		.input(
 			z.object({
 				name: z.string().min(1),
+				provider: z.enum(["baileys", "meta_cloud"]).default("baileys"),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -54,14 +67,74 @@ export const deviceRouter = router({
 					id,
 					userId: ctx.session.user.id,
 					name: input.name,
+					provider: input.provider,
 				})
 				.returning({
 					id: device.id,
 					name: device.name,
+					provider: device.provider,
 					status: device.status,
 				});
 
 			return rows[0];
+		}),
+
+	configureMeta: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				phoneNumberId: z.string().min(1),
+				accessToken: z.string().min(1).optional(),
+				appSecret: z.string().min(1).optional(),
+				businessAccountId: z.string().optional(),
+				displayPhoneNumber: z.string().optional(),
+				graphApiVersion: z.string().optional(),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			if (found.provider !== "meta_cloud") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Device is not a Meta Cloud API connection",
+				});
+			}
+
+			try {
+				return await configureMetaDevice({
+					deviceId: input.id,
+					phoneNumberId: input.phoneNumberId,
+					accessToken: input.accessToken,
+					appSecret: input.appSecret,
+					businessAccountId: input.businessAccountId,
+					displayPhoneNumber: input.displayPhoneNumber,
+					graphApiVersion: input.graphApiVersion,
+				});
+			} catch (error) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						error instanceof Error
+							? error.message
+							: "Failed to configure Meta connection",
+				});
+			}
+		}),
+
+	getMetaConfig: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			if (found.provider !== "meta_cloud") return null;
+			return getMetaConfigSummary(input.id);
 		}),
 
 	delete: protectedProcedure
@@ -134,8 +207,12 @@ export const deviceRouter = router({
 			);
 			return {
 				id: found.id,
+				provider: found.provider,
 				status:
-					connectionManager.getConnection(input.id)?.status ?? found.status,
+					found.provider === "baileys"
+						? (connectionManager.getConnection(input.id)?.status ??
+							found.status)
+						: found.status,
 				phoneNumber: found.phoneNumber,
 			};
 		}),

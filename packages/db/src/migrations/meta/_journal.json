@@ -64,6 +64,13 @@
 			"when": 1783173523665,
 			"tag": "0008_remarkable_steel_serpent",
 			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1783219756878,
+			"tag": "0009_closed_aaron_stack",
+			"breakpoints": true
 		}
 	]
 }

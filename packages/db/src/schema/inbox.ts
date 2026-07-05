@@ -86,12 +86,23 @@ export const inboxMessage = pgTable(
 		direction: messageDirectionEnum("direction").notNull(),
 		messageType: text("message_type").default("text").notNull(),
 		text: text("text"),
+		providerMessageId: text("provider_message_id"),
+		deliveryStatus: text("delivery_status"),
+		error: text("error"),
 		raw: jsonb("raw"),
+		sentAt: timestamp("sent_at"),
+		deliveredAt: timestamp("delivered_at"),
+		readAt: timestamp("read_at"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
 	},
 	(table) => [
 		index("inbox_message_threadId_idx").on(table.threadId),
 		index("inbox_message_createdAt_idx").on(table.createdAt),
+		index("inbox_message_provider_message_idx").on(table.providerMessageId),
 	],
 );
 

@@ -181,7 +181,7 @@ async function requireDeviceOwnership(
 	userId: string,
 ) {
 	const rows = await db
-		.select({ id: device.id, status: device.status })
+		.select({ id: device.id, provider: device.provider, status: device.status })
 		.from(device)
 		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
 		.limit(1);
@@ -356,10 +356,12 @@ export const flowRouter = router({
 					found.deviceId,
 					ctx.session.user.id,
 				);
-				const liveStatus =
-					connectionManager.getConnection(found.deviceId)?.status ??
-					targetDevice.status;
-				if (liveStatus !== "connected") {
+				const deviceStatus =
+					targetDevice.provider === "baileys"
+						? (connectionManager.getConnection(found.deviceId)?.status ??
+							targetDevice.status)
+						: targetDevice.status;
+				if (deviceStatus !== "connected") {
 					throw new TRPCError({
 						code: "BAD_REQUEST",
 						message: "Device must be connected before activation",
@@ -420,10 +422,12 @@ export const flowRouter = router({
 				ctx.session.user.id,
 			);
 
-			const liveStatus =
-				connectionManager.getConnection(input.deviceId)?.status ??
-				targetDevice.status;
-			if (liveStatus !== "connected") {
+			const deviceStatus =
+				targetDevice.provider === "baileys"
+					? (connectionManager.getConnection(input.deviceId)?.status ??
+						targetDevice.status)
+					: targetDevice.status;
+			if (deviceStatus !== "connected") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "Device must be connected before deploy",

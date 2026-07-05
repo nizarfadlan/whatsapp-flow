@@ -1,4 +1,5 @@
 import type { WASocket } from "baileys";
+import type { WhatsAppProvider } from "./providers/types";
 
 export type DeviceStatus =
 	| "disconnected"
@@ -7,7 +8,8 @@ export type DeviceStatus =
 	| "banned";
 
 export interface DeviceConnection {
-	socket: WASocket;
+	socket?: WASocket;
+	provider: WhatsAppProvider;
 	qrCode: string | null;
 	status: DeviceStatus;
 }
@@ -21,12 +23,20 @@ export interface ConnectionManagerEvents {
 	"device:qr": { deviceId: string; qr: string };
 	"device:message": {
 		deviceId: string;
-		contact: { jid: string; number?: string; lid?: string; name?: string };
+		provider?: WhatsAppProvider;
+		contact: {
+			jid: string;
+			number?: string;
+			lid?: string;
+			name?: string;
+			providerContactId?: string;
+		};
 		message: {
 			text?: string;
 			type: string;
 			raw: unknown;
 			messageKey?: import("baileys").WAMessageKey;
+			providerMessageId?: string;
 		};
 	};
 	"device:contacts": {

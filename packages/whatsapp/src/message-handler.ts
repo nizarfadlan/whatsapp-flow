@@ -1,13 +1,6 @@
-export type IncomingMessage = {
-	deviceId: string;
-	contact: { jid: string; number?: string; lid?: string; name?: string };
-	message: {
-		text?: string;
-		type: string;
-		raw: unknown;
-		messageKey?: import("baileys").WAMessageKey;
-	};
-};
+import type { ConnectionManagerEvents } from "./types";
+
+export type IncomingMessage = ConnectionManagerEvents["device:message"];
 
 export function matchesKeywordTrigger(
 	messageText: string | undefined,

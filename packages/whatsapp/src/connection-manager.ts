@@ -13,6 +13,11 @@ import {
 import { eq } from "drizzle-orm";
 import QRCode from "qrcode";
 import { clearDbAuthState, useDbAuthState } from "./auth-state";
+import {
+	connectMetaDevice,
+	disconnectMetaDevice,
+	logoutMetaDevice,
+} from "./providers/meta/transport";
 import type {
 	ConnectionManagerEvents,
 	DeviceConnection,
@@ -96,7 +101,17 @@ export class ConnectionManager extends EventEmitter {
 		return this.connections.get(deviceId)?.qrCode ?? null;
 	}
 
-	async connect(deviceId: string) {
+	async connect(deviceId: string): Promise<DeviceConnection> {
+		const provider = await this.getDeviceProvider(deviceId);
+		if (provider === "meta_cloud") {
+			const connection = await connectMetaDevice(deviceId);
+			this.emit("device:status", {
+				deviceId,
+				status: connection.status,
+			});
+			return connection;
+		}
+
 		const existing = this.connections.get(deviceId);
 		if (existing?.status === "connected" || existing?.status === "connecting") {
 			return existing;
@@ -135,6 +150,7 @@ export class ConnectionManager extends EventEmitter {
 
 		const connection: DeviceConnection = {
 			socket,
+			provider: "baileys",
 			qrCode: null,
 			status: "connecting",
 		};
@@ -186,7 +202,15 @@ export class ConnectionManager extends EventEmitter {
 	}
 
 	async requestPairingCode(deviceId: string, phoneNumber: string) {
+		const provider = await this.getDeviceProvider(deviceId);
+		if (provider === "meta_cloud") {
+			throw new Error("Meta Cloud API does not use pairing codes");
+		}
+
 		const connection = await this.connect(deviceId);
+		if (!connection.socket) {
+			throw new Error("Device is not connected");
+		}
 		const normalized = phoneNumber.replace(/[^\d]/g, "");
 		if (!normalized) {
 			throw new Error("Phone number is required");
@@ -200,11 +224,18 @@ export class ConnectionManager extends EventEmitter {
 	}
 
 	async disconnect(deviceId: string) {
+		const provider = await this.getDeviceProvider(deviceId);
+		if (provider === "meta_cloud") {
+			await disconnectMetaDevice(deviceId);
+			this.emit("device:status", { deviceId, status: "disconnected" });
+			return;
+		}
+
 		this.intentionalDisconnects.add(deviceId);
 		this.clearReconnectTimer(deviceId);
 		this.reconnectAttempts.delete(deviceId);
 		const connection = this.connections.get(deviceId);
-		if (connection) {
+		if (connection?.socket) {
 			await connection.socket.end(undefined);
 			this.connections.delete(deviceId);
 		}
@@ -213,11 +244,18 @@ export class ConnectionManager extends EventEmitter {
 	}
 
 	async logout(deviceId: string) {
+		const provider = await this.getDeviceProvider(deviceId);
+		if (provider === "meta_cloud") {
+			await logoutMetaDevice(deviceId);
+			this.emit("device:status", { deviceId, status: "disconnected" });
+			return;
+		}
+
 		this.intentionalDisconnects.add(deviceId);
 		this.clearReconnectTimer(deviceId);
 		this.reconnectAttempts.delete(deviceId);
 		const connection = this.connections.get(deviceId);
-		if (connection) {
+		if (connection?.socket) {
 			await connection.socket.logout();
 			this.connections.delete(deviceId);
 		}
@@ -230,7 +268,7 @@ export class ConnectionManager extends EventEmitter {
 		update: BaileysEventMap["connection.update"],
 	) {
 		const connection = this.connections.get(deviceId);
-		if (!connection) {
+		if (!connection?.socket) {
 			return;
 		}
 
@@ -356,7 +394,7 @@ export class ConnectionManager extends EventEmitter {
 		}
 
 		const connection = this.connections.get(deviceId);
-		const mappings = await connection?.socket.signalRepository.lidMapping
+		const mappings = await connection?.socket?.signalRepository.lidMapping
 			.getPNsForLIDs([jid])
 			.catch(() => null);
 		const pnJid = mappings?.[0]?.pn ? toPhoneJid(mappings[0].pn) : undefined;
@@ -383,7 +421,7 @@ export class ConnectionManager extends EventEmitter {
 			),
 		];
 		const lidMappings = lidJids.length
-			? await connection?.socket.signalRepository.lidMapping.getPNsForLIDs(
+			? await connection?.socket?.signalRepository.lidMapping.getPNsForLIDs(
 					lidJids,
 				)
 			: null;
@@ -504,7 +542,7 @@ export class ConnectionManager extends EventEmitter {
 
 	private async handleNewsletterView(deviceId: string, id: string) {
 		const connection = this.connections.get(deviceId);
-		if (!connection) return;
+		if (!connection?.socket) return;
 
 		const jid = toNewsletterJid(id);
 		try {
@@ -542,6 +580,9 @@ export class ConnectionManager extends EventEmitter {
 		if (phoneNumber) {
 			values.phoneNumber = phoneNumber;
 		}
+		if (status === "connected") {
+			values.lastConnectedAt = new Date();
+		}
 
 		await db.update(device).set(values).where(eq(device.id, deviceId));
 		const connection = this.connections.get(deviceId);
@@ -550,6 +591,15 @@ export class ConnectionManager extends EventEmitter {
 		}
 
 		this.emit("device:status", { deviceId, status, phoneNumber });
+	}
+
+	private async getDeviceProvider(deviceId: string) {
+		const [row] = await db
+			.select({ provider: device.provider })
+			.from(device)
+			.where(eq(device.id, deviceId))
+			.limit(1);
+		return row?.provider ?? "baileys";
 	}
 }
 

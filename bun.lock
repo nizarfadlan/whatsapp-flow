@@ -204,6 +204,7 @@
     "packages/whatsapp": {
       "name": "@whatsapp-flow/whatsapp",
       "dependencies": {
+        "@whatsapp-flow/auth": "workspace:*",
         "@whatsapp-flow/db": "workspace:*",
         "@whatsapp-flow/env": "workspace:*",
         "baileys": "7.0.0-rc13",

@@ -19,7 +19,11 @@ import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import { storage } from "@whatsapp-flow/storage";
-import { connectionManager } from "@whatsapp-flow/whatsapp";
+import {
+	connectionManager,
+	handleMetaWebhook,
+	verifyMetaWebhookChallenge,
+} from "@whatsapp-flow/whatsapp";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
@@ -73,6 +77,32 @@ app.post("/api/uploads/local/:key{.+}", async (c) => {
 	const data = new Uint8Array(arrayBuffer);
 	const result = await storage.put(key, data, contentType);
 	return c.json({ url: result.url, key: result.key });
+});
+
+app.get("/api/whatsapp/meta/webhook", (c) => {
+	const challenge = verifyMetaWebhookChallenge({
+		mode: c.req.query("hub.mode"),
+		verifyToken: c.req.query("hub.verify_token"),
+		challenge: c.req.query("hub.challenge"),
+	});
+
+	return challenge ? c.text(challenge) : c.text("Forbidden", 403);
+});
+
+app.post("/api/whatsapp/meta/webhook", async (c) => {
+	const rawBody = await c.req.text();
+	try {
+		await handleMetaWebhook({
+			rawBody,
+			signature: c.req.header("x-hub-signature-256") ?? null,
+			emitDeviceMessage: (event) =>
+				connectionManager.emit("device:message", event),
+		});
+		return c.text("OK");
+	} catch (error) {
+		console.error("Failed to process Meta WhatsApp webhook", error);
+		return c.text("Unauthorized", 401);
+	}
 });
 
 app.post("/api/flows/:flowId/webhook", async (c) => {
@@ -368,6 +398,9 @@ connectionManager.on("device:message", async (ev) => {
 					lid: contact.lid ?? null,
 					name: contact.name ?? null,
 					pushName: contact.name ?? null,
+					profileName: contact.name ?? null,
+					providerContactId:
+						contact.providerContactId ?? contact.number ?? null,
 					source: "message",
 				})
 				.onConflictDoUpdate({
@@ -377,6 +410,9 @@ connectionManager.on("device:message", async (ev) => {
 						lid: contact.lid ?? null,
 						name: contact.name ?? null,
 						pushName: contact.name ?? null,
+						profileName: contact.name ?? null,
+						providerContactId:
+							contact.providerContactId ?? contact.number ?? null,
 						updatedAt: now,
 					},
 				})
@@ -470,6 +506,8 @@ connectionManager.on("device:message", async (ev) => {
 				direction: "inbound",
 				messageType: message.type,
 				text: message.text ?? null,
+				providerMessageId: message.providerMessageId ?? null,
+				deliveryStatus: "received",
 				raw: message.raw as Record<string, unknown> | null,
 			});
 			connectionManager.emit("inbox:updated", { deviceId, threadId });
@@ -587,7 +625,12 @@ async function reconnectDevices() {
 	const reconnectable = await db
 		.select({ id: device.id })
 		.from(device)
-		.where(or(eq(device.status, "connected"), isNotNull(device.sessionData)));
+		.where(
+			and(
+				eq(device.provider, "baileys"),
+				or(eq(device.status, "connected"), isNotNull(device.sessionData)),
+			),
+		);
 
 	for (const d of reconnectable) {
 		void connectionManager.connect(d.id);

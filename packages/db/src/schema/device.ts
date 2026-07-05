@@ -18,6 +18,11 @@ export const deviceStatusEnum = pgEnum("device_status", [
 	"banned",
 ]);
 
+export const deviceProviderEnum = pgEnum("device_provider", [
+	"baileys",
+	"meta_cloud",
+]);
+
 export const device = pgTable(
 	"device",
 	{
@@ -26,16 +31,58 @@ export const device = pgTable(
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		provider: deviceProviderEnum("provider").default("baileys").notNull(),
+		externalId: text("external_id"),
 		phoneNumber: text("phone_number"),
+		businessAccountId: text("business_account_id"),
+		displayPhoneNumber: text("display_phone_number"),
 		status: deviceStatusEnum("status").default("disconnected").notNull(),
+		statusReason: text("status_reason"),
+		lastError: text("last_error"),
 		sessionData: jsonb("session_data"),
+		providerConfig: jsonb("provider_config"),
+		capabilities: jsonb("capabilities"),
+		lastConnectedAt: timestamp("last_connected_at"),
+		lastWebhookAt: timestamp("last_webhook_at"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")
 			.defaultNow()
 			.$onUpdate(() => /* @__PURE__ */ new Date())
 			.notNull(),
 	},
-	(table) => [index("device_userId_idx").on(table.userId)],
+	(table) => [
+		index("device_userId_idx").on(table.userId),
+		index("device_provider_external_idx").on(table.provider, table.externalId),
+		index("device_user_provider_idx").on(table.userId, table.provider),
+		uniqueIndex("device_provider_external_unique_idx")
+			.on(table.provider, table.externalId)
+			.where(sql`${table.externalId} is not null`),
+	],
+);
+
+export const deviceProviderSecret = pgTable(
+	"device_provider_secret",
+	{
+		id: text("id").primaryKey(),
+		deviceId: text("device_id")
+			.notNull()
+			.references(() => device.id, { onDelete: "cascade" }),
+		provider: deviceProviderEnum("provider").notNull(),
+		key: text("key").notNull(),
+		encryptedValue: text("encrypted_value").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("device_provider_secret_device_key_unique_idx").on(
+			table.deviceId,
+			table.key,
+		),
+		index("device_provider_secret_device_idx").on(table.deviceId),
+	],
 );
 
 export const triggerTypeEnum = pgEnum("trigger_type", [
@@ -284,4 +331,15 @@ export const deviceRelations = relations(device, ({ one, many }) => ({
 	}),
 	flows: many(flow),
 	sessions: many(flowSession),
+	providerSecrets: many(deviceProviderSecret),
 }));
+
+export const deviceProviderSecretRelations = relations(
+	deviceProviderSecret,
+	({ one }) => ({
+		device: one(device, {
+			fields: [deviceProviderSecret.deviceId],
+			references: [device.id],
+		}),
+	}),
+);

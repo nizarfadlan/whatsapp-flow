@@ -5,9 +5,20 @@ export type OutgoingMessage =
 	| { type: "image"; url: string; caption?: string }
 	| { type: "video"; url: string; caption?: string }
 	| { type: "audio"; url: string; ptt?: boolean }
-	| { type: "document"; url: string; fileName: string; mimetype?: string }
+	| {
+			type: "document";
+			url: string;
+			fileName: string;
+			mimetype?: string;
+			caption?: string;
+	  }
 	| { type: "location"; latitude: number; longitude: number; name?: string }
-	| { type: "reaction"; text: string; messageKey: WAMessageKey };
+	| {
+			type: "reaction";
+			text: string;
+			messageKey?: WAMessageKey;
+			providerMessageId?: string;
+	  };
 
 export async function sendWhatsAppMessage(
 	socket: WASocket,
@@ -47,6 +58,9 @@ export async function sendWhatsAppMessage(
 				},
 			});
 		case "reaction":
+			if (!message.messageKey) {
+				throw new Error("Baileys reactions require a message key");
+			}
 			return socket.sendMessage(jid, {
 				react: {
 					text: message.text,
