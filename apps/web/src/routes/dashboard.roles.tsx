@@ -43,11 +43,21 @@ function RolesPage() {
 		name: "",
 		description: "",
 	});
+	const [permissionOverrides, setPermissionOverrides] = useState<
+		Record<string, string[]>
+	>({});
 	const roles = rolesQuery.data ?? [];
 	const permissions = permissionsQuery.data ?? [];
 	const selectedRole = useMemo<RoleRow | null>(
 		() => roles.find((role) => role.id === selectedRoleId) ?? roles[0] ?? null,
 		[roles, selectedRoleId],
+	);
+	const selectedPermissions = selectedRole
+		? (permissionOverrides[selectedRole.id] ?? selectedRole.permissions)
+		: [];
+	const selectedPermissionSet = useMemo(
+		() => new Set(selectedPermissions),
+		[selectedPermissions],
 	);
 	const permissionGroups = useMemo(() => {
 		const groups = new Map<
@@ -74,22 +84,40 @@ function RolesPage() {
 	);
 	const setPermissions = useMutation(
 		trpc.rbac.setRolePermissions.mutationOptions({
-			onSuccess: () => {
+			onSuccess: (_result, variables) => {
 				toast.success("Role permissions updated");
-				rolesQuery.refetch();
+				void rolesQuery.refetch().then(() => {
+					setPermissionOverrides((current) => {
+						const next = { ...current };
+						delete next[variables.roleId];
+						return next;
+					});
+				});
 			},
-			onError: (error) => toast.error(error.message),
+			onError: (error, variables) => {
+				setPermissionOverrides((current) => {
+					const next = { ...current };
+					delete next[variables.roleId];
+					return next;
+				});
+				toast.error(error.message);
+			},
 		}),
 	);
 
 	const togglePermission = (permissionKey: string, checked: boolean) => {
 		if (!selectedRole) return;
-		const next = new Set(selectedRole.permissions);
+		const next = new Set(selectedPermissions);
 		if (checked) next.add(permissionKey);
 		else next.delete(permissionKey);
+		const permissions = [...next];
+		setPermissionOverrides((current) => ({
+			...current,
+			[selectedRole.id]: permissions,
+		}));
 		setPermissions.mutate({
 			roleId: selectedRole.id,
-			permissions: [...next] as never,
+			permissions: permissions as never,
 		});
 	};
 
@@ -223,11 +251,7 @@ function RolesPage() {
 												>
 													<Checkbox
 														aria-label={`Toggle ${permission.key}`}
-														checked={
-															selectedRole?.permissions.includes(
-																permission.key,
-															) ?? false
-														}
+														checked={selectedPermissionSet.has(permission.key)}
 														disabled={!selectedRole || setPermissions.isPending}
 														onCheckedChange={(checked) =>
 															togglePermission(permission.key, checked === true)

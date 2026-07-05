@@ -30,7 +30,11 @@ function RouteComponent() {
 	const { data: publicSettings } = useQuery(
 		trpc.settings.public.queryOptions(),
 	);
-	const [showSignIn, setShowSignIn] = useState(true);
+	const inviteToken =
+		typeof window === "undefined"
+			? null
+			: new URLSearchParams(window.location.search).get("invite");
+	const [showSignIn, setShowSignIn] = useState(!inviteToken);
 	const branding = publicSettings?.branding;
 	const appName = branding?.appName ?? "WhatsApp Flow";
 	const logoUrl = branding?.logoUrl;
@@ -90,7 +94,10 @@ function RouteComponent() {
 						{showSignIn ? (
 							<SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
 						) : (
-							<SignUpForm onSwitchToSignIn={() => setShowSignIn(true)} />
+							<SignUpForm
+								inviteToken={inviteToken ?? undefined}
+								onSwitchToSignIn={() => setShowSignIn(true)}
+							/>
 						)}
 					</CardContent>
 				</Card>

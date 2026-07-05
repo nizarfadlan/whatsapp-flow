@@ -1,6 +1,6 @@
 {
-	"id": "ba3a5717-9da0-4496-842a-dd95451f0bb6",
-	"prevId": "df77bdc4-6a0a-4ba7-8752-495bfb301435",
+	"id": "e9a37b9a-0b7d-402d-bb81-bb58680b237b",
+	"prevId": "ba3a5717-9da0-4496-842a-dd95451f0bb6",
 	"version": "7",
 	"dialect": "postgresql",
 	"tables": {
@@ -3262,6 +3262,261 @@
 			"checkConstraints": {},
 			"isRLSEnabled": false
 		},
+		"public.user_invitation": {
+			"name": "user_invitation",
+			"schema": "",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "text",
+					"primaryKey": true,
+					"notNull": true
+				},
+				"email": {
+					"name": "email",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"role_id": {
+					"name": "role_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"token_hash": {
+					"name": "token_hash",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"status": {
+					"name": "status",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "'pending'"
+				},
+				"invited_by_user_id": {
+					"name": "invited_by_user_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"accepted_by_user_id": {
+					"name": "accepted_by_user_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"expires_at": {
+					"name": "expires_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"accepted_at": {
+					"name": "accepted_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"revoked_at": {
+					"name": "revoked_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"user_invitation_email_idx": {
+					"name": "user_invitation_email_idx",
+					"columns": [
+						{
+							"expression": "email",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"user_invitation_status_idx": {
+					"name": "user_invitation_status_idx",
+					"columns": [
+						{
+							"expression": "status",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				},
+				"user_invitation_role_idx": {
+					"name": "user_invitation_role_idx",
+					"columns": [
+						{
+							"expression": "role_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"user_invitation_role_id_role_id_fk": {
+					"name": "user_invitation_role_id_role_id_fk",
+					"tableFrom": "user_invitation",
+					"tableTo": "role",
+					"columnsFrom": ["role_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "no action"
+				},
+				"user_invitation_invited_by_user_id_user_id_fk": {
+					"name": "user_invitation_invited_by_user_id_user_id_fk",
+					"tableFrom": "user_invitation",
+					"tableTo": "user",
+					"columnsFrom": ["invited_by_user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "set null",
+					"onUpdate": "no action"
+				},
+				"user_invitation_accepted_by_user_id_user_id_fk": {
+					"name": "user_invitation_accepted_by_user_id_user_id_fk",
+					"tableFrom": "user_invitation",
+					"tableTo": "user",
+					"columnsFrom": ["accepted_by_user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "set null",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {
+				"user_invitation_token_hash_unique": {
+					"name": "user_invitation_token_hash_unique",
+					"nullsNotDistinct": false,
+					"columns": ["token_hash"]
+				}
+			},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
+		"public.user_role_assignment": {
+			"name": "user_role_assignment",
+			"schema": "",
+			"columns": {
+				"user_id": {
+					"name": "user_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"role_id": {
+					"name": "role_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"assigned_by_user_id": {
+					"name": "assigned_by_user_id",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false
+				},
+				"assigned_at": {
+					"name": "assigned_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"indexes": {
+				"user_role_assignment_role_idx": {
+					"name": "user_role_assignment_role_idx",
+					"columns": [
+						{
+							"expression": "role_id",
+							"isExpression": false,
+							"asc": true,
+							"nulls": "last"
+						}
+					],
+					"isUnique": false,
+					"concurrently": false,
+					"method": "btree",
+					"with": {}
+				}
+			},
+			"foreignKeys": {
+				"user_role_assignment_user_id_user_id_fk": {
+					"name": "user_role_assignment_user_id_user_id_fk",
+					"tableFrom": "user_role_assignment",
+					"tableTo": "user",
+					"columnsFrom": ["user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				},
+				"user_role_assignment_role_id_role_id_fk": {
+					"name": "user_role_assignment_role_id_role_id_fk",
+					"tableFrom": "user_role_assignment",
+					"tableTo": "role",
+					"columnsFrom": ["role_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				},
+				"user_role_assignment_assigned_by_user_id_user_id_fk": {
+					"name": "user_role_assignment_assigned_by_user_id_user_id_fk",
+					"tableFrom": "user_role_assignment",
+					"tableTo": "user",
+					"columnsFrom": ["assigned_by_user_id"],
+					"columnsTo": ["id"],
+					"onDelete": "set null",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {
+				"user_role_assignment_user_id_role_id_pk": {
+					"name": "user_role_assignment_user_id_role_id_pk",
+					"columns": ["user_id", "role_id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"policies": {},
+			"checkConstraints": {},
+			"isRLSEnabled": false
+		},
 		"public.app_settings": {
 			"name": "app_settings",
 			"schema": "",
@@ -3786,93 +4041,6 @@
 				}
 			},
 			"compositePrimaryKeys": {},
-			"uniqueConstraints": {},
-			"policies": {},
-			"checkConstraints": {},
-			"isRLSEnabled": false
-		},
-		"public.user_role_assignment": {
-			"name": "user_role_assignment",
-			"schema": "",
-			"columns": {
-				"user_id": {
-					"name": "user_id",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": true
-				},
-				"role_id": {
-					"name": "role_id",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": true
-				},
-				"assigned_by_user_id": {
-					"name": "assigned_by_user_id",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": false
-				},
-				"assigned_at": {
-					"name": "assigned_at",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"default": "now()"
-				}
-			},
-			"indexes": {
-				"user_role_assignment_role_idx": {
-					"name": "user_role_assignment_role_idx",
-					"columns": [
-						{
-							"expression": "role_id",
-							"isExpression": false,
-							"asc": true,
-							"nulls": "last"
-						}
-					],
-					"isUnique": false,
-					"concurrently": false,
-					"method": "btree",
-					"with": {}
-				}
-			},
-			"foreignKeys": {
-				"user_role_assignment_user_id_user_id_fk": {
-					"name": "user_role_assignment_user_id_user_id_fk",
-					"tableFrom": "user_role_assignment",
-					"tableTo": "user",
-					"columnsFrom": ["user_id"],
-					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
-				},
-				"user_role_assignment_role_id_role_id_fk": {
-					"name": "user_role_assignment_role_id_role_id_fk",
-					"tableFrom": "user_role_assignment",
-					"tableTo": "role",
-					"columnsFrom": ["role_id"],
-					"columnsTo": ["id"],
-					"onDelete": "cascade",
-					"onUpdate": "no action"
-				},
-				"user_role_assignment_assigned_by_user_id_user_id_fk": {
-					"name": "user_role_assignment_assigned_by_user_id_user_id_fk",
-					"tableFrom": "user_role_assignment",
-					"tableTo": "user",
-					"columnsFrom": ["assigned_by_user_id"],
-					"columnsTo": ["id"],
-					"onDelete": "set null",
-					"onUpdate": "no action"
-				}
-			},
-			"compositePrimaryKeys": {
-				"user_role_assignment_user_id_role_id_pk": {
-					"name": "user_role_assignment_user_id_role_id_pk",
-					"columns": ["user_id", "role_id"]
-				}
-			},
 			"uniqueConstraints": {},
 			"policies": {},
 			"checkConstraints": {},

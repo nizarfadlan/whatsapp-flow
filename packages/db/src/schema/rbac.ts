@@ -53,7 +53,7 @@ export const rolePermission = pgTable(
 );
 
 export const userRoleAssignment = pgTable(
-	"user_role",
+	"user_role_assignment",
 	{
 		userId: text("user_id")
 			.notNull()
@@ -68,13 +68,46 @@ export const userRoleAssignment = pgTable(
 	},
 	(table) => [
 		primaryKey({ columns: [table.userId, table.roleId] }),
-		index("user_role_role_idx").on(table.roleId),
+		index("user_role_assignment_role_idx").on(table.roleId),
+	],
+);
+
+export const userInvitation = pgTable(
+	"user_invitation",
+	{
+		id: text("id").primaryKey(),
+		email: text("email").notNull(),
+		roleId: text("role_id")
+			.notNull()
+			.references(() => role.id, { onDelete: "restrict" }),
+		tokenHash: text("token_hash").notNull().unique(),
+		status: text("status").default("pending").notNull(),
+		invitedByUserId: text("invited_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		acceptedByUserId: text("accepted_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		expiresAt: timestamp("expires_at").notNull(),
+		acceptedAt: timestamp("accepted_at"),
+		revokedAt: timestamp("revoked_at"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => [
+		index("user_invitation_email_idx").on(table.email),
+		index("user_invitation_status_idx").on(table.status),
+		index("user_invitation_role_idx").on(table.roleId),
 	],
 );
 
 export const roleRelations = relations(role, ({ many }) => ({
 	permissions: many(rolePermission),
 	users: many(userRoleAssignment),
+	invitations: many(userInvitation),
 }));
 
 export const permissionRelations = relations(permission, ({ many }) => ({
@@ -109,3 +142,18 @@ export const userRoleAssignmentRelations = relations(
 		}),
 	}),
 );
+
+export const userInvitationRelations = relations(userInvitation, ({ one }) => ({
+	role: one(role, {
+		fields: [userInvitation.roleId],
+		references: [role.id],
+	}),
+	invitedBy: one(user, {
+		fields: [userInvitation.invitedByUserId],
+		references: [user.id],
+	}),
+	acceptedBy: one(user, {
+		fields: [userInvitation.acceptedByUserId],
+		references: [user.id],
+	}),
+}));

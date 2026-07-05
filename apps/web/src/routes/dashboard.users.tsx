@@ -41,8 +41,15 @@ import {
 	TableRow,
 } from "@whatsapp-flow/ui/components/table";
 import { Textarea } from "@whatsapp-flow/ui/components/textarea";
-import { MoreHorizontal, ShieldCheck, UserCog, UsersRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+	Copy,
+	MoreHorizontal,
+	ShieldCheck,
+	UserCog,
+	UserPlus,
+	UsersRound,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { useTRPC } from "@/utils/trpc";
@@ -127,6 +134,9 @@ function UsersPage() {
 	const [status, setStatus] = useState<StatusFilter>("all");
 	const [pendingAction, setPendingAction] = useState<UserAction | null>(null);
 	const [reason, setReason] = useState("");
+	const [inviteEmail, setInviteEmail] = useState("");
+	const [inviteRoleId, setInviteRoleId] = useState("");
+	const [inviteLink, setInviteLink] = useState<string | null>(null);
 	const listInput = useMemo(
 		() => ({
 			query: query.trim() || undefined,
@@ -138,6 +148,38 @@ function UsersPage() {
 		[query, role, status],
 	);
 	const usersQuery = useQuery(trpc.user.list.queryOptions(listInput));
+	const permissionsQuery = useQuery(trpc.rbac.me.queryOptions());
+	const canInvite =
+		permissionsQuery.data?.permissions.includes("users.manage") ?? false;
+	const rolesQuery = useQuery({
+		...trpc.rbac.listRoles.queryOptions(),
+		enabled: canInvite,
+	});
+	const invitesQuery = useQuery({
+		...trpc.user.listInvites.queryOptions(),
+		enabled: canInvite,
+	});
+	const createInvite = useMutation(
+		trpc.user.createInvite.mutationOptions({
+			onSuccess: (result) => {
+				const link = `${window.location.origin}/login?invite=${encodeURIComponent(result.token)}`;
+				setInviteLink(link);
+				setInviteEmail("");
+				void invitesQuery.refetch();
+				toast.success("Invite created");
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const revokeInvite = useMutation(
+		trpc.user.revokeInvite.mutationOptions({
+			onSuccess: () => {
+				toast.success("Invite revoked");
+				void invitesQuery.refetch();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
 	const updateRole = useMutation(
 		trpc.user.updateRole.mutationOptions({
 			onSuccess: () => {
@@ -187,6 +229,8 @@ function UsersPage() {
 		}),
 	);
 	const users = usersQuery.data?.users ?? [];
+	const inviteRoles = rolesQuery.data ?? [];
+	const invites = invitesQuery.data ?? [];
 	const actionPending =
 		updateRole.isPending ||
 		revokeSessions.isPending ||
@@ -195,6 +239,31 @@ function UsersPage() {
 	const reasonRequired = pendingAction?.type === "suspend";
 	const confirmDisabled =
 		actionPending || (reasonRequired && reason.trim().length === 0);
+	const inviteDisabled =
+		createInvite.isPending || !inviteEmail.trim() || !inviteRoleId;
+
+	useEffect(() => {
+		if (!inviteRoleId && inviteRoles.length > 0) {
+			setInviteRoleId(
+				inviteRoles.find((item) => item.key === "member")?.id ??
+					inviteRoles[0].id,
+			);
+		}
+	}, [inviteRoleId, inviteRoles]);
+
+	const createInviteLink = () => {
+		if (inviteDisabled) return;
+		createInvite.mutate({
+			email: inviteEmail.trim(),
+			roleId: inviteRoleId,
+		});
+	};
+
+	const copyInviteLink = async () => {
+		if (!inviteLink) return;
+		await navigator.clipboard.writeText(inviteLink);
+		toast.success("Invite link copied");
+	};
 
 	const openAction = (action: UserAction) => {
 		setReason("");
@@ -254,6 +323,108 @@ function UsersPage() {
 					</p>
 				</div>
 			</div>
+
+			{canInvite && (
+				<Card>
+					<CardHeader>
+						<CardTitle className="flex items-center gap-2">
+							<UserPlus className="size-5" />
+							Invite user
+						</CardTitle>
+						<CardDescription>
+							Generate a one-time invite link and assign the user's initial
+							role.
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						<div className="grid gap-3 lg:grid-cols-[1fr_240px_auto]">
+							<Input
+								type="email"
+								placeholder="teammate@example.com"
+								value={inviteEmail}
+								onChange={(event) => setInviteEmail(event.target.value)}
+							/>
+							<NativeSelect
+								value={inviteRoleId}
+								onChange={(event) => setInviteRoleId(event.target.value)}
+							>
+								{inviteRoles.map((item) => (
+									<NativeSelectOption key={item.id} value={item.id}>
+										{item.name}
+									</NativeSelectOption>
+								))}
+							</NativeSelect>
+							<Button
+								type="button"
+								disabled={inviteDisabled}
+								onClick={createInviteLink}
+							>
+								{createInvite.isPending ? "Creating..." : "Create invite"}
+							</Button>
+						</div>
+
+						{inviteLink && (
+							<div className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+								<p className="break-all font-mono text-xs">{inviteLink}</p>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={copyInviteLink}
+								>
+									<Copy className="size-4" />
+									Copy
+								</Button>
+							</div>
+						)}
+
+						{invites.length > 0 && (
+							<div className="rounded-lg border">
+								<Table>
+									<TableHeader>
+										<TableRow>
+											<TableHead>Email</TableHead>
+											<TableHead>Role</TableHead>
+											<TableHead>Status</TableHead>
+											<TableHead>Expires</TableHead>
+											<TableHead className="text-right">Actions</TableHead>
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{invites.map((invite) => (
+											<TableRow key={invite.id}>
+												<TableCell>{invite.email}</TableCell>
+												<TableCell>{invite.roleName}</TableCell>
+												<TableCell>
+													<Badge variant="outline">{invite.status}</Badge>
+												</TableCell>
+												<TableCell className="text-muted-foreground text-sm">
+													{new Date(invite.expiresAt).toLocaleDateString()}
+												</TableCell>
+												<TableCell className="text-right">
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														disabled={
+															invite.status !== "pending" ||
+															revokeInvite.isPending
+														}
+														onClick={() =>
+															revokeInvite.mutate({ inviteId: invite.id })
+														}
+													>
+														Revoke
+													</Button>
+												</TableCell>
+											</TableRow>
+										))}
+									</TableBody>
+								</Table>
+							</div>
+						)}
+					</CardContent>
+				</Card>
+			)}
 
 			<Card>
 				<CardHeader>

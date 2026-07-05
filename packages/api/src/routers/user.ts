@@ -1,14 +1,26 @@
+import { createHash, randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import type { createDb } from "@whatsapp-flow/db";
 import { account, session, user } from "@whatsapp-flow/db/schema/auth";
-import { userRoleAssignment } from "@whatsapp-flow/db/schema/rbac";
+import {
+	role,
+	userInvitation,
+	userRoleAssignment,
+} from "@whatsapp-flow/db/schema/rbac";
 import { and, count, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
-import { permissionProcedure, router } from "../index";
+import {
+	permissionProcedure,
+	protectedProcedure,
+	publicProcedure,
+	router,
+} from "../index";
 
 const roleSchema = z.enum(["admin", "member"]);
 const statusSchema = z.enum(["active", "suspended"]);
+const inviteTokenBytes = 32;
+const inviteExpiresInMs = 1000 * 60 * 60 * 24 * 7;
 const listUsersInputSchema = z.object({
 	query: z.string().trim().max(160).optional(),
 	role: z.enum(["admin", "member", "all"]).default("all"),
@@ -49,6 +61,18 @@ function listWhere(input: z.infer<typeof listUsersInputSchema>) {
 	return conditions.length > 0 ? and(...conditions) : undefined;
 }
 
+function normalizeEmail(email: string) {
+	return email.trim().toLowerCase();
+}
+
+function createInviteToken() {
+	return randomBytes(inviteTokenBytes).toString("base64url");
+}
+
+function hashInviteToken(token: string) {
+	return createHash("sha256").update(token).digest("hex");
+}
+
 async function countActiveAdmins(db: ReturnType<typeof createDb>) {
 	const [row] = await db
 		.select({ total: count() })
@@ -86,6 +110,221 @@ async function ensureCanRemoveActiveAdmin(
 }
 
 export const userRouter = router({
+	getInvite: publicProcedure
+		.input(z.object({ token: z.string().min(16) }))
+		.query(async ({ ctx, input }) => {
+			const [invite] = await ctx.db
+				.select({
+					id: userInvitation.id,
+					email: userInvitation.email,
+					status: userInvitation.status,
+					expiresAt: userInvitation.expiresAt,
+					roleName: role.name,
+				})
+				.from(userInvitation)
+				.innerJoin(role, eq(userInvitation.roleId, role.id))
+				.where(eq(userInvitation.tokenHash, hashInviteToken(input.token)))
+				.limit(1);
+
+			if (!invite) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+			}
+			if (invite.status !== "pending" || invite.expiresAt < new Date()) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invite is no longer valid",
+				});
+			}
+
+			return {
+				email: invite.email,
+				roleName: invite.roleName,
+				expiresAt: invite.expiresAt,
+			};
+		}),
+
+	acceptInvite: protectedProcedure
+		.input(z.object({ token: z.string().min(16) }))
+		.mutation(async ({ ctx, input }) => {
+			const tokenHash = hashInviteToken(input.token);
+			const [invite] = await ctx.db
+				.select({
+					id: userInvitation.id,
+					email: userInvitation.email,
+					roleId: userInvitation.roleId,
+					status: userInvitation.status,
+					expiresAt: userInvitation.expiresAt,
+					roleKey: role.key,
+					roleName: role.name,
+				})
+				.from(userInvitation)
+				.innerJoin(role, eq(userInvitation.roleId, role.id))
+				.where(eq(userInvitation.tokenHash, tokenHash))
+				.limit(1);
+
+			if (!invite) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+			}
+			if (invite.status !== "pending" || invite.expiresAt < new Date()) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invite is no longer valid",
+				});
+			}
+			if (
+				normalizeEmail(ctx.currentUser.email) !== normalizeEmail(invite.email)
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Invite email does not match the signed-in user",
+				});
+			}
+
+			await ctx.db
+				.insert(userRoleAssignment)
+				.values({
+					userId: ctx.currentUser.id,
+					roleId: invite.roleId,
+					assignedByUserId: null,
+				})
+				.onConflictDoNothing();
+			if (invite.roleKey === "admin" || invite.roleKey === "member") {
+				await ctx.db
+					.update(user)
+					.set({ role: invite.roleKey, updatedAt: new Date() })
+					.where(eq(user.id, ctx.currentUser.id));
+			}
+			await ctx.db
+				.update(userInvitation)
+				.set({
+					status: "accepted",
+					acceptedByUserId: ctx.currentUser.id,
+					acceptedAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.where(eq(userInvitation.id, invite.id));
+
+			await writeAuditLog(ctx, {
+				action: "user.invite_accepted",
+				targetType: "user",
+				targetId: ctx.currentUser.id,
+				targetDisplay: ctx.currentUser.email,
+				after: { roleId: invite.roleId, roleName: invite.roleName },
+			});
+
+			return { success: true };
+		}),
+
+	createInvite: permissionProcedure("users.manage")
+		.input(
+			z.object({
+				email: z.email(),
+				roleId: z.string().min(1),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const email = normalizeEmail(input.email);
+			const [existingUser] = await ctx.db
+				.select({ id: user.id })
+				.from(user)
+				.where(eq(user.email, email))
+				.limit(1);
+			if (existingUser) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "A user with this email already exists",
+				});
+			}
+
+			const [targetRole] = await ctx.db
+				.select({ id: role.id, key: role.key, name: role.name })
+				.from(role)
+				.where(eq(role.id, input.roleId))
+				.limit(1);
+			if (!targetRole) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Role not found" });
+			}
+
+			const token = createInviteToken();
+			const [created] = await ctx.db
+				.insert(userInvitation)
+				.values({
+					id: crypto.randomUUID(),
+					email,
+					roleId: targetRole.id,
+					tokenHash: hashInviteToken(token),
+					status: "pending",
+					invitedByUserId: ctx.currentUser.id,
+					expiresAt: new Date(Date.now() + inviteExpiresInMs),
+				})
+				.returning();
+			if (!created) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Invite was not created",
+				});
+			}
+
+			await writeAuditLog(ctx, {
+				action: "user.invited",
+				targetType: "user_invitation",
+				targetId: created.id,
+				targetDisplay: email,
+				after: { email, roleId: targetRole.id, roleKey: targetRole.key },
+			});
+
+			return {
+				id: created.id,
+				email: created.email,
+				roleId: created.roleId,
+				roleName: targetRole.name,
+				expiresAt: created.expiresAt,
+				token,
+			};
+		}),
+
+	listInvites: permissionProcedure("users.read").query(async ({ ctx }) => {
+		return ctx.db
+			.select({
+				id: userInvitation.id,
+				email: userInvitation.email,
+				status: userInvitation.status,
+				expiresAt: userInvitation.expiresAt,
+				createdAt: userInvitation.createdAt,
+				acceptedAt: userInvitation.acceptedAt,
+				revokedAt: userInvitation.revokedAt,
+				roleName: role.name,
+			})
+			.from(userInvitation)
+			.innerJoin(role, eq(userInvitation.roleId, role.id))
+			.orderBy(desc(userInvitation.createdAt))
+			.limit(50);
+	}),
+
+	revokeInvite: permissionProcedure("users.manage")
+		.input(z.object({ inviteId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const [revoked] = await ctx.db
+				.update(userInvitation)
+				.set({
+					status: "revoked",
+					revokedAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.where(eq(userInvitation.id, input.inviteId))
+				.returning();
+			if (!revoked) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+			}
+			await writeAuditLog(ctx, {
+				action: "user.invite_revoked",
+				targetType: "user_invitation",
+				targetId: revoked.id,
+				targetDisplay: revoked.email,
+			});
+			return { success: true };
+		}),
+
 	list: permissionProcedure("users.read")
 		.input(listUsersInputSchema)
 		.query(async ({ ctx, input }) => {
