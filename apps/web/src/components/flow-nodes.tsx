@@ -281,13 +281,24 @@ function BaseFlowNode({
 	);
 }
 
+function parseKeywordInput(value: string | undefined) {
+	return (value ?? "")
+		.split(/[\n,]/)
+		.map((keyword) => keyword.trim())
+		.filter(Boolean);
+}
+
 export function TriggerNode({ data, selected }: NodeProps) {
 	const d = data as unknown as TriggerNodeData;
 	const triggerKind = d.triggerKind ?? "keyword";
 	const summary = () => {
 		switch (triggerKind) {
-			case "keyword":
-				return d.keyword ? `Keyword: "${d.keyword}"` : "Set keyword below";
+			case "keyword": {
+				const keywords = parseKeywordInput(d.keyword);
+				if (keywords.length === 0) return "Set keywords below";
+				if (keywords.length === 1) return `Keyword: "${keywords[0]}"`;
+				return `${keywords.length} keywords: ${keywords.slice(0, 3).join(", ")}`;
+			}
 			case "any_message":
 				return "Any incoming message";
 			case "webhook":

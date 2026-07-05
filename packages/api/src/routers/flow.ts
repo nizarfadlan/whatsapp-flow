@@ -29,7 +29,7 @@ function getTriggerPayload(nodes: FlowNode[]) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keyword: String(data.keyword ?? "") },
+				triggerConfig: { keywords: parseTriggerKeywords(data.keyword) },
 			};
 		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };
@@ -55,6 +55,13 @@ function nonEmpty(value: unknown) {
 	return typeof value === "string" && value.trim().length > 0;
 }
 
+function parseTriggerKeywords(value: unknown) {
+	return String(value ?? "")
+		.split(/[\n,]/)
+		.map((keyword) => keyword.trim())
+		.filter(Boolean);
+}
+
 function normalizeNumber(value: unknown) {
 	return typeof value === "string" ? value.replace(/[^\d]/g, "") : "";
 }
@@ -74,8 +81,11 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 
 	const triggerData = trigger.data ?? {};
 	const triggerKind = triggerData.triggerKind;
-	if (triggerKind === "keyword" && !nonEmpty(triggerData.keyword)) {
-		return "Keyword trigger needs a keyword";
+	if (
+		triggerKind === "keyword" &&
+		parseTriggerKeywords(triggerData.keyword).length === 0
+	) {
+		return "Keyword trigger needs at least one keyword";
 	}
 	if (triggerKind === "webhook" && !nonEmpty(triggerData.webhookToken)) {
 		return "Webhook trigger needs a secret token";

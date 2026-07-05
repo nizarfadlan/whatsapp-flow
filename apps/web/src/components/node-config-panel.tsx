@@ -79,13 +79,16 @@ function TriggerKeywordConfig({
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
 	return (
-		<Field label="Keyword">
-			<Input
-				className="h-7 text-xs"
-				placeholder="e.g. hello"
+		<Field label="Keywords">
+			<Textarea
+				className="min-h-20 text-xs"
+				placeholder="e.g. hello, hi\nor one keyword per line"
 				value={data.keyword ?? ""}
 				onChange={(e) => onUpdate({ keyword: e.target.value })}
 			/>
+			<span className="text-[10px] text-muted-foreground">
+				Matches if any keyword appears in the incoming message.
+			</span>
 		</Field>
 	);
 }

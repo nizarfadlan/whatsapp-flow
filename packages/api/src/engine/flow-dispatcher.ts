@@ -225,10 +225,15 @@ function matchesFlowTrigger(
 			return true;
 
 		case "keyword": {
-			const config = flowRow.triggerConfig as { keyword?: string } | null;
-			const keyword = config?.keyword;
-			if (!keyword) return false;
-			return matchesKeywordTrigger(messageText, keyword);
+			const config = flowRow.triggerConfig as {
+				keyword?: string;
+				keywords?: string[];
+			} | null;
+			const keywords = config?.keywords?.length
+				? config.keywords
+				: config?.keyword;
+			if (!keywords) return false;
+			return matchesKeywordTrigger(messageText, keywords);
 		}
 
 		default:

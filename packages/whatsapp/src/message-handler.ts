@@ -4,11 +4,18 @@ export type IncomingMessage = ConnectionManagerEvents["device:message"];
 
 export function matchesKeywordTrigger(
 	messageText: string | undefined,
-	keyword: string,
+	keywords: string | string[],
 ) {
 	if (!messageText) {
 		return false;
 	}
 
-	return messageText.trim().toLowerCase() === keyword.trim().toLowerCase();
+	const normalizedMessage = messageText.trim().toLowerCase();
+	const normalizedKeywords = (Array.isArray(keywords) ? keywords : [keywords])
+		.map((keyword) => keyword.trim().toLowerCase())
+		.filter(Boolean);
+
+	return normalizedKeywords.some((keyword) =>
+		normalizedMessage.includes(keyword),
+	);
 }

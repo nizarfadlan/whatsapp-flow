@@ -97,6 +97,13 @@ function hasTriggerNode(nodes: Node[]) {
 	return nodes.some((node) => isTriggerType(node.type));
 }
 
+function parseTriggerKeywords(value: string | undefined) {
+	return (value ?? "")
+		.split(/[\n,]/)
+		.map((keyword) => keyword.trim())
+		.filter(Boolean);
+}
+
 function getTriggerPayload(nodes: Node[]) {
 	const triggerNode = nodes.find((node) => isTriggerType(node.type));
 	const data = triggerNode?.data as FlowNodeData | undefined;
@@ -106,7 +113,7 @@ function getTriggerPayload(nodes: Node[]) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keyword: data.keyword ?? "" },
+				triggerConfig: { keywords: parseTriggerKeywords(data.keyword) },
 			};
 		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };
