@@ -4,7 +4,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.3+-000000?logo=bun&logoColor=white)](https://bun.sh/)
-[![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=111111)](https://react.dev/)
+[![TanStack Start](https://img.shields.io/badge/TanStack%20Start-1.x-ff4154?logo=tanstack&logoColor=white)](https://tanstack.com/start)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Drizzle-4169e1?logo=postgresql&logoColor=white)](https://orm.drizzle.team/)
 
 WhatsApp Flow gives teams a self-hostable control plane for WhatsApp automation: connect devices, design conversation logic, capture replies, route branches, trigger webhooks, hand off to humans, and inspect runtime activity in one place.
@@ -54,7 +54,7 @@ Most WhatsApp bot setups become a mix of scripts, fragile webhook handlers, and 
 | --- | --- |
 | Runtime | Bun |
 | Monorepo | Turborepo + Bun workspaces |
-| Web | React, Vite, TanStack Router/Start, Tailwind CSS |
+| Web | TanStack Start, TanStack Router, Vite, Tailwind CSS |
 | API | Hono, tRPC |
 | Auth | Better Auth |
 | Database | PostgreSQL, Drizzle ORM |
@@ -67,7 +67,7 @@ Most WhatsApp bot setups become a mix of scripts, fragile webhook handlers, and 
 ```text
 whatsapp-flow/
 ├── apps/
-│   ├── web/             # React dashboard
+│   ├── web/             # TanStack Start dashboard
 │   └── server/          # Hono API server
 ├── packages/
 │   ├── api/             # Business logic, tRPC routers, flow engine
