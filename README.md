@@ -1,182 +1,348 @@
-# whatsapp-flow
+# WhatsApp Flow
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Start, Hono, TRPC, and more.
+> Open-source WhatsApp automation workspace for building, running, and monitoring bot flows from a visual dashboard.
 
-## Features
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Bun](https://img.shields.io/badge/Bun-1.3+-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=111111)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Drizzle-4169e1?logo=postgresql&logoColor=white)](https://orm.drizzle.team/)
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Start** - SSR framework with TanStack Router
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Hono** - Lightweight, performant server framework
-- **tRPC** - End-to-end type-safe APIs
-- **Bun** - Runtime environment
-- **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **Biome** - Linting and formatting
-- **Husky** - Git hooks for code quality
-- **Turborepo** - Optimized monorepo build system
+WhatsApp Flow gives teams a self-hostable control plane for WhatsApp automation: connect devices, design conversation logic, capture replies, route branches, trigger webhooks, hand off to humans, and inspect runtime activity in one place.
 
-## Getting Started
+![WhatsApp Flow dashboard flow builder](docs/screenshots/dashboard-flow.png)
 
-First, install the dependencies:
+## Why This Exists
+
+Most WhatsApp bot setups become a mix of scripts, fragile webhook handlers, and hard-to-debug message state. WhatsApp Flow turns that into a dashboard-driven workflow:
+
+- Build flows visually instead of hard-coding every conversation path.
+- Support both simple keyword bots and more advanced branching automations.
+- Keep device, inbox, contact, execution log, user, role, and settings management in the same app.
+- Self-host the full stack with PostgreSQL and Bun.
+- Extend the system through typed packages, tRPC routers, and provider abstractions.
+
+## Highlights
+
+### Visual Flow Builder
+
+- Drag-and-connect node canvas powered by React Flow.
+- Trigger nodes for keywords, any incoming message, webhooks, and schedules.
+- Message nodes for text, templates, reactions, media, documents, locations, buttons, lists, and quick replies.
+- Logic nodes for conditions, delays, variables, wait-for-reply steps, and random routing.
+- Action nodes for forwarding, webhook calls, and ending a conversation.
+- Live save/deploy controls, flow sessions, and flow-specific logs.
+
+### WhatsApp Operations
+
+- Manage WhatsApp devices and connection status.
+- Support Baileys sessions and Meta WhatsApp Cloud API configuration.
+- Handle QR/status updates and inbox changes in real time with SSE.
+- Store media locally or through S3-compatible storage.
+- Trigger automations from messages, schedules, or external webhooks.
+
+### Admin Platform
+
+- Better Auth with local database-backed users.
+- Admin bootstrap through `ADMIN_EMAILS`.
+- Role-based access controls, audit logs, user management, and settings pages.
+- Branding, OAuth/OIDC, SMTP, storage, and Meta settings from the dashboard.
+- Metrics endpoint support for production observability.
+
+## Tech Stack
+
+| Area | Stack |
+| --- | --- |
+| Runtime | Bun |
+| Monorepo | Turborepo + Bun workspaces |
+| Web | React, Vite, TanStack Router/Start, Tailwind CSS |
+| API | Hono, tRPC |
+| Auth | Better Auth |
+| Database | PostgreSQL, Drizzle ORM |
+| UI | shadcn/ui primitives in `packages/ui` |
+| WhatsApp | Baileys + Meta Cloud API integrations |
+| Quality | TypeScript, Biome, Husky |
+
+## Repository Layout
+
+```text
+whatsapp-flow/
+├── apps/
+│   ├── web/             # React dashboard
+│   └── server/          # Hono API server
+├── packages/
+│   ├── api/             # Business logic, tRPC routers, flow engine
+│   ├── auth/            # Better Auth configuration and provider settings
+│   ├── config/          # Shared TypeScript/tooling config
+│   ├── db/              # Drizzle schema, migrations, database scripts
+│   ├── env/             # Typed environment validation
+│   ├── storage/         # Local and S3-compatible storage
+│   ├── ui/              # Shared shadcn/ui components and styles
+│   └── whatsapp/        # WhatsApp provider integrations
+├── docs/
+│   └── screenshots/
+└── package.json
+```
+
+## Requirements
+
+- Bun `1.3.13` or newer.
+- PostgreSQL.
+- Docker or Podman, optional, if you want containerized local services.
+
+## Quick Start
+
+Clone the repository, install dependencies, configure environment files, migrate the database, and start the apps:
 
 ```bash
 bun install
-```
-
-## Database Setup
-
-This project uses PostgreSQL with Drizzle ORM.
-
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/server/.env` file with your PostgreSQL connection details.
-
-3. Apply the schema to your database:
-
-```bash
-bun run db:push
-```
-
-Then, run the development server:
-
-```bash
+cp apps/server/.env.example apps/server/.env
+cp apps/web/.env.example apps/web/.env
+bun run db:migrate
 bun run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
-The API is running at [http://localhost:3000](http://localhost:3000).
+Open:
 
-## Auth, Admin Settings, and Whitelabel Setup
+- Web dashboard: [http://localhost:3001](http://localhost:3001)
+- API server: [http://localhost:3000](http://localhost:3000)
 
-Authentication uses Better Auth with local database tables. It does not require Clerk or another hosted auth product.
-
-### Required server env
-
-Copy `apps/server/.env.example` to `apps/server/.env`, then set at minimum:
+If you need a local PostgreSQL container and Docker is available:
 
 ```bash
-BETTER_AUTH_SECRET={your_secret_key}
+bun run db:start
+bun run db:migrate
+```
+
+## Environment
+
+Minimum server configuration:
+
+```bash
+# apps/server/.env
+BETTER_AUTH_SECRET=replace-with-a-random-secret
 BETTER_AUTH_URL=http://localhost:3000
 CORS_ORIGIN=http://localhost:3001
-DATABASE_URL=postgresql://{username}:{password}@{host}:{port}/{dbname}
+DATABASE_URL=postgresql://user:password@localhost:5432/whatsapp_flow
+ADMIN_EMAILS=admin@example.com
+SETTINGS_ENCRYPTION_KEY=replace-with-base64-32-byte-key
+PUBLIC_BASE_URL=http://localhost:3000
+STORAGE_DRIVER=local
+LOCAL_UPLOAD_DIR=uploads
 ```
 
-For the admin settings screen and DB-managed OAuth/OIDC provider secrets, also set:
+Minimum web configuration:
 
 ```bash
-# Comma-separated emails that can access Dashboard > Settings before roles are assigned.
-ADMIN_EMAILS=admin@example.com
-
-# Required when saving OAuth/OIDC client secrets from the settings UI.
-# Generate with: openssl rand -base64 32
-SETTINGS_ENCRYPTION_KEY={base64_32_byte_key}
+# apps/web/.env
+VITE_SERVER_URL=http://localhost:3000
 ```
 
-### Apply auth/settings migrations
+Generate strong secrets:
 
-Run migrations before opening the settings UI:
+```bash
+openssl rand -base64 32
+```
+
+## Database
+
+This project uses PostgreSQL and Drizzle migrations.
 
 ```bash
 bun run db:migrate
 ```
 
-This creates the app settings table, auth provider settings table, and the user role column.
+Useful database commands:
 
-### Access the settings UI
+```bash
+bun run db:start    # start bundled Docker Compose database
+bun run db:studio   # open Drizzle Studio
+bun run db:push     # push schema changes directly
+bun run db:stop     # stop bundled database
+```
 
-1. Sign in with an email listed in `ADMIN_EMAILS`, or set a user's database role to `admin`.
-2. Open `Dashboard > Settings`.
-3. Use the Branding section to change the app name, tagline, logo, favicon, primary color, and support email.
-4. Use the Auth Providers section to configure built-in OAuth providers or dynamic OIDC connections.
+## Development
 
-### OAuth and OIDC callback URLs
+Run both apps:
 
-Register the callback URL shown in the settings UI with the provider.
+```bash
+bun run dev
+```
 
-Built-in OAuth providers use provider-specific callback URLs:
+Run one app:
+
+```bash
+bun run dev:web
+bun run dev:server
+```
+
+The development workflow expects:
+
+- Backend on `http://localhost:3000`
+- Frontend on `http://localhost:3001`
+- `CORS_ORIGIN=http://localhost:3001`
+- `VITE_SERVER_URL=http://localhost:3000`
+
+## Manual Run After Build
+
+Build everything:
+
+```bash
+bun run build
+```
+
+Start the built backend:
+
+```bash
+cd apps/server
+bun run start
+```
+
+Start the built web preview in another terminal:
+
+```bash
+cd apps/web
+bun run serve --host 0.0.0.0 --port 3001
+```
+
+Open [http://localhost:3001](http://localhost:3001).
+
+Build outputs:
+
+- Web app: `apps/web/dist`
+- Server app: `apps/server/dist/index.mjs`
+
+## Authentication And Admin Access
+
+Authentication is powered by Better Auth and local database tables.
+
+Set one or more bootstrap admins before first login:
+
+```bash
+ADMIN_EMAILS=admin@example.com,owner@example.com
+```
+
+After signing in as an admin, use `Dashboard > Settings` to configure:
+
+- Branding and support details.
+- OAuth/OIDC providers.
+- Meta WhatsApp Cloud API values.
+- Storage and application settings.
+
+OAuth callback paths:
 
 ```text
 /api/auth/callback/google
 /api/auth/callback/github
-```
-
-OIDC/Generic OAuth connections use a generated immutable provider ID:
-
-```text
 /api/auth/oauth2/callback/{providerId}
 ```
 
-Use the full server URL when registering callbacks, for example `http://localhost:3000/api/auth/oauth2/callback/oidc-acme-sso` in local development.
+Register callbacks with the full backend origin, for example:
 
-### Dynamic OIDC connection setup
+```text
+http://localhost:3000/api/auth/oauth2/callback/oidc-acme-sso
+```
 
-OIDC connections are stored in the database and can be created from `Dashboard > Settings`:
+## Meta WhatsApp Cloud API
 
-1. Create an OIDC connection with a display name.
-2. Copy the generated callback URL.
-3. Register that callback URL in the identity provider.
-4. Fill the client ID, client secret, discovery URL or manual authorization/token/userinfo endpoints.
-5. Enable the connection.
-6. Restart the server so Better Auth reloads the Generic OAuth configuration.
+For Meta Cloud API devices, configure:
 
-The generated provider ID is stable and should not be changed because linked accounts and callback URLs depend on it. Discovery URL is preferred when your identity provider supports it.
+```bash
+# apps/server/.env
+META_GRAPH_API_VERSION=v23.0
+META_APP_SECRET=
+META_WEBHOOK_VERIFY_TOKEN=
+META_APP_ID=
+META_EMBEDDED_SIGNUP_CONFIG_ID=
+```
+
+```bash
+# apps/web/.env
+VITE_META_APP_ID=
+VITE_META_EMBEDDED_SIGNUP_CONFIG_ID=
+```
+
+Local webhook URL:
+
+```text
+http://localhost:3000/api/whatsapp/meta/webhook
+```
+
+Use a public HTTPS tunnel or deployed backend URL when configuring Meta webhooks outside local development.
+
+## Production Checklist
+
+- Set `NODE_ENV=production`.
+- Set `BETTER_AUTH_URL` and `PUBLIC_BASE_URL` to the deployed API origin.
+- Set `CORS_ORIGIN` to the deployed dashboard origin.
+- Use a strong `BETTER_AUTH_SECRET`.
+- Set `SETTINGS_ENCRYPTION_KEY` to a base64 value that decodes to 32 bytes.
+- Set `METRICS_TOKEN` before exposing `GET /metrics`.
+- Configure SMTP if invite emails should be sent automatically.
+- Use S3/R2/MinIO storage for durable media uploads when local disk is not appropriate.
+- Register OAuth/OIDC and Meta callback URLs before enabling those providers.
+
+## Quality Checks
+
+```bash
+bun run check-types
+bun run test
+bun run check
+bun run build
+```
+
+CI-style validation:
+
+```bash
+bun run check:ci
+```
+
+## Scripts
+
+| Command | Description |
+| --- | --- |
+| `bun run dev` | Run all apps in development mode |
+| `bun run dev:web` | Run only the web app |
+| `bun run dev:server` | Run only the API server |
+| `bun run build` | Build all workspaces |
+| `bun run check-types` | Run TypeScript checks |
+| `bun run test` | Run tests across workspaces |
+| `bun run check` | Run Biome check and auto-fix |
+| `bun run check:ci` | Typecheck, Biome check, and build |
+| `bun run db:start` | Start local PostgreSQL with Docker Compose |
+| `bun run db:migrate` | Run Drizzle migrations |
+| `bun run db:push` | Push schema changes directly |
+| `bun run db:studio` | Open Drizzle Studio |
+| `bun run db:stop` | Stop the local database container |
 
 ## UI Customization
 
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
+Shared UI components and design tokens live in `packages/ui`.
 
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
+- Global styles: `packages/ui/src/styles/globals.css`
+- Shared components: `packages/ui/src/components`
+- shadcn config: `packages/ui/components.json` and `apps/web/components.json`
 
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
+Add shared primitives from the repository root:
 
 ```bash
 npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
 ```
 
-Import shared components like this:
+Import shared components:
 
 ```tsx
 import { Button } from "@whatsapp-flow/ui/components/button";
 ```
 
-### Add app-specific blocks
+## Contributing
 
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
+Contributions are welcome. Before opening a pull request:
 
-## Git Hooks and Formatting
+- Keep changes scoped and consistent with the existing monorepo structure.
+- Run `bun run check:ci`.
+- Include migrations for schema changes.
+- Add focused tests for engine, router, or provider behavior when relevant.
 
-- Initialize hooks: `bun run prepare`
-- Format and lint fix: `bun run check`
+## License
 
-## Project Structure
-
-```
-whatsapp-flow/
-├── apps/
-│   ├── web/         # Frontend application (React + TanStack Start)
-│   └── server/      # Backend API (Hono, TRPC)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── api/         # API layer / business logic
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
-```
-
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run dev:server`: Start only the server
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
-- `bun run db:generate`: Generate database client/types
-- `bun run db:migrate`: Run database migrations
-- `bun run db:studio`: Open database studio UI
-- `bun run check`: Run Biome formatting and linting
+No license file is included yet. Add a license before publishing this repository as a public open-source project.
