@@ -78,8 +78,6 @@ whatsapp-flow/
 │   ├── storage/         # Local and S3-compatible storage
 │   ├── ui/              # Shared shadcn/ui components and styles
 │   └── whatsapp/        # WhatsApp provider integrations
-├── docs/
-│   └── screenshots/
 └── package.json
 ```
 
@@ -345,4 +343,4 @@ Contributions are welcome. Before opening a pull request:
 
 ## License
 
-No license file is included yet. Add a license before publishing this repository as a public open-source project.
+This project is licensed under the [MIT License](LICENSE).
