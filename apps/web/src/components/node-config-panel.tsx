@@ -28,9 +28,25 @@ import {
 } from "@whatsapp-flow/ui/components/select";
 import { Separator } from "@whatsapp-flow/ui/components/separator";
 import { Textarea } from "@whatsapp-flow/ui/components/textarea";
+import {
+	MapControls,
+	MapMarker,
+	Map as MapView,
+	MarkerContent,
+	useMap,
+} from "@whatsapp-flow/ui/components/ui/map";
 import type { Edge, Node } from "@xyflow/react";
-import { Copy, Plus, RefreshCw, Smile, Trash2, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import {
+	Copy,
+	Locate,
+	MapPin,
+	Plus,
+	RefreshCw,
+	Smile,
+	Trash2,
+	X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContactCombobox } from "./contact-combobox";
 import type {
 	ActionNodeData,
@@ -39,6 +55,7 @@ import type {
 	LogicNodeData,
 	MessageNodeData,
 	TriggerNodeData,
+	WaitForReplyWarning,
 } from "./flow-nodes";
 import { MediaUpload } from "./media-upload";
 
@@ -71,6 +88,31 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 	return <h4 className="font-medium text-[10px]">{children}</h4>;
 }
 
+function parseKeywordTokens(value: string) {
+	return value
+		.split(/[\n,]/)
+		.map((keyword) => keyword.trim())
+		.filter(Boolean);
+}
+
+function normalizeKeywordTokens(values: string[]) {
+	const seen = new Set<string>();
+	return values.filter((value) => {
+		const key = value.trim().toLowerCase();
+		if (!key || seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+function getTriggerKeywords(data: TriggerNodeData) {
+	return normalizeKeywordTokens(
+		data.keywords?.length
+			? data.keywords
+			: parseKeywordTokens(data.keyword ?? ""),
+	);
+}
+
 function TriggerKeywordConfig({
 	data,
 	onUpdate,
@@ -78,16 +120,76 @@ function TriggerKeywordConfig({
 	data: TriggerNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const [inputValue, setInputValue] = useState("");
+	const keywords = useMemo(() => getTriggerKeywords(data), [data]);
+
+	const commitKeywords = useCallback(
+		(nextKeywords: string[]) => {
+			const normalized = normalizeKeywordTokens(
+				nextKeywords.map((keyword) => keyword.trim()),
+			);
+			onUpdate({ keywords: normalized, keyword: normalized.join("\n") });
+		},
+		[onUpdate],
+	);
+
+	const addInputKeywords = useCallback(
+		(value: string) => {
+			const nextKeywords = parseKeywordTokens(value);
+			if (nextKeywords.length === 0) return;
+			commitKeywords([...keywords, ...nextKeywords]);
+			setInputValue("");
+		},
+		[commitKeywords, keywords],
+	);
+
 	return (
 		<Field label="Keywords">
-			<Textarea
-				className="min-h-20 text-xs"
-				placeholder="e.g. hello, hi\nor one keyword per line"
-				value={data.keyword ?? ""}
-				onChange={(e) => onUpdate({ keyword: e.target.value })}
-			/>
+			<div className="flex min-h-20 flex-col gap-2 rounded-md border bg-background p-2">
+				{keywords.length > 0 && (
+					<div className="flex flex-wrap gap-1.5">
+						{keywords.map((keyword) => (
+							<span
+								key={keyword.toLowerCase()}
+								className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-1 text-xs"
+							>
+								{keyword}
+								<button
+									type="button"
+									className="text-muted-foreground hover:text-foreground"
+									onClick={() =>
+										commitKeywords(keywords.filter((item) => item !== keyword))
+									}
+									aria-label={`Remove ${keyword}`}
+								>
+									<X className="size-3" />
+								</button>
+							</span>
+						))}
+					</div>
+				)}
+				<Input
+					className="h-7 border-0 px-0 text-xs shadow-none focus-visible:ring-0"
+					placeholder="Type keyword, then Enter"
+					value={inputValue}
+					onBlur={() => addInputKeywords(inputValue)}
+					onChange={(e) => setInputValue(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key !== "Enter" && e.key !== ",") return;
+						e.preventDefault();
+						addInputKeywords(inputValue);
+					}}
+					onPaste={(e) => {
+						const text = e.clipboardData.getData("text");
+						if (!/[\n,]/.test(text)) return;
+						e.preventDefault();
+						addInputKeywords(text);
+					}}
+				/>
+			</div>
 			<span className="text-[10px] text-muted-foreground">
-				Matches if any keyword appears in the incoming message.
+				Example: keyword “order” will match “Saya mau ORDER sekarang”.
+				Uppercase/lowercase does not matter.
 			</span>
 		</Field>
 	);
@@ -469,6 +571,109 @@ function DocumentConfig({
 	);
 }
 
+function isValidLatitude(value: number | undefined): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isFinite(value) &&
+		value >= -90 &&
+		value <= 90
+	);
+}
+
+function isValidLongitude(value: number | undefined): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isFinite(value) &&
+		value >= -180 &&
+		value <= 180
+	);
+}
+
+function isNullIsland(
+	latitude: number | undefined,
+	longitude: number | undefined,
+) {
+	return latitude === 0 && longitude === 0;
+}
+
+function parseCoordinateInput(value: string) {
+	if (!value.trim()) return undefined;
+	const parsed = Number.parseFloat(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function LocationMapClickHandler({
+	onSelect,
+}: {
+	onSelect: (coordinates: { latitude: number; longitude: number }) => void;
+}) {
+	const { map } = useMap();
+
+	useEffect(() => {
+		if (!map) return;
+		const handleClick = (event: unknown) => {
+			const lngLat = (event as { lngLat?: { lng: number; lat: number } })
+				.lngLat;
+			if (!lngLat) return;
+			onSelect({ latitude: lngLat.lat, longitude: lngLat.lng });
+		};
+		map.on("click", handleClick);
+		return () => {
+			map.off("click", handleClick);
+		};
+	}, [map, onSelect]);
+
+	return null;
+}
+
+function LocationMapPicker({
+	latitude,
+	longitude,
+	onSelect,
+}: {
+	latitude?: number;
+	longitude?: number;
+	onSelect: (coordinates: { latitude: number; longitude: number }) => void;
+}) {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+
+	const hasLocation = isValidLatitude(latitude) && isValidLongitude(longitude);
+	const isZeroCoordinate = isNullIsland(latitude, longitude);
+	const center: [number, number] = hasLocation
+		? [longitude, latitude]
+		: [106.8272, -6.1754];
+	const zoom = hasLocation ? (isZeroCoordinate ? 2 : 14) : 10;
+
+	if (!mounted) {
+		return <div className="h-48 rounded-md border bg-muted" />;
+	}
+
+	return (
+		<div className="h-48 overflow-hidden rounded-md border">
+			<MapView center={center} zoom={zoom}>
+				<LocationMapClickHandler onSelect={onSelect} />
+				<MapControls showCompass={false} showFullscreen={false} />
+				{hasLocation && (
+					<MapMarker
+						draggable
+						latitude={latitude}
+						longitude={longitude}
+						onDragEnd={(lngLat) =>
+							onSelect({ latitude: lngLat.lat, longitude: lngLat.lng })
+						}
+						offset={[0, -14]}
+					>
+						<MarkerContent className="cursor-move">
+							<MapPin className="size-7 fill-primary stroke-background" />
+						</MarkerContent>
+					</MapMarker>
+				)}
+			</MapView>
+		</div>
+	);
+}
+
 function LocationConfig({
 	data,
 	onUpdate,
@@ -476,6 +681,47 @@ function LocationConfig({
 	data: MessageNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const latitudeValid =
+		data.latitude === undefined || isValidLatitude(data.latitude);
+	const longitudeValid =
+		data.longitude === undefined || isValidLongitude(data.longitude);
+	const [locationLoading, setLocationLoading] = useState(false);
+	const [locationError, setLocationError] = useState<string | null>(null);
+	const updateCoordinates = useCallback(
+		(coordinates: { latitude: number; longitude: number }) => {
+			onUpdate({
+				latitude: Number(coordinates.latitude.toFixed(6)),
+				longitude: Number(coordinates.longitude.toFixed(6)),
+			});
+		},
+		[onUpdate],
+	);
+	const useCurrentLocation = useCallback(() => {
+		if (typeof navigator === "undefined" || !navigator.geolocation) {
+			setLocationError("Your browser does not support location detection.");
+			return;
+		}
+
+		setLocationLoading(true);
+		setLocationError(null);
+		navigator.geolocation.getCurrentPosition(
+			(position) => {
+				setLocationLoading(false);
+				updateCoordinates({
+					latitude: position.coords.latitude,
+					longitude: position.coords.longitude,
+				});
+			},
+			() => {
+				setLocationLoading(false);
+				setLocationError(
+					"Could not detect your location. Please allow location access or enter coordinates manually.",
+				);
+			},
+			{ enableHighAccuracy: true, maximumAge: 60_000, timeout: 10_000 },
+		);
+	}, [updateCoordinates]);
+
 	return (
 		<>
 			<div className="grid grid-cols-2 gap-2">
@@ -484,24 +730,69 @@ function LocationConfig({
 						className="h-7 text-xs"
 						type="number"
 						step="any"
+						min={-90}
+						max={90}
 						value={data.latitude ?? ""}
 						onChange={(e) =>
-							onUpdate({ latitude: Number.parseFloat(e.target.value) })
+							onUpdate({ latitude: parseCoordinateInput(e.target.value) })
 						}
 					/>
+					{!latitudeValid && (
+						<span className="text-[10px] text-destructive">
+							Latitude must be between -90 and 90.
+						</span>
+					)}
 				</Field>
 				<Field label="Longitude">
 					<Input
 						className="h-7 text-xs"
 						type="number"
 						step="any"
+						min={-180}
+						max={180}
 						value={data.longitude ?? ""}
 						onChange={(e) =>
-							onUpdate({ longitude: Number.parseFloat(e.target.value) })
+							onUpdate({ longitude: parseCoordinateInput(e.target.value) })
 						}
 					/>
+					{!longitudeValid && (
+						<span className="text-[10px] text-destructive">
+							Longitude must be between -180 and 180.
+						</span>
+					)}
 				</Field>
 			</div>
+			<Field label="Map">
+				<div className="flex justify-end">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 text-xs"
+						onClick={useCurrentLocation}
+						disabled={locationLoading}
+					>
+						<Locate className="size-3" />
+						{locationLoading ? "Detecting..." : "Use my location"}
+					</Button>
+				</div>
+				<LocationMapPicker
+					latitude={data.latitude}
+					longitude={data.longitude}
+					onSelect={updateCoordinates}
+				/>
+				<span className="text-[10px] text-muted-foreground">
+					Click the map, drag the marker, or use your current location.
+				</span>
+				{isNullIsland(data.latitude, data.longitude) && (
+					<span className="text-[10px] text-muted-foreground">
+						Coordinates 0,0 are shown zoomed out so the map does not look blank.
+					</span>
+				)}
+				{locationError && (
+					<span className="text-[10px] text-destructive">{locationError}</span>
+				)}
+			</Field>
 			<Field label="Address (optional)">
 				<Input
 					className="h-7 text-xs"
@@ -550,7 +841,7 @@ function ReactionConfig({
 						<Smile className="size-3.5 text-muted-foreground" />
 					)}
 					<span className={data.emoji ? "" : "text-muted-foreground"}>
-						{data.emoji ? data.emoji : "Select emoji"}
+						{data.emoji ? "Selected emoji" : "Select emoji"}
 					</span>
 				</PopoverTrigger>
 				<PopoverContent className="h-80 w-72 p-0" align="start">
@@ -1056,6 +1347,10 @@ function SetVariableConfig({
 	);
 }
 
+function createWarningId() {
+	return globalThis.crypto?.randomUUID?.() ?? `warning-${Date.now()}`;
+}
+
 function WaitForReplyConfig({
 	data,
 	onUpdate,
@@ -1063,6 +1358,15 @@ function WaitForReplyConfig({
 	data: LogicNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const timeoutMinutes = data.timeoutMinutes ?? 1440;
+	const warnings = data.replyWarnings ?? [];
+	const updateWarnings = useCallback(
+		(nextWarnings: WaitForReplyWarning[]) => {
+			onUpdate({ replyWarnings: nextWarnings });
+		},
+		[onUpdate],
+	);
+
 	return (
 		<>
 			<Field label="Variable Name">
@@ -1079,7 +1383,7 @@ function WaitForReplyConfig({
 					min={1}
 					max={10_080}
 					type="number"
-					value={data.timeoutMinutes ?? 1440}
+					value={timeoutMinutes}
 					onChange={(e) =>
 						onUpdate({
 							timeoutMinutes: Number.parseInt(e.target.value, 10) || 1,
@@ -1088,6 +1392,99 @@ function WaitForReplyConfig({
 				/>
 				<p className="text-[10px] text-muted-foreground">
 					Pauses only for the same WhatsApp contact on the same device.
+				</p>
+			</Field>
+			<Field label="Warnings before timeout">
+				<div className="flex flex-col gap-2">
+					{warnings.map((warning, index) => {
+						const invalidTime =
+							!Number.isInteger(warning.afterMinutes) ||
+							warning.afterMinutes < 1 ||
+							warning.afterMinutes >= timeoutMinutes;
+						const invalidMessage = warning.message.trim().length === 0;
+						return (
+							<div
+								key={warning.id}
+								className="flex flex-col gap-2 rounded-md border p-2"
+							>
+								<div className="flex items-center gap-2">
+									<Input
+										className="h-7 text-xs"
+										min={1}
+										max={Math.max(timeoutMinutes - 1, 1)}
+										type="number"
+										value={warning.afterMinutes}
+										onChange={(e) => {
+											const nextWarnings = [...warnings];
+											nextWarnings[index] = {
+												...warning,
+												afterMinutes: Number.parseInt(e.target.value, 10) || 1,
+											};
+											updateWarnings(nextWarnings);
+										}}
+									/>
+									<span className="whitespace-nowrap text-[10px] text-muted-foreground">
+										minutes after waiting
+									</span>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										className="size-7"
+										onClick={() =>
+											updateWarnings(
+												warnings.filter((item) => item.id !== warning.id),
+											)
+										}
+									>
+										<Trash2 className="size-3.5" />
+									</Button>
+								</div>
+								<Textarea
+									className="min-h-16 text-xs"
+									placeholder="Still there? Please reply before this session expires."
+									value={warning.message}
+									onChange={(e) => {
+										const nextWarnings = [...warnings];
+										nextWarnings[index] = {
+											...warning,
+											message: e.target.value,
+										};
+										updateWarnings(nextWarnings);
+									}}
+								/>
+								{(invalidTime || invalidMessage) && (
+									<p className="text-[10px] text-destructive">
+										{invalidTime
+											? "Warning time must be before the timeout."
+											: "Warning message cannot be empty."}
+									</p>
+								)}
+							</div>
+						);
+					})}
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 justify-start text-xs"
+						onClick={() =>
+							updateWarnings([
+								...warnings,
+								{
+									id: createWarningId(),
+									afterMinutes: Math.min(5, Math.max(timeoutMinutes - 1, 1)),
+									message: "",
+								},
+							])
+						}
+					>
+						<Plus className="size-3.5" />
+						Add warning
+					</Button>
+				</div>
+				<p className="text-[10px] text-muted-foreground">
+					Warnings only send if the user has not replied yet.
 				</p>
 			</Field>
 		</>

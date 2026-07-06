@@ -10,6 +10,7 @@ import {
 	processFlowContinueJob,
 	processFlowExecuteJob,
 	processFlowResumeJob,
+	processFlowWaitWarningJob,
 } from "@whatsapp-flow/api/engine/flow-jobs";
 import { startJobWorker } from "@whatsapp-flow/api/engine/job-queue";
 import {
@@ -891,6 +892,7 @@ startJobWorker({
 		"flow.continue": (job) => processFlowContinueJob(job.payload),
 		"flow.execute": (job) => processFlowExecuteJob(job.payload),
 		"flow.resume": (job) => processFlowResumeJob(job.payload),
+		"flow.wait_warning": (job) => processFlowWaitWarningJob(job.payload),
 		"webhook.deliver": (job) => processWebhookDeliveryJob(job.payload),
 	},
 });

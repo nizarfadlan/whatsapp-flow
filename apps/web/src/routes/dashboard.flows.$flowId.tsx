@@ -97,11 +97,19 @@ function hasTriggerNode(nodes: Node[]) {
 	return nodes.some((node) => isTriggerType(node.type));
 }
 
-function parseTriggerKeywords(value: string | undefined) {
-	return (value ?? "")
-		.split(/[\n,]/)
+function parseTriggerKeywords(data: { keyword?: string; keywords?: string[] }) {
+	const keywords = data.keywords?.length
+		? data.keywords
+		: (data.keyword ?? "").split(/[\n,]/);
+	const seen = new Set<string>();
+	return keywords
 		.map((keyword) => keyword.trim())
-		.filter(Boolean);
+		.filter((keyword) => {
+			const key = keyword.toLowerCase();
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
 }
 
 function getTriggerPayload(nodes: Node[]) {
@@ -113,7 +121,7 @@ function getTriggerPayload(nodes: Node[]) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keywords: parseTriggerKeywords(data.keyword) },
+				triggerConfig: { keywords: parseTriggerKeywords(data) },
 			};
 		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };

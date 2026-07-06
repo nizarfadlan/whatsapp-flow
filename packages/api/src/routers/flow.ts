@@ -29,7 +29,7 @@ function getTriggerPayload(nodes: FlowNode[]) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keywords: parseTriggerKeywords(data.keyword) },
+				triggerConfig: { keywords: parseTriggerKeywords(data) },
 			};
 		case "any_message":
 			return { triggerType: "any_message" as const, triggerConfig: null };
@@ -56,14 +56,65 @@ function nonEmpty(value: unknown) {
 }
 
 function parseTriggerKeywords(value: unknown) {
-	return String(value ?? "")
-		.split(/[\n,]/)
-		.map((keyword) => keyword.trim())
-		.filter(Boolean);
+	const data = value && typeof value === "object" ? value : null;
+	const keywords =
+		data && "keywords" in data && Array.isArray(data.keywords)
+			? data.keywords
+			: String(data && "keyword" in data ? data.keyword : (value ?? "")).split(
+					/[\n,]/,
+				);
+	const seen = new Set<string>();
+	return keywords
+		.map((keyword) => String(keyword).trim())
+		.filter((keyword) => {
+			const key = keyword.toLowerCase();
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
 }
 
 function normalizeNumber(value: unknown) {
 	return typeof value === "string" ? value.replace(/[^\d]/g, "") : "";
+}
+
+function isValidLatitude(value: unknown) {
+	const latitude = Number(value);
+	return Number.isFinite(latitude) && latitude >= -90 && latitude <= 90;
+}
+
+function isValidLongitude(value: unknown) {
+	const longitude = Number(value);
+	return Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+}
+
+function getReplyWarnings(data: Record<string, unknown>) {
+	return Array.isArray(data.replyWarnings) ? data.replyWarnings : [];
+}
+
+function validateReplyWarnings(
+	data: Record<string, unknown>,
+	timeoutMinutes: number,
+) {
+	const warnings = getReplyWarnings(data);
+	for (const warning of warnings) {
+		if (!warning || typeof warning !== "object") {
+			return "Wait for Reply warnings must be valid objects";
+		}
+		const warningData = warning as Record<string, unknown>;
+		const afterMinutes = Number(warningData.afterMinutes);
+		if (
+			!Number.isInteger(afterMinutes) ||
+			afterMinutes < 1 ||
+			afterMinutes >= timeoutMinutes
+		) {
+			return "Wait for Reply warning time must be before the timeout";
+		}
+		if (!nonEmpty(warningData.message)) {
+			return "Wait for Reply warning message cannot be empty";
+		}
+	}
+	return null;
 }
 
 function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
@@ -83,7 +134,7 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	const triggerKind = triggerData.triggerKind;
 	if (
 		triggerKind === "keyword" &&
-		parseTriggerKeywords(triggerData.keyword).length === 0
+		parseTriggerKeywords(triggerData).length === 0
 	) {
 		return "Keyword trigger needs at least one keyword";
 	}
@@ -119,6 +170,14 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 					return `${node.type} node needs media URL`;
 				}
 				break;
+			case "send-location":
+				if (
+					!isValidLatitude(data.latitude) ||
+					!isValidLongitude(data.longitude)
+				) {
+					return "Send Location node needs valid latitude and longitude";
+				}
+				break;
 			case "condition":
 				if (!nonEmpty(data.field) || !nonEmpty(data.value)) {
 					return "Condition node needs field and value";
@@ -150,6 +209,8 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 				) {
 					return "Wait for Reply timeout must be between 1 and 10080 minutes";
 				}
+				const warningError = validateReplyWarnings(data, timeoutMinutes);
+				if (warningError) return warningError;
 				break;
 			}
 			case "webhook-call":

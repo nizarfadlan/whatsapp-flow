@@ -53,6 +53,7 @@ export interface TriggerNodeData {
 	category: "trigger";
 	triggerKind: TriggerKind;
 	keyword?: string;
+	keywords?: string[];
 	webhookToken?: string;
 	cronExpression?: string;
 	contactNumber?: string;
@@ -98,6 +99,12 @@ export interface InteractiveNodeData {
 	}[];
 }
 
+export type WaitForReplyWarning = {
+	id: string;
+	afterMinutes: number;
+	message: string;
+};
+
 export interface LogicNodeData {
 	id: string;
 	nodeType:
@@ -115,6 +122,7 @@ export interface LogicNodeData {
 	variableName?: string;
 	variableValue?: string;
 	timeoutMinutes?: number;
+	replyWarnings?: WaitForReplyWarning[];
 }
 
 export interface ActionNodeData {
@@ -281,11 +289,21 @@ function BaseFlowNode({
 	);
 }
 
-function parseKeywordInput(value: string | undefined) {
-	return (value ?? "")
-		.split(/[\n,]/)
+function normalizeKeywords(
+	data: Pick<TriggerNodeData, "keyword" | "keywords">,
+) {
+	const keywords = data.keywords?.length
+		? data.keywords
+		: (data.keyword ?? "").split(/[\n,]/);
+	const seen = new Set<string>();
+	return keywords
 		.map((keyword) => keyword.trim())
-		.filter(Boolean);
+		.filter((keyword) => {
+			const key = keyword.toLowerCase();
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
 }
 
 export function TriggerNode({ data, selected }: NodeProps) {
@@ -294,7 +312,7 @@ export function TriggerNode({ data, selected }: NodeProps) {
 	const summary = () => {
 		switch (triggerKind) {
 			case "keyword": {
-				const keywords = parseKeywordInput(d.keyword);
+				const keywords = normalizeKeywords(d);
 				if (keywords.length === 0) return "Set keywords below";
 				if (keywords.length === 1) return `Keyword: "${keywords[0]}"`;
 				return `${keywords.length} keywords: ${keywords.slice(0, 3).join(", ")}`;
@@ -530,6 +548,9 @@ export function SetVariableNode({ data, selected }: NodeProps) {
 
 export function WaitForReplyNode({ data, selected }: NodeProps) {
 	const d = data as unknown as LogicNodeData;
+	const warningCount = d.replyWarnings?.filter((warning) =>
+		warning.message.trim(),
+	).length;
 	return (
 		<BaseFlowNode
 			data={d}
@@ -539,6 +560,7 @@ export function WaitForReplyNode({ data, selected }: NodeProps) {
 		>
 			<span className="text-[10px] text-muted-foreground">
 				{d.variableName ?? "reply"} · {d.timeoutMinutes ?? 1440}m
+				{warningCount ? ` · ${warningCount} warnings` : ""}
 			</span>
 		</BaseFlowNode>
 	);
@@ -811,10 +833,7 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 		case "send-document":
 			return { ...base, data: { ...base.data, mediaUrl: "", fileName: "" } };
 		case "send-location":
-			return {
-				...base,
-				data: { ...base.data, latitude: 0, longitude: 0, address: "" },
-			};
+			return { ...base, data: { ...base.data, address: "" } };
 		case "send-reaction":
 			return { ...base, data: { ...base.data, emoji: "" } };
 		case "send-template":
@@ -865,7 +884,12 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 		case "wait-for-reply":
 			return {
 				...base,
-				data: { ...base.data, variableName: "reply", timeoutMinutes: 1440 },
+				data: {
+					...base.data,
+					variableName: "reply",
+					timeoutMinutes: 1440,
+					replyWarnings: [],
+				},
 			};
 		case "forward":
 			return { ...base, data: { ...base.data, targetNumber: "" } };

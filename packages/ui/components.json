@@ -11,14 +11,16 @@
 		"prefix": ""
 	},
 	"iconLibrary": "lucide",
+	"menuColor": "default",
+	"menuAccent": "subtle",
 	"aliases": {
 		"components": "@whatsapp-flow/ui/components",
 		"utils": "@whatsapp-flow/ui/lib/utils",
-		"hooks": "@whatsapp-flow/ui/hooks",
+		"ui": "@whatsapp-flow/ui/components",
 		"lib": "@whatsapp-flow/ui/lib",
-		"ui": "@whatsapp-flow/ui/components"
+		"hooks": "@whatsapp-flow/ui/hooks"
 	},
-	"menuColor": "default",
-	"menuAccent": "subtle",
-	"registries": {}
+	"registries": {
+		"@mapcn": "https://mapcn.dev/r/{name}.json"
+	}
 }

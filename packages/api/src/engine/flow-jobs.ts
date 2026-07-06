@@ -1,16 +1,20 @@
 import { db } from "@whatsapp-flow/db";
-import { flow } from "@whatsapp-flow/db/schema/device";
+import { flow, flowSession } from "@whatsapp-flow/db/schema/device";
+import { sendDeviceMessage } from "@whatsapp-flow/whatsapp";
 import { eq } from "drizzle-orm";
 import { logger } from "../observability/logger";
 import {
 	continueFlowExecution,
 	executeFlow,
+	recordFlowExecutionEvent,
+	resolveFlowTemplate,
 	resumeWaitingSessionById,
 } from "./flow-executor";
 import type {
 	FlowContinueJobPayload,
 	FlowExecuteJobPayload,
 	FlowResumeJobPayload,
+	FlowWaitWarningJobPayload,
 } from "./job-types";
 
 export async function processFlowExecuteJob(input: FlowExecuteJobPayload) {
@@ -80,4 +84,45 @@ export async function processFlowContinueJob(input: FlowContinueJobPayload) {
 			error: result.error,
 		});
 	}
+}
+
+export async function processFlowWaitWarningJob(
+	input: FlowWaitWarningJobPayload,
+) {
+	const [session] = await db
+		.select()
+		.from(flowSession)
+		.where(eq(flowSession.id, input.sessionId))
+		.limit(1);
+
+	if (!session) return;
+	if (session.status !== "waiting") return;
+	if (session.waitingNodeId !== input.waitingNodeId) return;
+	if (session.expiresAt && session.expiresAt <= new Date()) return;
+
+	const text = resolveFlowTemplate(input.message, {
+		contactNumber: input.contactNumber,
+		incomingText: input.incomingText,
+		variables: input.variables,
+	});
+	await sendDeviceMessage(
+		input.deviceId,
+		input.replyJid ?? `${input.contactNumber}@s.whatsapp.net`,
+		{ type: "text", text },
+	);
+	await recordFlowExecutionEvent({
+		executionLogId: input.executionLogId,
+		flowId: input.flowId,
+		deviceId: input.deviceId,
+		contactNumber: input.contactNumber,
+		sessionId: input.sessionId,
+		type: "session.warning_sent",
+		nodeId: input.waitingNodeId,
+		message: `Wait warning sent after ${input.afterMinutes}m`,
+		payload: {
+			warningId: input.warningId,
+			afterMinutes: input.afterMinutes,
+			messagePreview: text.slice(0, 120),
+		},
+	});
 }

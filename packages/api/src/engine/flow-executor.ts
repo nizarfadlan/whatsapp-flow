@@ -25,6 +25,7 @@ import { enqueueJob } from "./job-queue";
 import {
 	delayFlowContinuationJobIdempotencyKey,
 	type FlowContinueJobPayload,
+	waitWarningJobIdempotencyKey,
 } from "./job-types";
 
 type FlowNode = {
@@ -47,11 +48,15 @@ type NodeResult = {
 	error?: string;
 };
 
-type ExecutionContext = {
-	flowId: string;
+type TemplateContext = {
 	contactNumber: string;
-	replyJid: string;
 	incomingText: string;
+	variables: Record<string, unknown>;
+};
+
+type ExecutionContext = TemplateContext & {
+	flowId: string;
+	replyJid: string;
 	deviceId: string;
 	logId: string;
 	variables: Record<string, string>;
@@ -283,12 +288,37 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 				return true;
 			}
 			case "send-location": {
-				await sendDeviceMessage(ctx.deviceId, jid, {
+				const latitude = Number(data.latitude);
+				const longitude = Number(data.longitude);
+				if (
+					!Number.isFinite(latitude) ||
+					latitude < -90 ||
+					latitude > 90 ||
+					!Number.isFinite(longitude) ||
+					longitude < -180 ||
+					longitude > 180
+				) {
+					ctx.nodeResults.push({
+						nodeId: node.id,
+						status: "error",
+						error: "Invalid location coordinates",
+					});
+					return false;
+				}
+				const name = data.address ? String(data.address) : undefined;
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "location",
-					latitude: Number(data.latitude ?? 0),
-					longitude: Number(data.longitude ?? 0),
-					name: data.address ? String(data.address) : undefined,
+					latitude,
+					longitude,
+					name,
 				});
+				void recordOutboundMessage(
+					ctx,
+					"location",
+					name ?? `${latitude}, ${longitude}`,
+					{ location: { latitude, longitude, name } },
+					sendResult,
+				);
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
 			}
@@ -606,15 +636,19 @@ function maskUserReply(value: string) {
 	return `${trimmed.slice(0, 2)}••••${trimmed.slice(-2)}`;
 }
 
-function resolveTemplate(text: string, ctx: ExecutionContext) {
+export function resolveFlowTemplate(text: string, ctx: TemplateContext) {
 	return text.replace(/\{\{([\w.]+)\}\}/g, (_, key: string) => {
 		if (key === "contact.number") return ctx.contactNumber;
 		if (key === "message.text") return ctx.incomingText;
-		if (key.startsWith("variables.")) {
-			return ctx.variables[key.slice("variables.".length)] ?? `{{${key}}}`;
-		}
-		return ctx.variables[key] ?? `{{${key}}}`;
+		const value = key.startsWith("variables.")
+			? ctx.variables[key.slice("variables.".length)]
+			: ctx.variables[key];
+		return value == null ? `{{${key}}}` : String(value);
 	});
+}
+
+function resolveTemplate(text: string, ctx: ExecutionContext) {
+	return resolveFlowTemplate(text, ctx);
 }
 
 function normalizeNumber(value: string) {
@@ -1043,6 +1077,107 @@ async function scheduleDelayContinuation(
 	await persistProgress(ctx.logId, ctx.nodeResults, undefined, "waiting");
 }
 
+type WaitForReplyWarning = {
+	id: string;
+	afterMinutes: number;
+	message: string;
+};
+
+function getWaitForReplyWarnings(
+	data: Record<string, unknown>,
+	timeoutMinutes: number,
+): WaitForReplyWarning[] {
+	if (!Array.isArray(data.replyWarnings)) return [];
+	return data.replyWarnings
+		.flatMap((warning) => {
+			if (!warning || typeof warning !== "object") return [];
+			const warningData = warning as Record<string, unknown>;
+			const afterMinutes = Number(warningData.afterMinutes);
+			const message = String(warningData.message ?? "").trim();
+			if (
+				!Number.isInteger(afterMinutes) ||
+				afterMinutes < 1 ||
+				afterMinutes >= timeoutMinutes ||
+				!message
+			) {
+				return [];
+			}
+			return [
+				{
+					id: String(warningData.id ?? crypto.randomUUID()),
+					afterMinutes,
+					message,
+				},
+			];
+		})
+		.sort((a, b) => a.afterMinutes - b.afterMinutes);
+}
+
+async function scheduleWaitReplyWarnings(
+	session: typeof flowSession.$inferSelect,
+	node: FlowNode,
+	ctx: ExecutionContext,
+	expiresAt: Date,
+	timeoutMinutes: number,
+) {
+	const warnings = getWaitForReplyWarnings(node.data, timeoutMinutes);
+	if (warnings.length === 0) return;
+
+	const scheduledWarnings: {
+		id: string;
+		afterMinutes: number;
+		runAt: string;
+	}[] = [];
+	for (const warning of warnings) {
+		const runAt = new Date(Date.now() + warning.afterMinutes * 60_000);
+		if (runAt >= expiresAt) continue;
+		await enqueueJob({
+			kind: "flow.wait_warning",
+			payload: {
+				sessionId: session.id,
+				executionLogId: ctx.logId,
+				flowId: ctx.flowId,
+				deviceId: ctx.deviceId,
+				contactNumber: ctx.contactNumber,
+				replyJid: ctx.replyJid,
+				waitingNodeId: node.id,
+				warningId: warning.id,
+				afterMinutes: warning.afterMinutes,
+				message: warning.message,
+				incomingText: ctx.incomingText,
+				variables: ctx.variables,
+				expiresAt: expiresAt.toISOString(),
+			},
+			runAt,
+			maxAttempts: 3,
+			idempotencyKey: waitWarningJobIdempotencyKey({
+				sessionId: session.id,
+				waitingNodeId: node.id,
+				warningId: warning.id,
+				expiresAt: expiresAt.toISOString(),
+			}),
+		});
+		scheduledWarnings.push({
+			id: warning.id,
+			afterMinutes: warning.afterMinutes,
+			runAt: runAt.toISOString(),
+		});
+	}
+
+	if (scheduledWarnings.length === 0) return;
+	await recordFlowExecutionEvent({
+		executionLogId: ctx.logId,
+		flowId: ctx.flowId,
+		deviceId: ctx.deviceId,
+		contactNumber: ctx.contactNumber,
+		sessionId: session.id,
+		type: "session.warning_scheduled",
+		nodeId: node.id,
+		message: `${scheduledWarnings.length} wait warning(s) scheduled`,
+		payload: { warnings: scheduledWarnings },
+	});
+}
+
 async function createWaitingSession(
 	node: FlowNode,
 	adjacency: Map<string, FlowEdge[]>,
@@ -1098,6 +1233,13 @@ async function createWaitingSession(
 				message: `Waiting for ${variableName}`,
 				payload: { variableName, expiresAt: expiresAt.toISOString() },
 			});
+			await scheduleWaitReplyWarnings(
+				updated,
+				node,
+				ctx,
+				expiresAt,
+				timeoutMinutes,
+			);
 			emitFlowSessionUpdated(updated);
 			await persistProgress(ctx.logId, ctx.nodeResults, undefined, "waiting");
 			return updated;
@@ -1132,6 +1274,13 @@ async function createWaitingSession(
 				message: `Waiting for ${variableName}`,
 				payload: { variableName, expiresAt: expiresAt.toISOString() },
 			});
+			await scheduleWaitReplyWarnings(
+				created,
+				node,
+				ctx,
+				expiresAt,
+				timeoutMinutes,
+			);
 			emitFlowSessionUpdated(created);
 		}
 		await persistProgress(ctx.logId, ctx.nodeResults, undefined, "waiting");
