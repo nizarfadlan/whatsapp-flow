@@ -125,6 +125,28 @@ export interface LogicNodeData {
 	replyWarnings?: WaitForReplyWarning[];
 }
 
+export type WebhookAuthConfig =
+	| { type: "none" }
+	| { type: "bearer"; secretValue?: string; hasSecret?: boolean }
+	| {
+			type: "basic";
+			username?: string;
+			secretValue?: string;
+			hasSecret?: boolean;
+	  }
+	| {
+			type: "api_key";
+			apiKeyName?: string;
+			secretValue?: string;
+			hasSecret?: boolean;
+	  };
+
+export type WebhookHeader = {
+	id: string;
+	key: string;
+	value: string;
+};
+
 export interface ActionNodeData {
 	id: string;
 	nodeType: "forward" | "webhook-call" | "end";
@@ -133,7 +155,8 @@ export interface ActionNodeData {
 	targetNumber?: string;
 	webhookMethod?: "GET" | "POST" | "PUT";
 	webhookUrl?: string;
-	webhookHeaders?: Record<string, string>;
+	webhookAuth?: WebhookAuthConfig;
+	webhookHeaders?: WebhookHeader[] | Record<string, string>;
 }
 
 export type FlowNodeData =
@@ -900,7 +923,8 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 					...base.data,
 					webhookMethod: "POST" as const,
 					webhookUrl: "",
-					webhookHeaders: {},
+					webhookAuth: { type: "none" as const },
+					webhookHeaders: [],
 				},
 			};
 		default:

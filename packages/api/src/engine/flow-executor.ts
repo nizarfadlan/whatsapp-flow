@@ -21,6 +21,10 @@ import type {
 import { connectionManager, sendDeviceMessage } from "@whatsapp-flow/whatsapp";
 import { and, eq, inArray } from "drizzle-orm";
 import { incrementCounter } from "../observability/metrics";
+import {
+	getFlowNodeSecret,
+	WEBHOOK_AUTH_SECRET_KEY,
+} from "./flow-node-secrets";
 import { enqueueJob } from "./job-queue";
 import {
 	delayFlowContinuationJobIdempotencyKey,
@@ -453,6 +457,18 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 					throw new Error("Webhook method is not allowed");
 				}
 				const url = resolveTemplate(String(data.webhookUrl ?? ""), ctx);
+				if (getWebhookAuth(data.webhookAuth).type !== "none") {
+					let parsedUrl: URL;
+					try {
+						parsedUrl = new URL(url);
+					} catch {
+						throw new Error("Webhook URL is invalid");
+					}
+					if (parsedUrl.protocol !== "https:") {
+						throw new Error("Authenticated webhook URLs must use HTTPS");
+					}
+				}
+				const headers = await buildWebhookHeaders(ctx, node, method);
 				const response = await fetchWebhookUrl(
 					url,
 					method,
@@ -460,6 +476,7 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 						contact: ctx.contactNumber,
 						variables: ctx.variables,
 					}),
+					headers,
 				);
 				ctx.nodeResults.push({
 					nodeId: node.id,
@@ -649,6 +666,151 @@ export function resolveFlowTemplate(text: string, ctx: TemplateContext) {
 
 function resolveTemplate(text: string, ctx: ExecutionContext) {
 	return resolveFlowTemplate(text, ctx);
+}
+
+const WEBHOOK_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const BLOCKED_WEBHOOK_HEADERS = new Set([
+	"authorization",
+	"cookie",
+	"set-cookie",
+	"host",
+	"content-length",
+	"connection",
+	"transfer-encoding",
+	"content-type",
+]);
+
+type WebhookHeaderConfig = { id: string; key: string; value: string };
+type WebhookAuthConfig =
+	| { type: "none" }
+	| { type: "bearer"; hasSecret?: boolean }
+	| { type: "basic"; username?: string; hasSecret?: boolean }
+	| { type: "api_key"; apiKeyName?: string; hasSecret?: boolean };
+
+function getWebhookAuth(value: unknown): WebhookAuthConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return { type: "none" };
+	}
+	const data = value as Record<string, unknown>;
+	if (data.type === "bearer")
+		return { type: "bearer", hasSecret: data.hasSecret === true };
+	if (data.type === "basic") {
+		return {
+			type: "basic",
+			username: typeof data.username === "string" ? data.username : "",
+			hasSecret: data.hasSecret === true,
+		};
+	}
+	if (data.type === "api_key") {
+		return {
+			type: "api_key",
+			apiKeyName: typeof data.apiKeyName === "string" ? data.apiKeyName : "",
+			hasSecret: data.hasSecret === true,
+		};
+	}
+	return { type: "none" };
+}
+
+function normalizeWebhookHeaders(value: unknown): WebhookHeaderConfig[] {
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => {
+				const data =
+					item && typeof item === "object"
+						? (item as Record<string, unknown>)
+						: {};
+				return {
+					id: String(data.id ?? crypto.randomUUID()),
+					key: String(data.key ?? data.name ?? "").trim(),
+					value: String(data.value ?? ""),
+				};
+			})
+			.filter((header) => header.key.length > 0 || header.value.length > 0);
+	}
+	if (value && typeof value === "object") {
+		return Object.entries(value as Record<string, unknown>)
+			.map(([key, item]) => ({
+				id: crypto.randomUUID(),
+				key: key.trim(),
+				value: String(item ?? ""),
+			}))
+			.filter((header) => header.key.length > 0 || header.value.length > 0);
+	}
+	return [];
+}
+
+function validateWebhookHeaderName(name: string) {
+	return (
+		name.length > 0 &&
+		name.length <= 128 &&
+		WEBHOOK_HEADER_NAME_PATTERN.test(name)
+	);
+}
+
+async function buildWebhookHeaders(
+	ctx: ExecutionContext,
+	node: FlowNode,
+	method: string,
+) {
+	const headers: Record<string, string> = {};
+	if (method !== "GET") headers["content-type"] = "application/json";
+
+	const seenHeaders = new Set<string>();
+	for (const header of normalizeWebhookHeaders(node.data.webhookHeaders)) {
+		const key = header.key.trim();
+		const lowerKey = key.toLowerCase();
+		const value = resolveTemplate(header.value, ctx);
+		if (
+			!validateWebhookHeaderName(key) ||
+			BLOCKED_WEBHOOK_HEADERS.has(lowerKey)
+		) {
+			throw new Error(`Webhook header ${key || "(empty)"} is not allowed`);
+		}
+		if (seenHeaders.has(lowerKey)) {
+			throw new Error(`Webhook header ${key} is duplicated`);
+		}
+		if (value.length > 4096 || /[\r\n]/.test(value)) {
+			throw new Error(`Webhook header ${key} has an invalid value`);
+		}
+		headers[key] = value;
+		seenHeaders.add(lowerKey);
+	}
+
+	const auth = getWebhookAuth(node.data.webhookAuth);
+	if (auth.type === "none") return headers;
+	const secret = await getFlowNodeSecret(db, {
+		flowId: ctx.flowId,
+		nodeId: node.id,
+		key: WEBHOOK_AUTH_SECRET_KEY,
+	});
+	if (!secret) throw new Error("Webhook auth secret is not configured");
+
+	if (auth.type === "bearer") {
+		headers.Authorization = `Bearer ${secret}`;
+		return headers;
+	}
+	if (auth.type === "basic") {
+		const username = auth.username?.trim() ?? "";
+		if (!username)
+			throw new Error("Webhook basic auth username is not configured");
+		headers.Authorization = `Basic ${Buffer.from(`${username}:${secret}`).toString("base64")}`;
+		return headers;
+	}
+	if (auth.type === "api_key") {
+		const apiKeyName = auth.apiKeyName?.trim() ?? "";
+		const lowerKey = apiKeyName.toLowerCase();
+		if (
+			!validateWebhookHeaderName(apiKeyName) ||
+			BLOCKED_WEBHOOK_HEADERS.has(lowerKey)
+		) {
+			throw new Error("Webhook API key header name is invalid");
+		}
+		if (seenHeaders.has(lowerKey)) {
+			throw new Error("Webhook API key header duplicates a custom header");
+		}
+		headers[apiKeyName] = secret;
+	}
+	return headers;
 }
 
 function normalizeNumber(value: string) {
@@ -855,17 +1017,27 @@ async function assertSafeWebhookUrl(value: string) {
 	}
 }
 
-async function fetchWebhookUrl(value: string, method: string, body: string) {
+async function fetchWebhookUrl(
+	value: string,
+	method: string,
+	body: string,
+	headers: Record<string, string>,
+) {
 	let currentUrl = value;
 	let currentMethod = method;
+	const initialOrigin = new URL(value).origin;
 	for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
 		await assertSafeWebhookUrl(currentUrl);
+		const sameOrigin = new URL(currentUrl).origin === initialOrigin;
+		const requestHeaders = sameOrigin
+			? headers
+			: currentMethod === "GET"
+				? undefined
+				: { "content-type": "application/json" };
 		const response = await fetch(currentUrl, {
 			method: currentMethod,
 			headers:
-				currentMethod === "GET"
-					? undefined
-					: { "content-type": "application/json" },
+				currentMethod === "GET" && !sameOrigin ? undefined : requestHeaders,
 			body: currentMethod === "GET" ? undefined : body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(10_000),

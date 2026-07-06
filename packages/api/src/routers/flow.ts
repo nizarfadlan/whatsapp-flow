@@ -4,6 +4,13 @@ import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { validateCronExpression } from "../engine/cron";
+import {
+	deleteFlowNodeSecret,
+	deleteFlowNodeSecretsForMissingNodes,
+	hasFlowNodeSecret,
+	upsertFlowNodeSecret,
+	WEBHOOK_AUTH_SECRET_KEY,
+} from "../engine/flow-node-secrets";
 import { protectedProcedure, router } from "../index";
 
 const jsonSchema = z.unknown();
@@ -117,6 +124,357 @@ function validateReplyWarnings(
 	return null;
 }
 
+const WEBHOOK_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const BLOCKED_WEBHOOK_HEADERS = new Set([
+	"authorization",
+	"cookie",
+	"set-cookie",
+	"host",
+	"content-length",
+	"connection",
+	"transfer-encoding",
+	"content-type",
+]);
+
+type WebhookHeaderConfig = { id: string; key: string; value: string };
+
+type WebhookAuthConfig =
+	| { type: "none" }
+	| { type: "bearer"; secretValue?: string; hasSecret?: boolean }
+	| {
+			type: "basic";
+			username?: string;
+			secretValue?: string;
+			hasSecret?: boolean;
+	  }
+	| {
+			type: "api_key";
+			apiKeyName?: string;
+			secretValue?: string;
+			hasSecret?: boolean;
+	  };
+
+function getWebhookAuth(value: unknown): WebhookAuthConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return { type: "none" };
+	}
+	const data = value as Record<string, unknown>;
+	const type = data.type;
+	if (type === "bearer") {
+		return {
+			type,
+			secretValue: typeof data.secretValue === "string" ? data.secretValue : "",
+			hasSecret: data.hasSecret === true,
+		};
+	}
+	if (type === "basic") {
+		return {
+			type,
+			username: typeof data.username === "string" ? data.username : "",
+			secretValue: typeof data.secretValue === "string" ? data.secretValue : "",
+			hasSecret: data.hasSecret === true,
+		};
+	}
+	if (type === "api_key") {
+		return {
+			type,
+			apiKeyName: typeof data.apiKeyName === "string" ? data.apiKeyName : "",
+			secretValue: typeof data.secretValue === "string" ? data.secretValue : "",
+			hasSecret: data.hasSecret === true,
+		};
+	}
+	return { type: "none" };
+}
+
+function normalizeWebhookHeaders(value: unknown): WebhookHeaderConfig[] {
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => {
+				const data =
+					item && typeof item === "object"
+						? (item as Record<string, unknown>)
+						: {};
+				const key = String(data.key ?? data.name ?? "").trim();
+				const value = String(data.value ?? "");
+				return {
+					id: String(data.id ?? crypto.randomUUID()),
+					key,
+					value,
+				};
+			})
+			.filter((header) => header.key.length > 0 || header.value.length > 0);
+	}
+	if (value && typeof value === "object") {
+		return Object.entries(value as Record<string, unknown>)
+			.map(([key, item]) => ({
+				id: crypto.randomUUID(),
+				key: key.trim(),
+				value: String(item ?? ""),
+			}))
+			.filter((header) => header.key.length > 0 || header.value.length > 0);
+	}
+	return [];
+}
+
+function validateWebhookHeaderName(name: string) {
+	return (
+		name.length > 0 &&
+		name.length <= 128 &&
+		WEBHOOK_HEADER_NAME_PATTERN.test(name)
+	);
+}
+
+function validateWebhookCallConfig(data: Record<string, unknown>) {
+	if (!nonEmpty(data.webhookUrl)) return "Webhook Call node needs a URL";
+	const method = String(data.webhookMethod ?? "POST").toUpperCase();
+	if (!["GET", "POST", "PUT"].includes(method)) {
+		return "Webhook Call method must be GET, POST, or PUT";
+	}
+
+	const headers = normalizeWebhookHeaders(data.webhookHeaders);
+	if (headers.length > 20) return "Webhook Call supports up to 20 headers";
+	const seenHeaders = new Set<string>();
+	for (const header of headers) {
+		const key = header.key.trim();
+		const lowerKey = key.toLowerCase();
+		if (!validateWebhookHeaderName(key)) {
+			return "Webhook Call header names must be valid HTTP header names";
+		}
+		if (BLOCKED_WEBHOOK_HEADERS.has(lowerKey)) {
+			return `Webhook Call header ${key} must be configured through built-in settings`;
+		}
+		if (seenHeaders.has(lowerKey)) {
+			return `Webhook Call header ${key} is duplicated`;
+		}
+		if (header.value.length > 4096 || /[\r\n]/.test(header.value)) {
+			return `Webhook Call header ${key} has an invalid value`;
+		}
+		seenHeaders.add(lowerKey);
+	}
+
+	const auth = getWebhookAuth(data.webhookAuth);
+	if (
+		auth.type !== "none" &&
+		String(data.webhookUrl ?? "")
+			.trim()
+			.toLowerCase()
+			.startsWith("http://")
+	) {
+		return "Authenticated Webhook Call URLs must use HTTPS";
+	}
+	if (auth.type === "bearer" && !auth.hasSecret) {
+		return "Webhook Call bearer token is required";
+	}
+	if (auth.type === "basic") {
+		if (!auth.username?.trim())
+			return "Webhook Call basic auth username is required";
+		if (!auth.hasSecret) return "Webhook Call basic auth password is required";
+	}
+	if (auth.type === "api_key") {
+		const apiKeyName = auth.apiKeyName?.trim() ?? "";
+		if (!validateWebhookHeaderName(apiKeyName)) {
+			return "Webhook Call API key header name is invalid";
+		}
+		if (BLOCKED_WEBHOOK_HEADERS.has(apiKeyName.toLowerCase())) {
+			return "Webhook Call API key header name is reserved";
+		}
+		if (seenHeaders.has(apiKeyName.toLowerCase())) {
+			return "Webhook Call API key header duplicates a custom header";
+		}
+		if (!auth.hasSecret) return "Webhook Call API key value is required";
+	}
+
+	return null;
+}
+
+function sanitizeWebhookAuthForClient(value: unknown): WebhookAuthConfig {
+	const auth = getWebhookAuth(value);
+	if (auth.type === "bearer") {
+		return { type: "bearer", hasSecret: auth.hasSecret };
+	}
+	if (auth.type === "basic") {
+		return {
+			type: "basic",
+			username: auth.username ?? "",
+			hasSecret: auth.hasSecret,
+		};
+	}
+	if (auth.type === "api_key") {
+		return {
+			type: "api_key",
+			apiKeyName: auth.apiKeyName ?? "",
+			hasSecret: auth.hasSecret,
+		};
+	}
+	return { type: "none" };
+}
+
+function stripWebhookAuthSecretValue(node: FlowNode) {
+	if (!node.data?.webhookAuth) return node;
+	return {
+		...node,
+		data: {
+			...node.data,
+			webhookAuth: sanitizeWebhookAuthForClient(node.data.webhookAuth),
+		},
+	};
+}
+
+function isWebhookCallNode(node: FlowNode) {
+	return node.type === "webhook-call" || node.data?.nodeType === "webhook-call";
+}
+
+function sanitizeFlowNodesForClient(value: unknown) {
+	if (!Array.isArray(value)) return value;
+	return value.map((node) => {
+		if (!node || typeof node !== "object") return node;
+		const flowNode = node as FlowNode;
+		if (!isWebhookCallNode(flowNode))
+			return stripWebhookAuthSecretValue(flowNode);
+		return {
+			...flowNode,
+			data: {
+				...flowNode.data,
+				nodeType: "webhook-call",
+				webhookAuth: sanitizeWebhookAuthForClient(flowNode.data?.webhookAuth),
+				webhookHeaders: normalizeWebhookHeaders(flowNode.data?.webhookHeaders),
+			},
+		};
+	});
+}
+
+async function sanitizeWebhookCallNodeForStorage(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	flowId: string,
+	node: FlowNode,
+	previousNode?: FlowNode,
+) {
+	const data = node.data ?? {};
+	const auth = getWebhookAuth(data.webhookAuth);
+	const previousAuth = getWebhookAuth(previousNode?.data?.webhookAuth);
+	const sameAuthType = auth.type === previousAuth.type;
+	const secretValue = "secretValue" in auth ? (auth.secretValue ?? "") : "";
+	let hasSecret = false;
+
+	if (auth.type === "none") {
+		await deleteFlowNodeSecret(db, {
+			flowId,
+			nodeId: node.id,
+			key: WEBHOOK_AUTH_SECRET_KEY,
+		});
+	} else if (secretValue) {
+		await upsertFlowNodeSecret(db, {
+			flowId,
+			nodeId: node.id,
+			key: WEBHOOK_AUTH_SECRET_KEY,
+			value: secretValue,
+		});
+		hasSecret = true;
+	} else if (
+		sameAuthType &&
+		previousAuth.type !== "none" &&
+		previousAuth.hasSecret
+	) {
+		hasSecret = await hasFlowNodeSecret(db, {
+			flowId,
+			nodeId: node.id,
+			key: WEBHOOK_AUTH_SECRET_KEY,
+		});
+	} else {
+		await deleteFlowNodeSecret(db, {
+			flowId,
+			nodeId: node.id,
+			key: WEBHOOK_AUTH_SECRET_KEY,
+		});
+	}
+
+	const webhookAuth = (() => {
+		if (auth.type === "bearer") return { type: "bearer" as const, hasSecret };
+		if (auth.type === "basic") {
+			return {
+				type: "basic" as const,
+				username: auth.username?.trim() ?? "",
+				hasSecret,
+			};
+		}
+		if (auth.type === "api_key") {
+			return {
+				type: "api_key" as const,
+				apiKeyName: auth.apiKeyName?.trim() ?? "",
+				hasSecret,
+			};
+		}
+		return { type: "none" as const };
+	})();
+
+	return {
+		...node,
+		data: {
+			...data,
+			nodeType: "webhook-call",
+			webhookMethod: String(data.webhookMethod ?? "POST").toUpperCase(),
+			webhookAuth,
+			webhookHeaders: normalizeWebhookHeaders(data.webhookHeaders),
+		},
+	};
+}
+
+async function sanitizeFlowNodesForStorage(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	flowId: string,
+	nodes: FlowNode[],
+	previousNodes: FlowNode[],
+) {
+	const previousById = new Map(previousNodes.map((node) => [node.id, node]));
+	const sanitized: FlowNode[] = [];
+	for (const node of nodes) {
+		if (isWebhookCallNode(node)) {
+			sanitized.push(
+				await sanitizeWebhookCallNodeForStorage(
+					db,
+					flowId,
+					node,
+					previousById.get(node.id),
+				),
+			);
+		} else {
+			sanitized.push(stripWebhookAuthSecretValue(node));
+		}
+	}
+	await deleteFlowNodeSecretsForMissingNodes(
+		db,
+		flowId,
+		new Set(nodes.map((node) => node.id)),
+	);
+	return sanitized;
+}
+
+function sanitizeFlowForClient<T extends { nodes: unknown }>(row: T) {
+	return { ...row, nodes: sanitizeFlowNodesForClient(row.nodes) };
+}
+
+function stripWebhookSecretsForCopy(value: unknown) {
+	if (!Array.isArray(value)) return value;
+	return value.map((node) => {
+		if (!node || typeof node !== "object") return node;
+		const flowNode = node as FlowNode;
+		if (!isWebhookCallNode(flowNode))
+			return stripWebhookAuthSecretValue(flowNode);
+		const auth = sanitizeWebhookAuthForClient(flowNode.data?.webhookAuth);
+		const nextAuth =
+			auth.type === "none" ? auth : { ...auth, hasSecret: false };
+		return {
+			...flowNode,
+			data: {
+				...flowNode.data,
+				nodeType: "webhook-call",
+				webhookAuth: nextAuth,
+				webhookHeaders: normalizeWebhookHeaders(flowNode.data?.webhookHeaders),
+			},
+		};
+	});
+}
+
 function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	if (nodes.length === 0) return "Flow has no nodes";
 
@@ -213,9 +571,11 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 				if (warningError) return warningError;
 				break;
 			}
-			case "webhook-call":
-				if (!nonEmpty(data.webhookUrl)) return "Webhook Call node needs a URL";
+			case "webhook-call": {
+				const webhookError = validateWebhookCallConfig(data);
+				if (webhookError) return webhookError;
 				break;
+			}
 			case "forward":
 				if (!nonEmpty(data.targetNumber)) {
 					return "Forward node needs a target number";
@@ -288,7 +648,12 @@ export const flowRouter = router({
 	getById: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			return requireFlowOwnership(ctx.db, input.id, ctx.session.user.id);
+			const found = await requireFlowOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			return sanitizeFlowForClient(found);
 		}),
 
 	create: protectedProcedure
@@ -355,27 +720,53 @@ export const flowRouter = router({
 					ctx.session.user.id,
 				);
 			}
-			const { id, ...updates } = input;
-			delete updates.triggerType;
-			delete updates.triggerConfig;
+			const persistUpdates = async (db: typeof ctx.db) => {
+				const { id, ...updates } = input;
+				delete updates.triggerType;
+				delete updates.triggerConfig;
 
-			if (Array.isArray(input.nodes)) {
-				const triggerPayload = getTriggerPayload(input.nodes as FlowNode[]);
-				if (triggerPayload) {
-					updates.triggerType = triggerPayload.triggerType;
-					updates.triggerConfig = triggerPayload.triggerConfig;
+				if (Array.isArray(input.nodes)) {
+					const previousNodes = Array.isArray(found.nodes)
+						? (found.nodes as FlowNode[])
+						: [];
+					const sanitizedNodes = await sanitizeFlowNodesForStorage(
+						db,
+						id,
+						input.nodes as FlowNode[],
+						previousNodes,
+					);
+					updates.nodes = sanitizedNodes;
+
+					const triggerPayload = getTriggerPayload(sanitizedNodes);
+					if (triggerPayload) {
+						updates.triggerType = triggerPayload.triggerType;
+						updates.triggerConfig = triggerPayload.triggerConfig;
+					}
 				}
-			}
 
-			if (Object.keys(updates).length === 0) return found;
+				if (Object.keys(updates).length === 0) {
+					return sanitizeFlowForClient(found);
+				}
 
-			const rows = await ctx.db
-				.update(flow)
-				.set(updates)
-				.where(eq(flow.id, id))
-				.returning();
+				const rows = await db
+					.update(flow)
+					.set(updates)
+					.where(eq(flow.id, id))
+					.returning();
 
-			return rows[0];
+				const updated = rows[0] ?? found;
+				return sanitizeFlowForClient(updated);
+			};
+
+			const dbWithTransaction = ctx.db as typeof ctx.db & {
+				transaction?: <T>(
+					callback: (tx: typeof ctx.db) => Promise<T>,
+				) => Promise<T>;
+			};
+
+			return dbWithTransaction.transaction
+				? dbWithTransaction.transaction(persistUpdates)
+				: persistUpdates(ctx.db);
 		}),
 
 	delete: protectedProcedure
@@ -557,7 +948,7 @@ export const flowRouter = router({
 					userId: ctx.session.user.id,
 					name: `${original.name} (Copy)`,
 					description: original.description,
-					nodes: original.nodes,
+					nodes: stripWebhookSecretsForCopy(original.nodes),
 					edges: original.edges,
 					triggerType: original.triggerType,
 					triggerConfig: original.triggerConfig,

@@ -56,6 +56,8 @@ import type {
 	MessageNodeData,
 	TriggerNodeData,
 	WaitForReplyWarning,
+	WebhookAuthConfig,
+	WebhookHeader,
 } from "./flow-nodes";
 import { MediaUpload } from "./media-upload";
 
@@ -1535,6 +1537,30 @@ function ForwardConfig({
 	);
 }
 
+function createWebhookHeaderId() {
+	return globalThis.crypto?.randomUUID?.() ?? `header-${Date.now()}`;
+}
+
+function getWebhookHeaders(
+	value: ActionNodeData["webhookHeaders"],
+): WebhookHeader[] {
+	if (Array.isArray(value)) return value;
+	if (value && typeof value === "object") {
+		return Object.entries(value).map(([key, item]) => ({
+			id: createWebhookHeaderId(),
+			key,
+			value: String(item ?? ""),
+		}));
+	}
+	return [];
+}
+
+function getWebhookAuth(
+	value: ActionNodeData["webhookAuth"],
+): WebhookAuthConfig {
+	return value ?? { type: "none" };
+}
+
 function WebhookCallConfig({
 	data,
 	onUpdate,
@@ -1542,6 +1568,17 @@ function WebhookCallConfig({
 	data: ActionNodeData;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
+	const auth = getWebhookAuth(data.webhookAuth);
+	const headers = getWebhookHeaders(data.webhookHeaders);
+	const updateHeader = (index: number, patch: Partial<WebhookHeader>) => {
+		const nextHeaders = [...headers];
+		nextHeaders[index] = { ...nextHeaders[index], ...patch };
+		onUpdate({ webhookHeaders: nextHeaders } as Partial<ActionNodeData>);
+	};
+	const updateAuth = (nextAuth: WebhookAuthConfig) => {
+		onUpdate({ webhookAuth: nextAuth } as Partial<ActionNodeData>);
+	};
+
 	return (
 		<>
 			<Field label="Method">
@@ -1570,6 +1607,146 @@ function WebhookCallConfig({
 					value={data.webhookUrl ?? ""}
 					onChange={(e) => onUpdate({ webhookUrl: e.target.value })}
 				/>
+			</Field>
+			<Field label="Authentication">
+				<div className="flex flex-col gap-2">
+					<Select
+						value={auth.type}
+						onValueChange={(value) => {
+							if (value === "bearer") updateAuth({ type: "bearer" });
+							else if (value === "basic")
+								updateAuth({ type: "basic", username: "" });
+							else if (value === "api_key") {
+								updateAuth({ type: "api_key", apiKeyName: "X-API-Key" });
+							} else updateAuth({ type: "none" });
+						}}
+					>
+						<SelectTrigger className="h-7 w-full text-xs" size="sm">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="none">None</SelectItem>
+							<SelectItem value="bearer">Bearer token</SelectItem>
+							<SelectItem value="basic">Basic auth</SelectItem>
+							<SelectItem value="api_key">API key</SelectItem>
+						</SelectContent>
+					</Select>
+					{auth.type === "bearer" && (
+						<Input
+							className="h-7 text-xs"
+							placeholder={
+								auth.hasSecret ? "Stored token unchanged" : "Bearer token"
+							}
+							type="password"
+							value={auth.secretValue ?? ""}
+							onChange={(e) =>
+								updateAuth({ ...auth, secretValue: e.target.value })
+							}
+						/>
+					)}
+					{auth.type === "basic" && (
+						<div className="grid grid-cols-2 gap-2">
+							<Input
+								className="h-7 text-xs"
+								placeholder="Username"
+								value={auth.username ?? ""}
+								onChange={(e) =>
+									updateAuth({ ...auth, username: e.target.value })
+								}
+							/>
+							<Input
+								className="h-7 text-xs"
+								placeholder={
+									auth.hasSecret ? "Stored password unchanged" : "Password"
+								}
+								type="password"
+								value={auth.secretValue ?? ""}
+								onChange={(e) =>
+									updateAuth({ ...auth, secretValue: e.target.value })
+								}
+							/>
+						</div>
+					)}
+					{auth.type === "api_key" && (
+						<div className="grid grid-cols-2 gap-2">
+							<Input
+								className="h-7 text-xs"
+								placeholder="X-API-Key"
+								value={auth.apiKeyName ?? ""}
+								onChange={(e) =>
+									updateAuth({ ...auth, apiKeyName: e.target.value })
+								}
+							/>
+							<Input
+								className="h-7 text-xs"
+								placeholder={
+									auth.hasSecret ? "Stored key unchanged" : "API key value"
+								}
+								type="password"
+								value={auth.secretValue ?? ""}
+								onChange={(e) =>
+									updateAuth({ ...auth, secretValue: e.target.value })
+								}
+							/>
+						</div>
+					)}
+					<p className="text-[10px] text-muted-foreground">
+						Auth secrets are encrypted on save. Use custom headers only for
+						non-secret values.
+					</p>
+				</div>
+			</Field>
+			<Field label="Custom headers">
+				<div className="flex flex-col gap-2">
+					{headers.map((header, index) => (
+						<div key={header.id} className="flex items-center gap-2">
+							<Input
+								className="h-7 text-xs"
+								placeholder="Header"
+								value={header.key}
+								onChange={(e) => updateHeader(index, { key: e.target.value })}
+							/>
+							<Input
+								className="h-7 text-xs"
+								placeholder="Value"
+								value={header.value}
+								onChange={(e) => updateHeader(index, { value: e.target.value })}
+							/>
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								className="size-7 shrink-0"
+								onClick={() =>
+									onUpdate({
+										webhookHeaders: headers.filter(
+											(item) => item.id !== header.id,
+										),
+									} as Partial<ActionNodeData>)
+								}
+							>
+								<Trash2 className="size-3.5" />
+							</Button>
+						</div>
+					))}
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 justify-start text-xs"
+						onClick={() =>
+							onUpdate({
+								webhookHeaders: [
+									...headers,
+									{ id: createWebhookHeaderId(), key: "", value: "" },
+								],
+							} as Partial<ActionNodeData>)
+						}
+					>
+						<Plus className="size-3.5" />
+						Add header
+					</Button>
+				</div>
 			</Field>
 		</>
 	);

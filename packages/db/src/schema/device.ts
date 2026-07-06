@@ -127,6 +127,33 @@ export const flow = pgTable(
 	],
 );
 
+export const flowNodeSecret = pgTable(
+	"flow_node_secret",
+	{
+		id: text("id").primaryKey(),
+		flowId: text("flow_id")
+			.notNull()
+			.references(() => flow.id, { onDelete: "cascade" }),
+		nodeId: text("node_id").notNull(),
+		key: text("key").notNull(),
+		encryptedValue: text("encrypted_value").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => /* @__PURE__ */ new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("flow_node_secret_flow_node_key_unique_idx").on(
+			table.flowId,
+			table.nodeId,
+			table.key,
+		),
+		index("flow_node_secret_flow_idx").on(table.flowId),
+		index("flow_node_secret_flow_node_idx").on(table.flowId, table.nodeId),
+	],
+);
+
 export const flowRelations = relations(flow, ({ one, many }) => ({
 	user: one(user, {
 		fields: [flow.userId],
@@ -138,6 +165,7 @@ export const flowRelations = relations(flow, ({ one, many }) => ({
 	}),
 	logs: many(flowExecutionLog),
 	sessions: many(flowSession),
+	secrets: many(flowNodeSecret),
 }));
 
 export const executionStatusEnum = pgEnum("execution_status", [
