@@ -236,7 +236,10 @@ export class ConnectionManager extends EventEmitter {
 		this.reconnectAttempts.delete(deviceId);
 		const connection = this.connections.get(deviceId);
 		if (connection?.socket) {
-			await connection.socket.end(undefined);
+			const endSocket = connection.socket.end as (
+				error?: Error,
+			) => Promise<void>;
+			await endSocket(new Error("Intentional disconnect"));
 			this.connections.delete(deviceId);
 		}
 
@@ -546,7 +549,7 @@ export class ConnectionManager extends EventEmitter {
 
 		const jid = toNewsletterJid(id);
 		try {
-			const metadata = await connection.socket.newsletterMetadata("jid", jid);
+			const metadata = await connection.socket.newsletterMetadata(jid);
 			this.handleChannelsUpsert(deviceId, [{ ...(metadata ?? {}), id: jid }]);
 		} catch {
 			this.handleChannelsUpsert(deviceId, [{ id: jid }]);

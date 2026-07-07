@@ -6,22 +6,26 @@ import {
 	type AuthenticationState,
 	BufferJSON,
 	initAuthCreds,
-	makeCacheableSignalKeyStore,
 	type SignalDataSet,
 	type SignalDataTypeMap,
+	wrapLegacyStore,
 } from "baileys";
 import { and, eq } from "drizzle-orm";
+
+type BridgeStore = Record<string, Record<string, unknown>>;
 
 type StoredAuthState = {
 	creds?: unknown;
 	keys?: Partial<{
 		[T in keyof SignalDataTypeMap]: Record<string, unknown>;
 	}>;
+	bridge?: BridgeStore;
 };
 
 type KeyStore = NonNullable<StoredAuthState["keys"]>;
 
 const BAILEYS_AUTH_STATE_KEY = "auth_state";
+const RAW_BRIDGE_STORES = new Set(["msg_secret"]);
 const authStateWriteQueues = new Map<string, Promise<void>>();
 
 function enqueueAuthStateWrite(deviceId: string, write: () => Promise<void>) {
@@ -40,6 +44,13 @@ function serialize<T>(value: T): unknown {
 	return JSON.parse(JSON.stringify(value, BufferJSON.replacer));
 }
 
+const BINARY_AUTH_FIELD_NAMES = new Set([
+	"public",
+	"private",
+	"signature",
+	"keyData",
+]);
+
 function isByteArray(value: unknown[]): value is number[] {
 	return value.every(
 		(item): item is number =>
@@ -48,6 +59,16 @@ function isByteArray(value: unknown[]): value is number[] {
 			item >= 0 &&
 			item <= 255,
 	);
+}
+
+function base64StringToBuffer(value: string) {
+	if (!value || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
+
+	const buffer = Buffer.from(value, "base64");
+	const normalizedValue = value.replace(/=+$/, "");
+	const normalizedBuffer = buffer.toString("base64").replace(/=+$/, "");
+
+	return normalizedBuffer === normalizedValue ? buffer : null;
 }
 
 function numericObjectToBuffer(value: Record<string, unknown>) {
@@ -70,12 +91,16 @@ function numericObjectToBuffer(value: Record<string, unknown>) {
 	return isByteArray(bytes) ? Buffer.from(bytes) : null;
 }
 
-function reviveBinaryValues(value: unknown): unknown {
+function reviveBinaryValues(value: unknown, key?: string): unknown {
 	const revived = BufferJSON.reviver("", value);
 	if (revived !== value) return revived;
+	if (typeof value === "string" && key && BINARY_AUTH_FIELD_NAMES.has(key)) {
+		return base64StringToBuffer(value) ?? value;
+	}
 	if (Buffer.isBuffer(value)) return value;
 	if (value instanceof Uint8Array) return Buffer.from(value);
-	if (Array.isArray(value)) return value.map(reviveBinaryValues);
+	if (Array.isArray(value))
+		return value.map((item) => reviveBinaryValues(item));
 	if (!value || typeof value !== "object") return value;
 
 	const record = value as Record<string, unknown>;
@@ -97,9 +122,9 @@ function reviveBinaryValues(value: unknown): unknown {
 	if (buffer) return buffer;
 
 	return Object.fromEntries(
-		Object.entries(record).map(([key, item]) => [
-			key,
-			reviveBinaryValues(item),
+		Object.entries(record).map(([itemKey, item]) => [
+			itemKey,
+			reviveBinaryValues(item, itemKey),
 		]),
 	);
 }
@@ -112,7 +137,25 @@ function isBinaryValue(value: unknown) {
 	return Buffer.isBuffer(value) || value instanceof Uint8Array;
 }
 
-function assertValidAuthCreds(creds: AuthenticationCreds) {
+function normalizeKeyPair(keyPair: { public?: unknown; private?: unknown }) {
+	if (!isBinaryValue(keyPair.public) || !isBinaryValue(keyPair.private)) {
+		throw new Error("Stored Baileys auth state contains invalid key material");
+	}
+
+	const publicKey = Buffer.from(keyPair.public);
+	const privateKey = Buffer.from(keyPair.private);
+	if (privateKey.length !== 32) {
+		throw new Error("Stored Baileys auth state contains invalid private key");
+	}
+	if (publicKey.length === 33 && publicKey[0] === 5) {
+		keyPair.public = publicKey.subarray(1);
+	} else if (publicKey.length !== 32) {
+		throw new Error("Stored Baileys auth state contains invalid public key");
+	}
+	keyPair.private = privateKey;
+}
+
+function normalizeAuthCreds(creds: AuthenticationCreds) {
 	const keyPairs = [
 		creds.noiseKey,
 		creds.signedIdentityKey,
@@ -121,11 +164,15 @@ function assertValidAuthCreds(creds: AuthenticationCreds) {
 	].filter(Boolean) as { public?: unknown; private?: unknown }[];
 
 	for (const keyPair of keyPairs) {
-		if (!isBinaryValue(keyPair.public) || !isBinaryValue(keyPair.private)) {
-			throw new Error(
-				"Stored Baileys auth state contains invalid key material",
-			);
+		normalizeKeyPair(keyPair);
+	}
+
+	if (creds.signedPreKey?.signature) {
+		const signature = Buffer.from(creds.signedPreKey.signature);
+		if (signature.length !== 64) {
+			throw new Error("Stored Baileys auth state contains invalid signature");
 		}
+		creds.signedPreKey.signature = signature;
 	}
 }
 
@@ -210,12 +257,14 @@ export async function useDbAuthState(deviceId: string): Promise<{
 	const stored = await readStoredAuthState(deviceId);
 	let creds: AuthenticationCreds;
 	let keys: KeyStore;
+	let bridge: BridgeStore;
 	try {
 		creds = stored.creds
 			? deserialize<AuthenticationCreds>(stored.creds)
 			: initAuthCreds();
-		assertValidAuthCreds(creds);
+		normalizeAuthCreds(creds);
 		keys = deserialize<KeyStore>(stored.keys ?? {});
+		bridge = deserialize<BridgeStore>(stored.bridge ?? {});
 	} catch (error) {
 		console.warn("Stored Baileys auth state is invalid; resetting session", {
 			deviceId,
@@ -224,59 +273,120 @@ export async function useDbAuthState(deviceId: string): Promise<{
 		await clearDbAuthState(deviceId);
 		creds = initAuthCreds();
 		keys = {};
+		bridge = {};
 	}
 
+	let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
 	const persist = async () => {
+		if (persistTimer) {
+			clearTimeout(persistTimer);
+			persistTimer = null;
+		}
 		await writeStoredAuthState(deviceId, {
 			creds: serialize(creds),
 			keys,
+			bridge,
 		});
+	};
+
+	const schedulePersist = () => {
+		if (persistTimer) clearTimeout(persistTimer);
+		persistTimer = setTimeout(() => {
+			persistTimer = null;
+			persist().catch((error) => {
+				console.warn("Failed to persist Baileys auth state", {
+					deviceId,
+					error,
+				});
+			});
+		}, 250);
+	};
+
+	const keyStore = {
+		get: <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+			const values: Partial<Record<string, SignalDataTypeMap[T]>> = {};
+			const typeKeys = (keys[type] ?? {}) as Record<string, unknown>;
+
+			for (const id of ids) {
+				const value = typeKeys[id];
+				if (value) {
+					values[id] = deserialize<SignalDataTypeMap[T]>(value);
+				}
+			}
+
+			return values as Record<string, SignalDataTypeMap[T]>;
+		},
+		set: async (data: SignalDataSet) => {
+			for (const [type, entries] of Object.entries(data) as [
+				keyof SignalDataTypeMap,
+				Record<string, unknown>,
+			][]) {
+				keys[type] ??= {};
+
+				for (const [id, value] of Object.entries(entries)) {
+					if (value === null) {
+						delete keys[type]?.[id];
+						continue;
+					}
+
+					keys[type][id] = serialize(value);
+				}
+			}
+
+			schedulePersist();
+		},
+		clear: async () => {
+			for (const type of Object.keys(keys) as (keyof SignalDataTypeMap)[]) {
+				delete keys[type];
+			}
+
+			schedulePersist();
+		},
+	};
+	const legacyBridgeStore = await wrapLegacyStore(
+		{ creds, keys: keyStore },
+		persist,
+	);
+	const store: NonNullable<AuthenticationState["store"]> = {
+		async get(storeName, key) {
+			if (RAW_BRIDGE_STORES.has(storeName)) {
+				const value = bridge[storeName]?.[key];
+				return value ? Buffer.from(deserialize<Uint8Array>(value)) : null;
+			}
+
+			return legacyBridgeStore.get(storeName, key);
+		},
+		async set(storeName, key, value) {
+			if (RAW_BRIDGE_STORES.has(storeName)) {
+				bridge[storeName] ??= {};
+				bridge[storeName][key] = serialize(Buffer.from(value));
+				schedulePersist();
+				return;
+			}
+
+			await legacyBridgeStore.set(storeName, key, value);
+		},
+		async delete(storeName, key) {
+			if (RAW_BRIDGE_STORES.has(storeName)) {
+				delete bridge[storeName]?.[key];
+				schedulePersist();
+				return;
+			}
+
+			await legacyBridgeStore.delete(storeName, key);
+		},
+		async flush() {
+			await legacyBridgeStore.flush();
+			await persist();
+		},
 	};
 
 	return {
 		state: {
 			creds,
-			keys: makeCacheableSignalKeyStore({
-				get: <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
-					const values: Partial<Record<string, SignalDataTypeMap[T]>> = {};
-					const typeKeys = (keys[type] ?? {}) as Record<string, unknown>;
-
-					for (const id of ids) {
-						const value = typeKeys[id];
-						if (value) {
-							values[id] = deserialize<SignalDataTypeMap[T]>(value);
-						}
-					}
-
-					return values as Record<string, SignalDataTypeMap[T]>;
-				},
-				set: async (data: SignalDataSet) => {
-					for (const [type, entries] of Object.entries(data) as [
-						keyof SignalDataTypeMap,
-						Record<string, unknown>,
-					][]) {
-						keys[type] ??= {};
-
-						for (const [id, value] of Object.entries(entries)) {
-							if (value === null) {
-								delete keys[type]?.[id];
-								continue;
-							}
-
-							keys[type][id] = serialize(value);
-						}
-					}
-
-					await persist();
-				},
-				clear: async () => {
-					for (const type of Object.keys(keys) as (keyof SignalDataTypeMap)[]) {
-						delete keys[type];
-					}
-
-					await persist();
-				},
-			}),
+			keys: keyStore,
+			store,
 		},
 		saveCreds: persist,
 	};
