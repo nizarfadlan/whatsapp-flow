@@ -40,8 +40,93 @@ function serialize<T>(value: T): unknown {
 	return JSON.parse(JSON.stringify(value, BufferJSON.replacer));
 }
 
+function isByteArray(value: unknown[]): value is number[] {
+	return value.every(
+		(item): item is number =>
+			typeof item === "number" &&
+			Number.isInteger(item) &&
+			item >= 0 &&
+			item <= 255,
+	);
+}
+
+function numericObjectToBuffer(value: Record<string, unknown>) {
+	const entries = Object.entries(value);
+	if (entries.length === 0) return null;
+	const indexed = entries
+		.map(([key, item]) => [Number(key), item] as const)
+		.sort(([a], [b]) => a - b);
+	if (
+		indexed.some(
+			([index, item], expected) =>
+				!Number.isInteger(index) ||
+				index !== expected ||
+				typeof item !== "number",
+		)
+	) {
+		return null;
+	}
+	const bytes = indexed.map(([, item]) => item);
+	return isByteArray(bytes) ? Buffer.from(bytes) : null;
+}
+
+function reviveBinaryValues(value: unknown): unknown {
+	const revived = BufferJSON.reviver("", value);
+	if (revived !== value) return revived;
+	if (Buffer.isBuffer(value)) return value;
+	if (value instanceof Uint8Array) return Buffer.from(value);
+	if (Array.isArray(value)) return value.map(reviveBinaryValues);
+	if (!value || typeof value !== "object") return value;
+
+	const record = value as Record<string, unknown>;
+	if (record.type === "Buffer") {
+		if (typeof record.data === "string")
+			return Buffer.from(record.data, "base64");
+		if (Array.isArray(record.data) && isByteArray(record.data)) {
+			return Buffer.from(record.data);
+		}
+		if (record.data && typeof record.data === "object") {
+			const buffer = numericObjectToBuffer(
+				record.data as Record<string, unknown>,
+			);
+			if (buffer) return buffer;
+		}
+	}
+
+	const buffer = numericObjectToBuffer(record);
+	if (buffer) return buffer;
+
+	return Object.fromEntries(
+		Object.entries(record).map(([key, item]) => [
+			key,
+			reviveBinaryValues(item),
+		]),
+	);
+}
+
 function deserialize<T>(value: unknown): T {
-	return JSON.parse(JSON.stringify(value), BufferJSON.reviver) as T;
+	return reviveBinaryValues(value) as T;
+}
+
+function isBinaryValue(value: unknown) {
+	return Buffer.isBuffer(value) || value instanceof Uint8Array;
+}
+
+function assertValidAuthCreds(creds: AuthenticationCreds) {
+	const keyPairs = [
+		creds.noiseKey,
+		creds.signedIdentityKey,
+		creds.signedPreKey?.keyPair,
+		creds.pairingEphemeralKeyPair,
+	].filter(Boolean) as { public?: unknown; private?: unknown }[];
+
+	for (const keyPair of keyPairs) {
+		if (!isBinaryValue(keyPair.public) || !isBinaryValue(keyPair.private)) {
+			throw new Error(
+				"Stored Baileys auth state contains invalid key material",
+			);
+		}
+	}
 }
 
 async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
@@ -57,10 +142,9 @@ async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
 		.limit(1);
 
 	if (encrypted) {
-		return JSON.parse(
-			decryptSecret(encrypted.encryptedValue),
-			BufferJSON.reviver,
-		) as StoredAuthState;
+		return deserialize<StoredAuthState>(
+			JSON.parse(decryptSecret(encrypted.encryptedValue)),
+		);
 	}
 
 	const rows = await db
@@ -69,7 +153,7 @@ async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
 		.where(eq(device.id, deviceId))
 		.limit(1);
 
-	return (rows[0]?.sessionData as StoredAuthState | null) ?? {};
+	return deserialize<StoredAuthState>(rows[0]?.sessionData ?? {});
 }
 
 async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
@@ -124,10 +208,23 @@ export async function useDbAuthState(deviceId: string): Promise<{
 	saveCreds: () => Promise<void>;
 }> {
 	const stored = await readStoredAuthState(deviceId);
-	const creds = stored.creds
-		? deserialize<AuthenticationCreds>(stored.creds)
-		: initAuthCreds();
-	const keys: KeyStore = stored.keys ?? {};
+	let creds: AuthenticationCreds;
+	let keys: KeyStore;
+	try {
+		creds = stored.creds
+			? deserialize<AuthenticationCreds>(stored.creds)
+			: initAuthCreds();
+		assertValidAuthCreds(creds);
+		keys = deserialize<KeyStore>(stored.keys ?? {});
+	} catch (error) {
+		console.warn("Stored Baileys auth state is invalid; resetting session", {
+			deviceId,
+			error,
+		});
+		await clearDbAuthState(deviceId);
+		creds = initAuthCreds();
+		keys = {};
+	}
 
 	const persist = async () => {
 		await writeStoredAuthState(deviceId, {
