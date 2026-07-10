@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"build": "vite build",
+		"start": "node server.mjs",
 		"serve": "vite preview",
 		"dev": "vite dev",
 		"check-types": "tsc --noEmit"

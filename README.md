@@ -111,6 +111,55 @@ bun run db:start
 bun run db:migrate
 ```
 
+## Docker Deployment
+
+Use the root Compose setup to run the API server and web dashboard in production-style containers. Set `DATABASE_URL` in `.env.docker` to your production database, or start the bundled local Postgres profile for self-host testing.
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+Edit `.env.docker` and replace the secret placeholders. Generate strong values with:
+
+```bash
+openssl rand -base64 32
+```
+
+For a local self-host smoke test, start the bundled Postgres service first:
+
+```bash
+docker compose --env-file .env.docker --profile local-db up -d postgres
+```
+
+Build the images, run migrations, and start the app stack:
+
+```bash
+bun run docker:build
+bun run docker:migrate
+bun run docker:up
+```
+
+Open:
+
+- Web dashboard: [http://localhost:3001](http://localhost:3001)
+- API server: [http://localhost:3000](http://localhost:3000)
+
+Useful Docker commands:
+
+```bash
+bun run docker:up:detached  # start in the background
+bun run docker:logs         # follow service logs
+bun run docker:down         # stop containers
+```
+
+`DATABASE_URL` is the only database setting required by the app. In Docker local testing, it can target the bundled Compose hostname `postgres`; in production, point it to your managed PostgreSQL endpoint.
+
+Local uploads use the `uploads_data` Docker volume when `STORAGE_DRIVER=local`. For durable production media, prefer S3/R2/MinIO storage and update the S3 values in `.env.docker`.
+
+Docker runs the API and web services as non-root users, uses healthchecks for readiness, and serves the dashboard through the TanStack Start SSR production server instead of `vite preview`.
+
+If `VITE_SERVER_URL` changes, rebuild the web image because Vite embeds that value during build.
+
 ## Environment
 
 Minimum server configuration:
@@ -195,18 +244,18 @@ cd apps/server
 bun run start
 ```
 
-Start the built web preview in another terminal:
+Start the built web server in another terminal:
 
 ```bash
 cd apps/web
-bun run serve --host 0.0.0.0 --port 3001
+HOST=0.0.0.0 PORT=3001 bun run start
 ```
 
 Open [http://localhost:3001](http://localhost:3001).
 
 Build outputs:
 
-- Web app: `apps/web/dist`
+- Web app: `apps/web/dist` plus `apps/web/server.mjs` production SSR runner
 - Server app: `apps/server/dist/index.mjs`
 
 ## Authentication And Admin Access
@@ -311,6 +360,13 @@ bun run check:ci
 | `bun run db:push` | Push schema changes directly |
 | `bun run db:studio` | Open Drizzle Studio |
 | `bun run db:stop` | Stop the local database container |
+| `bun run docker:build` | Build full-stack Docker images |
+| `bun run docker:build:ci` | Build Docker images with the example env for CI validation |
+| `bun run docker:migrate` | Run Drizzle migrations inside Docker |
+| `bun run docker:up` | Start the Docker stack in the foreground |
+| `bun run docker:up:detached` | Start the Docker stack in the background |
+| `bun run docker:logs` | Follow Docker service logs |
+| `bun run docker:down` | Stop the Docker stack |
 
 ## UI Customization
 
