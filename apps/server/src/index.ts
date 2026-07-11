@@ -12,6 +12,7 @@ import {
 	processFlowResumeJob,
 	processFlowWaitWarningJob,
 } from "@whatsapp-flow/api/engine/flow-jobs";
+import { enrichInboundMedia } from "@whatsapp-flow/api/engine/inbound-media";
 import { startJobWorker } from "@whatsapp-flow/api/engine/job-queue";
 import {
 	processWebhookDeliveryJob,
@@ -27,6 +28,7 @@ import {
 	channel,
 	chatGroup,
 	contact as contactTable,
+	groupParticipant,
 } from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
@@ -34,7 +36,6 @@ import { env } from "@whatsapp-flow/env/server";
 import { isLocalStorageDriver, storage } from "@whatsapp-flow/storage";
 import {
 	connectionManager,
-	downloadMetaDeviceMedia,
 	handleMetaWebhook,
 	verifyMetaWebhookChallenge,
 } from "@whatsapp-flow/whatsapp";
@@ -439,6 +440,13 @@ void seedRbac(db).catch((error) => {
 connectionManager.on("device:message", async (ev) => {
 	try {
 		const { deviceId, contact, message } = ev;
+		if (
+			contact.jid === "status@broadcast" ||
+			message.messageKey?.remoteJid === "status@broadcast"
+		) {
+			return;
+		}
+
 		let chatType: "private" | "group" | "channel" | "broadcast" = "private";
 		if (contact.jid.endsWith("@g.us")) {
 			chatType = "group";
@@ -523,6 +531,14 @@ connectionManager.on("device:message", async (ev) => {
 			channelId = savedChannel?.id ?? null;
 		}
 
+		if (chatType === "group" && groupId) {
+			await upsertGroupParticipantSender(
+				groupId,
+				ev.sender?.jid ?? message.messageKey?.participant,
+				now,
+			);
+		}
+
 		const [savedThread] = await db
 			.insert(inboxThread)
 			.values({
@@ -562,13 +578,14 @@ connectionManager.on("device:message", async (ev) => {
 		const threadId = savedThread?.id;
 
 		if (threadId) {
-			const messageRaw = await maybeStoreInboundMetaMedia({
+			const mediaResult = await enrichInboundMedia({
 				deviceId,
 				provider: ev.provider ?? "baileys",
 				providerMessageId: message.providerMessageId,
 				messageType: message.type,
 				raw: message.raw,
 			});
+			const messageRaw = mediaResult.raw;
 			const [insertedMessage] = await db
 				.insert(inboxMessage)
 				.values({
@@ -659,7 +676,7 @@ connectionManager.on("device:groups", async (ev) => {
 	try {
 		const now = new Date();
 		for (const item of ev.groups) {
-			await db
+			const [savedGroup] = await db
 				.insert(chatGroup)
 				.values({
 					id: crypto.randomUUID(),
@@ -675,14 +692,18 @@ connectionManager.on("device:groups", async (ev) => {
 				.onConflictDoUpdate({
 					target: [chatGroup.deviceId, chatGroup.jid],
 					set: {
-						subject: item.subject,
-						description: item.description ?? null,
-						ownerJid: item.ownerJid ?? null,
-						participantCount: item.participantCount ?? 0,
+						subject: item.subject === item.jid ? undefined : item.subject,
+						description: item.description ?? undefined,
+						ownerJid: item.ownerJid ?? undefined,
+						participantCount: item.participantCount,
 						isMember: item.isMember ?? true,
 						updatedAt: now,
 					},
-				});
+				})
+				.returning({ id: chatGroup.id });
+			if (savedGroup) {
+				await upsertGroupParticipantsFromRaw(savedGroup.id, item.raw, now);
+			}
 		}
 	} catch (err) {
 		console.error("Failed to persist groups sync", err);
@@ -725,110 +746,65 @@ connectionManager.on("device:channels", async (ev) => {
 	}
 });
 
-type MetaInboundMediaInfo = {
-	type: "image" | "video" | "audio" | "document";
-	id: string;
-	mimeType?: string;
-	fileName?: string;
-	sha256?: string;
-};
-
-async function maybeStoreInboundMetaMedia(input: {
-	deviceId: string;
-	provider: string;
-	providerMessageId?: string;
-	messageType: string;
-	raw: unknown;
-}): Promise<Record<string, unknown> | null> {
-	if (!input.raw || typeof input.raw !== "object") return null;
-	const raw = input.raw as Record<string, unknown>;
-	if (input.provider !== "meta_cloud") return raw;
-
-	const media = getMetaInboundMedia(input.messageType, raw);
-	if (!media || !input.providerMessageId) return raw;
-
-	try {
-		const downloaded = await downloadMetaDeviceMedia(input.deviceId, media.id);
-		const fileName =
-			media.fileName ??
-			`${media.id}${extensionForMime(downloaded.mimeType ?? media.mimeType)}`;
-		const key = [
-			"whatsapp",
-			"meta",
-			input.deviceId,
-			input.providerMessageId,
-			`${media.id}-${sanitizeFileName(fileName)}`,
-		].join("/");
-		const stored = await storage.put(
-			key,
-			downloaded.bytes,
-			downloaded.mimeType ?? media.mimeType ?? "application/octet-stream",
-		);
-
-		return {
-			...raw,
-			media: {
-				type: media.type,
-				id: media.id,
-				mimeType: downloaded.mimeType ?? media.mimeType ?? null,
-				fileName,
-				key: stored.key,
-				url: stored.url,
-				size: downloaded.size ?? downloaded.bytes.byteLength,
-				sha256: media.sha256 ?? downloaded.sha256 ?? null,
-			},
-		};
-	} catch (error) {
-		console.warn("Failed to store inbound Meta WhatsApp media", {
-			deviceId: input.deviceId,
-			providerMessageId: input.providerMessageId,
-			mediaId: media.id,
-			error: error instanceof Error ? error.message : "Unknown error",
+async function upsertGroupParticipantSender(
+	groupId: string,
+	jid: string | null | undefined,
+	now: Date,
+) {
+	if (!jid) return;
+	await db
+		.insert(groupParticipant)
+		.values({
+			id: crypto.randomUUID(),
+			groupId,
+			jid,
+			role: "member",
+		})
+		.onConflictDoUpdate({
+			target: [groupParticipant.groupId, groupParticipant.jid],
+			set: { updatedAt: now },
 		});
-		return {
-			...raw,
-			mediaDownloadError:
-				error instanceof Error ? error.message : "Failed to download media",
-		};
+}
+
+async function upsertGroupParticipantsFromRaw(
+	groupId: string,
+	raw: unknown,
+	now: Date,
+) {
+	if (!raw || typeof raw !== "object") return;
+	const participants = (raw as Record<string, unknown>).participants;
+	if (!Array.isArray(participants)) return;
+
+	for (const participant of participants) {
+		if (!participant || typeof participant !== "object") continue;
+		const record = participant as Record<string, unknown>;
+		const jid =
+			typeof record.id === "string"
+				? record.id
+				: typeof record.jid === "string"
+					? record.jid
+					: undefined;
+		if (!jid) continue;
+		const admin = typeof record.admin === "string" ? record.admin : undefined;
+		const role =
+			admin === "superadmin"
+				? "superadmin"
+				: admin === "admin"
+					? "admin"
+					: "member";
+		await db
+			.insert(groupParticipant)
+			.values({
+				id: crypto.randomUUID(),
+				groupId,
+				jid,
+				role,
+			})
+			.onConflictDoUpdate({
+				target: [groupParticipant.groupId, groupParticipant.jid],
+				set: { role, updatedAt: now },
+			});
 	}
-}
-
-function getMetaInboundMedia(
-	messageType: string,
-	raw: Record<string, unknown>,
-): MetaInboundMediaInfo | null {
-	if (!["image", "video", "audio", "document"].includes(messageType)) {
-		return null;
-	}
-	const media = raw[messageType];
-	if (!media || typeof media !== "object") return null;
-	const mediaRecord = media as Record<string, unknown>;
-	const id = mediaRecord.id;
-	if (typeof id !== "string" || !id) return null;
-	return {
-		type: messageType as MetaInboundMediaInfo["type"],
-		id,
-		mimeType:
-			typeof mediaRecord.mime_type === "string"
-				? mediaRecord.mime_type
-				: undefined,
-		fileName:
-			typeof mediaRecord.filename === "string"
-				? mediaRecord.filename
-				: undefined,
-		sha256:
-			typeof mediaRecord.sha256 === "string" ? mediaRecord.sha256 : undefined,
-	};
-}
-
-function sanitizeFileName(value: string) {
-	return value.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "media";
-}
-
-function extensionForMime(value?: string | null) {
-	if (!value) return "";
-	const subtype = value.split("/")[1]?.split(";")[0];
-	return subtype ? `.${subtype.replace(/[^\w.-]+/g, "")}` : "";
 }
 
 async function reconnectDevices() {

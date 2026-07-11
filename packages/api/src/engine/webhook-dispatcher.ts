@@ -1,12 +1,21 @@
 import { createHmac } from "node:crypto";
 import { db } from "@whatsapp-flow/db";
+import {
+	chatGroup,
+	contact as contactTable,
+	groupParticipant,
+} from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import {
 	webhookDelivery,
 	webhookEndpoint,
 } from "@whatsapp-flow/db/schema/webhook";
-import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, asc, eq, lte } from "drizzle-orm";
+import {
+	type ConnectionManagerEvents,
+	connectionManager,
+} from "@whatsapp-flow/whatsapp";
+import { and, asc, eq, lte, or } from "drizzle-orm";
+import { enrichInboundMedia, type WebhookMedia } from "./inbound-media";
 import { enqueueJob } from "./job-queue";
 import { webhookDeliveryJobIdempotencyKey } from "./job-types";
 import {
@@ -23,6 +32,18 @@ type EnqueueWebhookInput = {
 	eventType: WebhookEventType;
 	payload: Record<string, unknown>;
 	flowId?: string | null;
+};
+
+type DeviceMessageEvent = ConnectionManagerEvents["device:message"];
+type ChatType = "private" | "group" | "channel" | "broadcast";
+type Identity = {
+	jid?: string;
+	number?: string;
+	lid?: string;
+	name?: string | null;
+	providerContactId?: string;
+	identifier?: string;
+	resolved?: boolean;
 };
 
 function normalizeStringArray(value: unknown) {
@@ -57,14 +78,48 @@ function endpointMatchesFlow(
 	return flowIds.length === 0 || (!!flowId && flowIds.includes(flowId));
 }
 
-function serializeMessageForWebhook(message: {
-	text?: string;
-	type: string;
-	messageKey?: import("baileys").WAMessageKey;
-}) {
+export async function buildMessageReceivedPayload(ev: DeviceMessageEvent) {
+	const chat = normalizeChat(ev);
+	const sender = await enrichIdentity(ev.deviceId, normalizeSender(ev));
+	const group = chat.isGroup
+		? await normalizeGroup(ev, chat.jid, sender)
+		: undefined;
+	const mediaResult = await enrichInboundMedia({
+		deviceId: ev.deviceId,
+		provider: ev.provider ?? "baileys",
+		providerMessageId:
+			ev.message.providerMessageId ?? ev.message.messageKey?.id ?? undefined,
+		messageType: ev.message.type,
+		raw: ev.message.raw,
+	});
+	const mentions = await resolveMentions(
+		ev.deviceId,
+		extractMentionJids(ev.message.raw),
+	);
+
+	return {
+		eventType: "message.received",
+		deviceId: ev.deviceId,
+		provider: ev.provider,
+		contact: ev.contact,
+		chat,
+		sender,
+		group,
+		message: serializeMessageForWebhook(ev.message, {
+			media: mediaResult.media,
+			mentions,
+		}),
+	};
+}
+
+function serializeMessageForWebhook(
+	message: DeviceMessageEvent["message"],
+	extra: { media: WebhookMedia | null; mentions: Identity[] },
+) {
 	return {
 		type: message.type,
 		text: message.text,
+		providerMessageId: message.providerMessageId,
 		messageKey: message.messageKey
 			? {
 					id: message.messageKey.id,
@@ -73,7 +128,185 @@ function serializeMessageForWebhook(message: {
 					participant: message.messageKey.participant,
 				}
 			: undefined,
+		media: extra.media ?? undefined,
+		mentions: extra.mentions.length > 0 ? extra.mentions : undefined,
 	};
+}
+
+function normalizeChat(ev: DeviceMessageEvent) {
+	if (ev.chat) return ev.chat;
+	const jid = ev.message.messageKey?.remoteJid ?? ev.contact.jid;
+	const type = getChatType(jid);
+	return { jid, type, isGroup: type === "group" };
+}
+
+function normalizeSender(ev: DeviceMessageEvent): Identity {
+	if (ev.sender) return withIdentifier(ev.sender);
+	const participant = ev.message.messageKey?.participant;
+	if (participant) return withIdentifier(identityFromJid(participant));
+	return withIdentifier({
+		jid: ev.contact.jid,
+		number: ev.contact.number,
+		lid: ev.contact.lid,
+		name: ev.contact.name,
+		providerContactId: ev.contact.providerContactId,
+	});
+}
+
+async function normalizeGroup(
+	ev: DeviceMessageEvent,
+	groupJid: string,
+	sender: Identity,
+) {
+	const [groupRow] = await db
+		.select({
+			id: chatGroup.id,
+			subject: chatGroup.subject,
+			participantCount: chatGroup.participantCount,
+		})
+		.from(chatGroup)
+		.where(
+			and(eq(chatGroup.deviceId, ev.deviceId), eq(chatGroup.jid, groupJid)),
+		)
+		.limit(1);
+
+	const senderParticipant = await enrichGroupParticipant(groupRow?.id, sender);
+	const eventGroupName =
+		ev.group?.name === groupJid ? undefined : ev.group?.name;
+	return {
+		jid: groupJid,
+		name: groupRow?.subject ?? eventGroupName,
+		participantCount: ev.group?.participantCount ?? groupRow?.participantCount,
+		senderParticipant,
+	};
+}
+
+async function enrichGroupParticipant(
+	groupId: string | undefined,
+	sender: Identity,
+) {
+	if (!groupId || !sender.jid) return sender;
+	const [participant] = await db
+		.select({ role: groupParticipant.role })
+		.from(groupParticipant)
+		.where(
+			and(
+				eq(groupParticipant.groupId, groupId),
+				eq(groupParticipant.jid, sender.jid),
+			),
+		)
+		.limit(1);
+	return { ...sender, role: participant?.role ?? "member" };
+}
+
+async function enrichIdentity(
+	deviceId: string,
+	identity: Identity,
+): Promise<Identity> {
+	const candidates = [
+		identity.jid ? eq(contactTable.jid, identity.jid) : undefined,
+		identity.lid ? eq(contactTable.lid, identity.lid) : undefined,
+		identity.number ? eq(contactTable.phoneNumber, identity.number) : undefined,
+		identity.providerContactId
+			? eq(contactTable.providerContactId, identity.providerContactId)
+			: undefined,
+	].filter((condition): condition is NonNullable<typeof condition> =>
+		Boolean(condition),
+	);
+
+	if (candidates.length === 0) return withIdentifier(identity);
+
+	const [row] = await db
+		.select({
+			jid: contactTable.jid,
+			phoneNumber: contactTable.phoneNumber,
+			lid: contactTable.lid,
+			name: contactTable.name,
+			pushName: contactTable.pushName,
+			profileName: contactTable.profileName,
+			providerContactId: contactTable.providerContactId,
+		})
+		.from(contactTable)
+		.where(and(eq(contactTable.deviceId, deviceId), or(...candidates)))
+		.limit(1);
+
+	if (!row) return withIdentifier({ ...identity, resolved: false });
+	return withIdentifier({
+		jid: identity.jid ?? row.jid,
+		number: identity.number ?? row.phoneNumber ?? undefined,
+		lid: identity.lid ?? row.lid ?? undefined,
+		name: identity.name ?? row.name ?? row.pushName ?? row.profileName,
+		providerContactId:
+			identity.providerContactId ?? row.providerContactId ?? undefined,
+		resolved: true,
+	});
+}
+
+async function resolveMentions(deviceId: string, mentionedJids: string[]) {
+	const unique = [...new Set(mentionedJids.filter(Boolean))];
+	return Promise.all(
+		unique.map((jid) => enrichIdentity(deviceId, identityFromJid(jid))),
+	);
+}
+
+function identityFromJid(jid: string): Identity {
+	if (jid.endsWith("@lid"))
+		return withIdentifier({ lid: jid, identifier: jid });
+	return withIdentifier({
+		jid,
+		number:
+			jid.endsWith("@s.whatsapp.net") || !jid.includes("@")
+				? normalizeContactNumber(jid)
+				: undefined,
+		identifier: jid,
+	});
+}
+
+function withIdentifier<T extends Identity>(
+	identity: T,
+): T & { identifier: string } {
+	return {
+		...identity,
+		identifier:
+			identity.identifier ??
+			identity.jid ??
+			identity.lid ??
+			identity.number ??
+			identity.providerContactId ??
+			"unknown",
+	};
+}
+
+function extractMentionJids(raw: unknown) {
+	const mentions = new Set<string>();
+	collectMentionJids(raw, mentions);
+	return [...mentions];
+}
+
+function collectMentionJids(value: unknown, mentions: Set<string>, depth = 0) {
+	if (!value || typeof value !== "object" || depth > 5) return;
+	const record = value as Record<string, unknown>;
+	const mentionedJid = record.mentionedJid;
+	if (Array.isArray(mentionedJid)) {
+		for (const item of mentionedJid) {
+			if (typeof item === "string" && item) mentions.add(item);
+		}
+	}
+	for (const item of Object.values(record)) {
+		if (item && typeof item === "object")
+			collectMentionJids(item, mentions, depth + 1);
+	}
+}
+
+function getChatType(jid: string): ChatType {
+	if (jid.endsWith("@g.us")) return "group";
+	if (jid.endsWith("@newsletter")) return "channel";
+	if (jid.endsWith("@broadcast")) return "broadcast";
+	return "private";
+}
+
+function normalizeContactNumber(jid: string) {
+	return jid.split("@")[0]?.split(":")[0] ?? jid;
 }
 
 export async function enqueueWebhook(input: EnqueueWebhookInput) {
@@ -154,7 +387,6 @@ export async function enqueuePendingWebhookDeliveryJobs(limit = 50) {
 	return pendingDeliveries.length;
 }
 
-// Global dispatcher state so we don't start multiple
 const globalDispatcherState = globalThis as typeof globalThis & {
 	__webhookDispatcherStarted?: boolean;
 };
@@ -175,7 +407,6 @@ export function startWebhookDispatcher() {
 
 	void tick();
 
-	// We need device.userId. So we fetch device info during event.
 	connectionManager.on("device:message", async (ev) => {
 		try {
 			const d = await db
@@ -188,15 +419,15 @@ export function startWebhookDispatcher() {
 					userId: d[0].userId,
 					deviceId: ev.deviceId,
 					eventType: "message.received",
-					payload: {
-						eventType: "message.received",
-						deviceId: ev.deviceId,
-						contact: ev.contact,
-						message: serializeMessageForWebhook(ev.message),
-					},
+					payload: await buildMessageReceivedPayload(ev),
 				});
 			}
-		} catch (_err) {}
+		} catch (error) {
+			console.error(
+				"[Webhook] Failed to enqueue message.received event",
+				error,
+			);
+		}
 	});
 
 	connectionManager.on("device:status", async (ev) => {
@@ -314,7 +545,7 @@ async function processWebhookDelivery(
 
 		isSuccess = statusCode >= 200 && statusCode < 300;
 	} catch (error) {
-		statusCode = 0; // indicates network/timeout
+		statusCode = 0;
 		responseBody = error instanceof Error ? error.message : "Unknown Error";
 	}
 
@@ -326,8 +557,6 @@ async function processWebhookDelivery(
 	} else if (attemptCount >= MAX_WEBHOOK_ATTEMPTS) {
 		nextStatus = "failed";
 	} else {
-		// Exponential backoff base 15 secs
-		// e.g. delay: 30s, 60s, 120s, 240s
 		const delaySeconds = 15 * 2 ** attemptCount;
 		nextAttemptAt.setSeconds(nextAttemptAt.getSeconds() + delaySeconds);
 	}

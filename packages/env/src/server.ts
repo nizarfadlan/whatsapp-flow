@@ -19,6 +19,14 @@ export const env = createEnv({
 		S3_ACCESS_KEY_ID: z.string().optional(),
 		S3_SECRET_ACCESS_KEY: z.string().optional(),
 		S3_PUBLIC_URL: z.url().optional(),
+		INBOUND_MEDIA_AUTO_DOWNLOAD: z
+			.preprocess((value) => {
+				if (value === undefined || value === null || value === "")
+					return undefined;
+				if (value === "false" || value === false) return false;
+				return true;
+			}, z.boolean())
+			.default(true),
 		META_GRAPH_API_VERSION: z.string().default("v23.0"),
 		META_APP_SECRET: z.string().optional(),
 		META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),

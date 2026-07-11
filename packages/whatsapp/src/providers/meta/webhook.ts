@@ -196,13 +196,25 @@ export async function handleMetaWebhook(input: {
 				continue;
 			}
 
+			const senderName = contacts.get(from);
 			input.emitDeviceMessage({
 				deviceId: deviceRow.id,
 				provider: "meta_cloud",
 				contact: {
 					jid: toPhoneJid(from),
 					number: from,
-					name: contacts.get(from),
+					name: senderName,
+					providerContactId: from,
+				},
+				chat: {
+					jid: toPhoneJid(from),
+					type: "private",
+					isGroup: false,
+				},
+				sender: {
+					jid: toPhoneJid(from),
+					number: from,
+					name: senderName,
 					providerContactId: from,
 				},
 				message: {

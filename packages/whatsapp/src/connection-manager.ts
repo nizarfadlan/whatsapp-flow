@@ -6,6 +6,7 @@ import {
 	type Contact,
 	DEFAULT_CONNECTION_CONFIG,
 	DisconnectReason,
+	downloadMediaMessage,
 	fetchLatestBaileysVersion,
 	makeWASocket,
 	type WAMessage,
@@ -54,6 +55,13 @@ function toPhoneJid(phoneNumber: string) {
 
 function toNewsletterJid(id: string) {
 	return id.endsWith("@newsletter") ? id : `${id}@newsletter`;
+}
+
+function getChatType(jid: string) {
+	if (jid.endsWith("@g.us")) return "group" as const;
+	if (jid.endsWith("@newsletter")) return "channel" as const;
+	if (jid.endsWith("@broadcast")) return "broadcast" as const;
+	return "private" as const;
 }
 
 function getStringValue(value: unknown) {
@@ -367,19 +375,49 @@ export class ConnectionManager extends EventEmitter {
 				deviceId,
 				message.key.remoteJid,
 			);
+			const chatType = getChatType(resolved.jid);
+			const sender =
+				chatType === "group"
+					? await this.resolveIncomingSenderJid(
+							deviceId,
+							message.key.participant ?? undefined,
+							message.pushName ?? undefined,
+						)
+					: {
+							jid: resolved.jid,
+							number: resolved.phoneNumber,
+							lid: resolved.lid,
+							name: message.pushName ?? undefined,
+						};
 			this.emit("device:message", {
 				deviceId,
+				provider: "baileys",
 				contact: {
 					jid: resolved.jid,
 					number: resolved.phoneNumber,
 					lid: resolved.lid,
-					name: message.pushName ?? undefined,
+					name:
+						chatType === "group" ? undefined : (message.pushName ?? undefined),
 				},
+				chat: {
+					jid: resolved.jid,
+					type: chatType,
+					isGroup: chatType === "group",
+				},
+				sender,
+				group:
+					chatType === "group"
+						? {
+								jid: resolved.jid,
+								name: resolved.jid,
+							}
+						: undefined,
 				message: {
 					text: extractMessageText(message),
 					type: extractMessageType(message),
 					raw: message,
 					messageKey: message.key,
+					providerMessageId: message.key.id ?? undefined,
 				},
 			});
 		}
@@ -406,6 +444,37 @@ export class ConnectionManager extends EventEmitter {
 			phoneNumber: pnJid ? normalizeContactNumber(pnJid) : undefined,
 			lid: jid,
 		};
+	}
+
+	private async resolveIncomingSenderJid(
+		deviceId: string,
+		jid?: string,
+		name?: string,
+	) {
+		if (!jid) return { name };
+		const resolved = await this.resolveIncomingChatJid(deviceId, jid);
+		return {
+			jid: resolved.jid,
+			number: resolved.phoneNumber,
+			lid: resolved.lid,
+			name,
+		};
+	}
+
+	async downloadDeviceMedia(deviceId: string, raw: unknown) {
+		const connection = this.connections.get(deviceId);
+		if (!connection?.socket) {
+			throw new Error("Device socket is not connected");
+		}
+		return downloadMediaMessage(
+			raw as WAMessage,
+			"buffer",
+			{},
+			{
+				logger: connection.socket.logger,
+				reuploadRequest: connection.socket.updateMediaMessage,
+			},
+		);
 	}
 
 	private async handleContactsUpsert(
@@ -491,7 +560,7 @@ export class ConnectionManager extends EventEmitter {
 					subject: item.subject ?? jid,
 					description: item.desc,
 					ownerJid: item.owner,
-					participantCount: item.participants?.length ?? 0,
+					participantCount: item.participants?.length,
 					isMember: true,
 					raw: item,
 				};
@@ -549,7 +618,7 @@ export class ConnectionManager extends EventEmitter {
 
 		const jid = toNewsletterJid(id);
 		try {
-			const metadata = await connection.socket.newsletterMetadata(jid);
+			const metadata = await connection.socket.newsletterMetadata("jid", jid);
 			this.handleChannelsUpsert(deviceId, [{ ...(metadata ?? {}), id: jid }]);
 		} catch {
 			this.handleChannelsUpsert(deviceId, [{ id: jid }]);

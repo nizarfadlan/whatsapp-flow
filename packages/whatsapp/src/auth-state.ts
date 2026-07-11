@@ -8,24 +8,19 @@ import {
 	initAuthCreds,
 	type SignalDataSet,
 	type SignalDataTypeMap,
-	wrapLegacyStore,
 } from "baileys";
 import { and, eq } from "drizzle-orm";
-
-type BridgeStore = Record<string, Record<string, unknown>>;
 
 type StoredAuthState = {
 	creds?: unknown;
 	keys?: Partial<{
 		[T in keyof SignalDataTypeMap]: Record<string, unknown>;
 	}>;
-	bridge?: BridgeStore;
 };
 
 type KeyStore = NonNullable<StoredAuthState["keys"]>;
 
 const BAILEYS_AUTH_STATE_KEY = "auth_state";
-const RAW_BRIDGE_STORES = new Set(["msg_secret"]);
 const authStateWriteQueues = new Map<string, Promise<void>>();
 
 function enqueueAuthStateWrite(deviceId: string, write: () => Promise<void>) {
@@ -257,14 +252,12 @@ export async function useDbAuthState(deviceId: string): Promise<{
 	const stored = await readStoredAuthState(deviceId);
 	let creds: AuthenticationCreds;
 	let keys: KeyStore;
-	let bridge: BridgeStore;
 	try {
 		creds = stored.creds
 			? deserialize<AuthenticationCreds>(stored.creds)
 			: initAuthCreds();
 		normalizeAuthCreds(creds);
 		keys = deserialize<KeyStore>(stored.keys ?? {});
-		bridge = deserialize<BridgeStore>(stored.bridge ?? {});
 	} catch (error) {
 		console.warn("Stored Baileys auth state is invalid; resetting session", {
 			deviceId,
@@ -273,7 +266,6 @@ export async function useDbAuthState(deviceId: string): Promise<{
 		await clearDbAuthState(deviceId);
 		creds = initAuthCreds();
 		keys = {};
-		bridge = {};
 	}
 
 	let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -286,7 +278,6 @@ export async function useDbAuthState(deviceId: string): Promise<{
 		await writeStoredAuthState(deviceId, {
 			creds: serialize(creds),
 			keys,
-			bridge,
 		});
 	};
 
@@ -344,49 +335,10 @@ export async function useDbAuthState(deviceId: string): Promise<{
 			schedulePersist();
 		},
 	};
-	const legacyBridgeStore = await wrapLegacyStore(
-		{ creds, keys: keyStore },
-		persist,
-	);
-	const store: NonNullable<AuthenticationState["store"]> = {
-		async get(storeName, key) {
-			if (RAW_BRIDGE_STORES.has(storeName)) {
-				const value = bridge[storeName]?.[key];
-				return value ? Buffer.from(deserialize<Uint8Array>(value)) : null;
-			}
-
-			return legacyBridgeStore.get(storeName, key);
-		},
-		async set(storeName, key, value) {
-			if (RAW_BRIDGE_STORES.has(storeName)) {
-				bridge[storeName] ??= {};
-				bridge[storeName][key] = serialize(Buffer.from(value));
-				schedulePersist();
-				return;
-			}
-
-			await legacyBridgeStore.set(storeName, key, value);
-		},
-		async delete(storeName, key) {
-			if (RAW_BRIDGE_STORES.has(storeName)) {
-				delete bridge[storeName]?.[key];
-				schedulePersist();
-				return;
-			}
-
-			await legacyBridgeStore.delete(storeName, key);
-		},
-		async flush() {
-			await legacyBridgeStore.flush();
-			await persist();
-		},
-	};
-
 	return {
 		state: {
 			creds,
 			keys: keyStore,
-			store,
 		},
 		saveCreds: persist,
 	};

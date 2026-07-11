@@ -175,6 +175,7 @@ SETTINGS_ENCRYPTION_KEY=replace-with-base64-32-byte-key
 PUBLIC_BASE_URL=http://localhost:3000
 STORAGE_DRIVER=local
 LOCAL_UPLOAD_DIR=uploads
+INBOUND_MEDIA_AUTO_DOWNLOAD=true
 ```
 
 Minimum web configuration:
@@ -315,6 +316,261 @@ http://localhost:3000/api/whatsapp/meta/webhook
 ```
 
 Use a public HTTPS tunnel or deployed backend URL when configuring Meta webhooks outside local development.
+
+## Webhook Guide
+
+There are three webhook surfaces:
+
+1. **Meta WhatsApp callback** receives events from Meta Cloud API.
+2. **Flow trigger webhook** starts an active flow from an external system.
+3. **Outbound webhooks** deliver WhatsApp Flow events to your configured endpoint.
+
+### Meta WhatsApp callback
+
+Use this URL when configuring Meta webhooks:
+
+```text
+GET/POST /api/whatsapp/meta/webhook
+```
+
+Responses:
+
+| Request | Success | Error |
+| --- | --- | --- |
+| `GET` verification | Returns the plain `hub.challenge` text when `hub.mode=subscribe` and `hub.verify_token` matches `META_WEBHOOK_VERIFY_TOKEN`. | `403 Forbidden` |
+| `POST` event callback | `200 OK` with body `OK` after the event is accepted and processed. | `401 Unauthorized` when signature validation or payload processing fails. |
+
+Security:
+
+- Set `META_WEBHOOK_VERIFY_TOKEN` to a random value and register the same value in Meta. This is only for Meta's subscription verification request.
+- Set `META_APP_SECRET`, or store a device-level Meta app secret, so incoming callbacks can be verified against `X-Hub-Signature-256`. Treat this as required outside local testing.
+
+### Flow trigger webhooks
+
+Flows with `triggerType: "webhook"` can be started by calling:
+
+```text
+POST /api/flows/{flowId}/webhook?token={webhookToken}
+```
+
+You can also send the token as a header:
+
+```text
+X-Webhook-Token: {webhookToken}
+```
+
+Request body must be JSON and include a contact number. Supported contact fields are `contactNumber`, `phoneNumber`, or `number`; non-digit characters are stripped before execution. Flow input text is taken from `text`, then `message`, then the whole JSON body as a string.
+
+```json
+{
+  "contactNumber": "6281234567890",
+  "text": "Hello from CRM",
+  "customerId": "cus_123"
+}
+```
+
+Accepted response:
+
+```json
+{ "success": true }
+```
+
+Error responses:
+
+| Status | Body | Meaning |
+| --- | --- | --- |
+| `400` | `{ "error": "contactNumber is required" }` | JSON body is missing a usable contact number. |
+| `401` | `{ "error": "Invalid webhook token" }` | Token does not match the flow webhook token. |
+| `404` | `{ "error": "Webhook flow not found" }` | Flow does not exist, is not active, or is not configured as a webhook trigger. |
+
+`success: true` means the trigger was accepted. Flow execution continues asynchronously, so callers should not wait for the final flow result in this response.
+
+Security:
+
+- Yes, webhook-triggered flows should use a secret token.
+- Prefer the `X-Webhook-Token` header in production so tokens are less likely to appear in URL logs, browser history, or analytics tools.
+- Use HTTPS for any public webhook URL.
+
+### Outbound webhooks
+
+Dashboard webhook endpoints receive events via `POST` with JSON bodies.
+
+Headers:
+
+```text
+Content-Type: application/json
+User-Agent: WhatsAppFlow-Webhook/1.0
+X-Webhook-Signature: {hex_hmac_sha256}
+```
+
+`X-Webhook-Signature` is `HMAC-SHA256(rawBody, endpointSecret)` encoded as lowercase hex. Verify the exact raw request body before trusting the payload. Each endpoint gets a generated `whsec_...` secret, and the dashboard can regenerate it.
+
+Receiver response contract:
+
+- Return any `2xx` status to mark the delivery as successful.
+- Any non-`2xx` response, network error, or timeout is treated as failed and retried.
+- The system stores the response status and up to the first 1024 characters of the response body for delivery inspection.
+- Deliveries are retried up to 5 attempts with exponential backoff.
+
+Payload compatibility:
+
+- Existing fields such as `eventType`, `deviceId`, `contact`, `message.type`, `message.text`, and `message.messageKey` remain available.
+- New fields such as `chat`, `sender`, `group`, `message.media`, and `message.mentions` are additive and may be absent depending on provider/message type.
+- `contact.number` is the normalized phone-number field currently emitted by the app.
+
+Supported `eventType` values:
+
+- `message.received`
+- `device.status_changed`
+- `flow.execution.started`
+- `flow.execution.completed`
+- `flow.execution.failed`
+- `flow.session.waiting`
+- `flow.session.resumed`
+- `flow.session.expired`
+
+Private text example:
+
+```json
+{
+  "eventType": "message.received",
+  "deviceId": "dev_123",
+  "provider": "baileys",
+  "contact": {
+    "jid": "6281234567890@s.whatsapp.net",
+    "number": "6281234567890",
+    "name": "Customer"
+  },
+  "chat": {
+    "jid": "6281234567890@s.whatsapp.net",
+    "type": "private",
+    "isGroup": false
+  },
+  "sender": {
+    "jid": "6281234567890@s.whatsapp.net",
+    "number": "6281234567890",
+    "name": "Customer",
+    "identifier": "6281234567890@s.whatsapp.net"
+  },
+  "message": {
+    "type": "conversation",
+    "text": "Hi",
+    "providerMessageId": "ABCD1234",
+    "messageKey": {
+      "id": "ABCD1234",
+      "remoteJid": "6281234567890@s.whatsapp.net",
+      "fromMe": false
+    }
+  }
+}
+```
+
+Group message with mention example:
+
+```json
+{
+  "eventType": "message.received",
+  "deviceId": "dev_123",
+  "contact": {
+    "jid": "120363000000000000@g.us",
+    "name": "Support Group"
+  },
+  "chat": {
+    "jid": "120363000000000000@g.us",
+    "type": "group",
+    "isGroup": true
+  },
+  "sender": {
+    "jid": "6281234567890@s.whatsapp.net",
+    "number": "6281234567890",
+    "name": "Customer",
+    "identifier": "6281234567890@s.whatsapp.net"
+  },
+  "group": {
+    "jid": "120363000000000000@g.us",
+    "name": "Support Group",
+    "participantCount": 42,
+    "senderParticipant": {
+      "jid": "6281234567890@s.whatsapp.net",
+      "number": "6281234567890",
+      "role": "member",
+      "identifier": "6281234567890@s.whatsapp.net"
+    }
+  },
+  "message": {
+    "type": "extendedTextMessage",
+    "text": "Halo @6289999999999",
+    "mentions": [
+      {
+        "jid": "6289999999999@s.whatsapp.net",
+        "number": "6289999999999",
+        "identifier": "6289999999999@s.whatsapp.net",
+        "resolved": true
+      },
+      {
+        "lid": "987654321@lid",
+        "identifier": "987654321@lid",
+        "resolved": false
+      }
+    ]
+  }
+}
+```
+
+Media example:
+
+```json
+{
+  "eventType": "message.received",
+  "deviceId": "dev_123",
+  "message": {
+    "type": "image",
+    "text": "Payment proof",
+    "media": {
+      "type": "image",
+      "providerMediaId": "123456789",
+      "mimeType": "image/jpeg",
+      "fileName": "123456789.jpeg",
+      "caption": "Payment proof",
+      "size": 204800,
+      "sha256": "base64-or-provider-hash",
+      "stored": true,
+      "storage": {
+        "driver": "s3",
+        "key": "whatsapp/meta/dev_123/wamid.x/123456789.jpeg",
+        "url": "https://cdn.example.com/whatsapp/meta/dev_123/wamid.x/123456789.jpeg"
+      }
+    }
+  }
+}
+```
+
+Media handling notes:
+
+- By default, Meta Cloud API and Baileys media messages are downloaded and stored using the configured storage driver (`local` or `s3`).
+- Set `INBOUND_MEDIA_AUTO_DOWNLOAD=false` to skip media download/storage and keep metadata only.
+- If media storage succeeds, `message.media.stored` is `true` and `message.media.storage` contains `driver`, `key`, and `url`.
+- If auto-download is disabled, webhook payloads still include `message.media` metadata with `stored: false` and `storage: null`.
+- If media download/storage fails, the webhook is still delivered with metadata, `stored: false`, and `storageError` so consumers can still save the message event.
+- `status@broadcast` messages are ignored by inbox persistence and do not create inbox threads/messages.
+- Mention targets are enriched from saved contacts when possible. If a mention cannot be resolved, the payload still includes `identifier`; LID mentions also include `lid`.
+
+Secret verification example:
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verifyWebhookSignature(rawBody: string, signature: string, secret: string) {
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const actual = Buffer.from(signature, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+
+  return (
+    actual.length === expectedBuffer.length &&
+    timingSafeEqual(actual, expectedBuffer)
+  );
+}
+```
 
 ## Production Checklist
 

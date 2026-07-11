@@ -31,6 +31,23 @@ export interface ConnectionManagerEvents {
 			name?: string;
 			providerContactId?: string;
 		};
+		chat?: {
+			jid: string;
+			type: "private" | "group" | "channel" | "broadcast";
+			isGroup: boolean;
+		};
+		sender?: {
+			jid?: string;
+			number?: string;
+			lid?: string;
+			name?: string;
+			providerContactId?: string;
+		};
+		group?: {
+			jid: string;
+			name?: string;
+			participantCount?: number;
+		};
 		message: {
 			text?: string;
 			type: string;
