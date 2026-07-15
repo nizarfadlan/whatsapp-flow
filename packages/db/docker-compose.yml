@@ -3,6 +3,8 @@ name: whatsapp-flow
 services:
   postgres:
     image: postgres
+    profiles:
+      - local-db
     container_name: whatsapp-flow-postgres
     environment:
       POSTGRES_DB: whatsapp-flow
