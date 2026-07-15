@@ -50,7 +50,7 @@ FROM base AS server
 ENV NODE_ENV=production
 ENV PORT=3000
 COPY --from=prod-deps --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=prod-deps --chown=node:node /app/apps/server/node_modules ./apps/server/node_modules
+COPY --from=prod-deps --chown=bun:bun /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=builder --chown=bun:bun /app/package.json ./package.json
 COPY --from=builder --chown=bun:bun /app/apps/server/package.json ./apps/server/package.json
 COPY --from=builder --chown=bun:bun /app/apps/server/dist ./apps/server/dist
