@@ -5,10 +5,12 @@ import {
 	integer,
 	pgEnum,
 	pgTable,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { user } from "./auth";
 import { device } from "./device";
 
 export const contactSourceEnum = pgEnum("contact_source", [
@@ -95,6 +97,61 @@ export const chatGroup = pgTable(
 	],
 );
 
+export const tag = pgTable(
+	"tag",
+	{
+		id: text("id").primaryKey(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("tag_user_name_unique_idx").on(
+			table.userId,
+			sql`lower(${table.name})`,
+		),
+		index("tag_user_idx").on(table.userId),
+	],
+);
+
+export const contactTag = pgTable(
+	"contact_tag",
+	{
+		contactId: text("contact_id")
+			.notNull()
+			.references(() => contact.id, { onDelete: "cascade" }),
+		tagId: text("tag_id")
+			.notNull()
+			.references(() => tag.id, { onDelete: "cascade" }),
+	},
+	(table) => [
+		primaryKey({ columns: [table.contactId, table.tagId] }),
+		index("contact_tag_tag_idx").on(table.tagId),
+	],
+);
+
+export const groupTag = pgTable(
+	"group_tag",
+	{
+		groupId: text("group_id")
+			.notNull()
+			.references(() => chatGroup.id, { onDelete: "cascade" }),
+		tagId: text("tag_id")
+			.notNull()
+			.references(() => tag.id, { onDelete: "cascade" }),
+	},
+	(table) => [
+		primaryKey({ columns: [table.groupId, table.tagId] }),
+		index("group_tag_tag_idx").on(table.tagId),
+	],
+);
+
 export const groupParticipantRoleEnum = pgEnum("group_participant_role", [
 	"member",
 	"admin",
@@ -125,11 +182,12 @@ export const groupParticipant = pgTable(
 	],
 );
 
-export const contactRelations = relations(contact, ({ one }) => ({
+export const contactRelations = relations(contact, ({ one, many }) => ({
 	device: one(device, {
 		fields: [contact.deviceId],
 		references: [device.id],
 	}),
+	tags: many(contactTag),
 }));
 
 export const chatGroupRelations = relations(chatGroup, ({ one, many }) => ({
@@ -138,6 +196,38 @@ export const chatGroupRelations = relations(chatGroup, ({ one, many }) => ({
 		references: [device.id],
 	}),
 	participants: many(groupParticipant),
+	tags: many(groupTag),
+}));
+
+export const tagRelations = relations(tag, ({ one, many }) => ({
+	user: one(user, {
+		fields: [tag.userId],
+		references: [user.id],
+	}),
+	contacts: many(contactTag),
+	groups: many(groupTag),
+}));
+
+export const contactTagRelations = relations(contactTag, ({ one }) => ({
+	contact: one(contact, {
+		fields: [contactTag.contactId],
+		references: [contact.id],
+	}),
+	tag: one(tag, {
+		fields: [contactTag.tagId],
+		references: [tag.id],
+	}),
+}));
+
+export const groupTagRelations = relations(groupTag, ({ one }) => ({
+	group: one(chatGroup, {
+		fields: [groupTag.groupId],
+		references: [chatGroup.id],
+	}),
+	tag: one(tag, {
+		fields: [groupTag.tagId],
+		references: [tag.id],
+	}),
 }));
 
 export const groupParticipantRelations = relations(

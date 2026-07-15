@@ -56,7 +56,7 @@ export function MediaUpload({
 
 		setUploading(true);
 		try {
-			const { driver, uploadUrl, publicUrl, key } =
+			const { driver, uploadUrl, uploadMethod, fields, publicUrl, key } =
 				await createUploadUrl.mutateAsync({
 					fileName: file.name,
 					mimeType: file.type || "application/octet-stream",
@@ -64,10 +64,14 @@ export function MediaUpload({
 				});
 
 			if (driver === "s3") {
+				const formData = new FormData();
+				for (const [name, fieldValue] of Object.entries(fields)) {
+					formData.append(name, fieldValue);
+				}
+				formData.append("file", file);
 				const res = await fetch(uploadUrl, {
-					method: "PUT",
-					body: file,
-					headers: { "Content-Type": file.type },
+					method: uploadMethod,
+					body: formData,
 				});
 				if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
 			} else {

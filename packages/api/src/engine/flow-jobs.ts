@@ -4,13 +4,17 @@ import {
 	flowExecutionLog,
 	flowSession,
 } from "@whatsapp-flow/db/schema/device";
-import { sendDeviceMessage } from "@whatsapp-flow/whatsapp";
+import {
+	derivePrivateIdentityKey,
+	sendDeviceMessage,
+} from "@whatsapp-flow/whatsapp";
 import { and, eq, lte } from "drizzle-orm";
 import { logger } from "../observability/logger";
 import {
 	continueFlowExecution,
 	emitFlowSessionUpdated,
 	executeFlow,
+	parseInteractiveWaitContext,
 	recordFlowExecutionEvent,
 	resolveFlowTemplate,
 	resumeWaitingSessionById,
@@ -19,6 +23,7 @@ import type { JobRecord } from "./job-queue";
 import type {
 	FlowContinueJobPayload,
 	FlowExecuteJobPayload,
+	FlowPollResumeJobPayload,
 	FlowResumeJobPayload,
 	FlowWaitTimeoutJobPayload,
 	FlowWaitWarningJobPayload,
@@ -89,6 +94,7 @@ export async function processFlowResumeJob(
 			providerMessageId: input.triggerProviderMessageId,
 		},
 		job.id,
+		input.reply,
 	);
 
 	if (!result) {
@@ -110,6 +116,90 @@ export async function processFlowResumeJob(
 			error: result.error,
 		});
 	}
+}
+
+export async function processFlowPollResumeJob(
+	job: JobRecord & {
+		kind: "flow.poll_resume";
+		payload: FlowPollResumeJobPayload;
+	},
+) {
+	const input = job.payload;
+	const [session] = await db
+		.select()
+		.from(flowSession)
+		.where(
+			and(
+				eq(flowSession.deviceId, input.deviceId),
+				eq(flowSession.waitingProviderMessageId, input.pollCreationMessageId),
+			),
+		)
+		.limit(1);
+	if (!session) {
+		throw new Error("poll_wait_binding_not_visible");
+	}
+	if (session.status !== "waiting") return;
+	const context = parseInteractiveWaitContext(session.waitContext);
+	if (!context) {
+		logger.info("flow.poll_resume.noop", {
+			reason: "wrong_poll_binding",
+			jobId: job.id,
+		});
+		return;
+	}
+	if (
+		context.kind !== "poll" ||
+		context.deliveryMode !== "native_poll" ||
+		!sameMessageKey(context.pollMessageKey, input.pollCreationKey)
+	) {
+		logger.info("flow.poll_resume.noop", {
+			reason: "wrong_poll_binding",
+			jobId: job.id,
+		});
+		return;
+	}
+	const voterIdentity = derivePrivateIdentityKey({
+		jid: input.voterJid,
+		number: input.voterNumber,
+		lid: input.voterLid,
+	});
+	if (voterIdentity !== session.contactKey) {
+		logger.info("flow.poll_resume.noop", {
+			reason: "wrong_voter",
+			jobId: job.id,
+		});
+		return;
+	}
+	const selected = context.options.find(
+		(option) => option.text === input.selectedOptionText,
+	);
+	if (!selected) {
+		logger.info("flow.poll_resume.noop", {
+			reason: "wrong_option",
+			jobId: job.id,
+		});
+		return;
+	}
+	await resumeWaitingSessionById(
+		session.id,
+		selected.text,
+		input.voterJid,
+		undefined,
+		job.id,
+	);
+}
+
+function sameMessageKey(
+	left: import("baileys").WAMessageKey | undefined,
+	right: import("baileys").WAMessageKey,
+) {
+	return Boolean(
+		left &&
+			left.id === right.id &&
+			left.remoteJid === right.remoteJid &&
+			(left.fromMe ?? false) === (right.fromMe ?? false) &&
+			(left.participant ?? "") === (right.participant ?? ""),
+	);
 }
 
 export async function processFlowContinueJob(input: FlowContinueJobPayload) {

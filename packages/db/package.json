@@ -13,7 +13,7 @@
 		"db:push": "drizzle-kit push",
 		"db:generate": "drizzle-kit generate",
 		"db:studio": "drizzle-kit studio",
-		"db:migrate": "drizzle-kit migrate",
+		"db:migrate": "bun scripts/migrate.ts",
 		"db:start": "docker compose up -d",
 		"db:watch": "docker compose up",
 		"db:stop": "docker compose stop",

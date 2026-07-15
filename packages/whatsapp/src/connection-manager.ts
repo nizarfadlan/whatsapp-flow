@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { db } from "@whatsapp-flow/db";
 import { device } from "@whatsapp-flow/db/schema/device";
@@ -7,6 +8,7 @@ import {
 	DEFAULT_CONNECTION_CONFIG,
 	downloadMediaMessage,
 	fetchLatestBaileysVersion,
+	getAggregateVotesInPollMessage,
 	makeWASocket,
 	type WAMessage,
 } from "baileys";
@@ -31,8 +33,10 @@ import {
 	isLidJid,
 	isPhoneJid,
 	normalizeContactNumber,
+	resolvePollUpdateVoter,
 	toPhoneJid,
 } from "./identity";
+import { normalizeBaileysMessage } from "./message-content";
 import {
 	connectMetaDevice,
 	disconnectMetaDevice,
@@ -46,24 +50,6 @@ import type {
 	SyncedGroup,
 	SyncedNewsletter,
 } from "./types";
-
-function extractMessageText(message: WAMessage) {
-	const content = message.message;
-	return (
-		content?.conversation ??
-		content?.extendedTextMessage?.text ??
-		content?.imageMessage?.caption ??
-		content?.videoMessage?.caption ??
-		content?.buttonsResponseMessage?.selectedDisplayText ??
-		content?.listResponseMessage?.title ??
-		undefined
-	);
-}
-
-function extractMessageType(message: WAMessage) {
-	const content = message.message;
-	return Object.keys(content ?? {})[0] ?? "unknown";
-}
 
 function toNewsletterJid(id: string) {
 	return id.endsWith("@newsletter") ? id : `${id}@newsletter`;
@@ -370,6 +356,9 @@ export class ConnectionManager extends EventEmitter {
 		});
 		socket.ev.on("messages.upsert", (upsert) => {
 			void this.handleMessagesUpsert(deviceId, socket, upsert);
+		});
+		socket.ev.on("messages.update", (updates) => {
+			void this.handlePollUpdates(deviceId, socket, updates);
 		});
 		socket.ev.on("contacts.upsert", (contacts) => {
 			void this.handleContactsUpsert(deviceId, socket, contacts);
@@ -761,6 +750,54 @@ export class ConnectionManager extends EventEmitter {
 		});
 	}
 
+	private async handlePollUpdates(
+		deviceId: string,
+		socket: NonNullable<DeviceConnection["socket"]>,
+		updates: BaileysEventMap["messages.update"],
+	) {
+		if (this.connections.get(deviceId)?.socket !== socket) return;
+		for (const { key, update } of updates) {
+			if (this.connections.get(deviceId)?.socket !== socket) return;
+			if (!update.pollUpdates?.length || !key.remoteJid) continue;
+			if (getChatType(key.remoteJid) !== "private") continue;
+			const content = await baileysMessageStore.get(deviceId, key);
+			if (!content) {
+				console.warn("poll_update_processing_failed", {
+					deviceId,
+					messageId: key.id,
+					retryable: true,
+					reason: "original_poll_content_missing",
+				});
+				continue;
+			}
+			const pollMessage: WAMessage = { key, message: content };
+			for (const pollUpdate of update.pollUpdates) {
+				const updateKey = pollUpdate.pollUpdateMessageKey;
+				const voter = resolvePollUpdateVoter(updateKey);
+				if (!voter || getChatType(voter.jid) !== "private") continue;
+				const votes = getAggregateVotesInPollMessage(
+					{ message: pollMessage.message, pollUpdates: [pollUpdate] },
+					socket.user?.id,
+				);
+				const selected = votes.find((vote) => vote.voters.includes(voter.jid));
+				if (!selected) continue;
+				const updateIdentity =
+					updateKey?.id ??
+					createHash("sha256")
+						.update(JSON.stringify({ key, updateKey, selected: selected.name }))
+						.digest("hex");
+				this.emit("device:poll-vote", {
+					deviceId,
+					pollCreationKey: key,
+					pollCreationMessageId: key.id ?? "",
+					voter,
+					selectedOptionText: selected.name,
+					updateIdentity,
+				});
+			}
+		}
+	}
+
 	private async handleMessagesUpsert(
 		deviceId: string,
 		socket: NonNullable<DeviceConnection["socket"]>,
@@ -781,6 +818,7 @@ export class ConnectionManager extends EventEmitter {
 				continue;
 			}
 
+			const normalizedMessage = normalizeBaileysMessage(message);
 			const resolved = await this.resolveIncomingChatJid(
 				deviceId,
 				message.key.remoteJid,
@@ -836,8 +874,9 @@ export class ConnectionManager extends EventEmitter {
 							}
 						: undefined,
 				message: {
-					text: extractMessageText(message),
-					type: extractMessageType(message),
+					text: normalizedMessage.text,
+					type: normalizedMessage.type,
+					reply: normalizedMessage.reply,
 					raw: message,
 					messageKey: message.key,
 					providerMessageId: message.key.id ?? undefined,

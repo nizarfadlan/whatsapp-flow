@@ -14,6 +14,59 @@ export interface DeviceConnection {
 	status: DeviceStatus;
 }
 
+export type IncomingReplyDescriptor = {
+	kind: "button" | "list" | "template" | "interactive";
+	selectedId?: string;
+	selectedText?: string;
+};
+
+export type DeviceMessagePayload = {
+	text?: string;
+	type: string;
+	reply?: IncomingReplyDescriptor;
+	raw: unknown;
+	messageKey?: import("baileys").WAMessageKey;
+	providerMessageId?: string;
+	inboxReservation?: {
+		messageId: string;
+		threadId: string;
+	};
+};
+
+export type DeviceMessageEvent = {
+	deviceId: string;
+	provider?: WhatsAppProvider;
+	contact: {
+		jid: string;
+		number?: string;
+		lid?: string;
+		username?: string;
+		identityKey?: string;
+		name?: string;
+		providerContactId?: string;
+	};
+	chat?: {
+		jid: string;
+		type: "private" | "group" | "channel" | "broadcast";
+		isGroup: boolean;
+	};
+	sender?: {
+		jid?: string;
+		number?: string;
+		lid?: string;
+		username?: string;
+		identityKey?: string;
+		name?: string;
+		providerContactId?: string;
+	};
+	group?: {
+		jid: string;
+		name?: string;
+		participantCount?: number;
+	};
+	message: DeviceMessagePayload;
+};
+
 export interface ConnectionManagerEvents {
 	"device:status": {
 		deviceId: string;
@@ -29,44 +82,18 @@ export interface ConnectionManagerEvents {
 		explicit: boolean;
 	};
 	"device:qr": { deviceId: string; qr: string };
-	"device:message": {
+	"device:message": DeviceMessageEvent;
+	"device:message-persisted": DeviceMessageEvent & {
+		inboxMessageId: string;
+		threadId: string;
+	};
+	"device:poll-vote": {
 		deviceId: string;
-		provider?: WhatsAppProvider;
-		contact: {
-			jid: string;
-			number?: string;
-			lid?: string;
-			username?: string;
-			identityKey?: string;
-			name?: string;
-			providerContactId?: string;
-		};
-		chat?: {
-			jid: string;
-			type: "private" | "group" | "channel" | "broadcast";
-			isGroup: boolean;
-		};
-		sender?: {
-			jid?: string;
-			number?: string;
-			lid?: string;
-			username?: string;
-			identityKey?: string;
-			name?: string;
-			providerContactId?: string;
-		};
-		group?: {
-			jid: string;
-			name?: string;
-			participantCount?: number;
-		};
-		message: {
-			text?: string;
-			type: string;
-			raw: unknown;
-			messageKey?: import("baileys").WAMessageKey;
-			providerMessageId?: string;
-		};
+		pollCreationKey: import("baileys").WAMessageKey;
+		pollCreationMessageId: string;
+		voter: { jid: string; number?: string; lid?: string; identityKey: string };
+		selectedOptionText: string;
+		updateIdentity: string;
 	};
 	"device:contacts": {
 		deviceId: string;

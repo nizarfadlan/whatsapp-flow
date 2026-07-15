@@ -57,6 +57,9 @@ export interface TriggerNodeData {
 	webhookToken?: string;
 	cronExpression?: string;
 	contactNumber?: string;
+	chatScope?: "any" | "private" | "groups";
+	groupTagIds?: string[];
+	senderTagIds?: string[];
 }
 
 export interface MessageNodeData {
@@ -93,13 +96,15 @@ export type WaitForReplyWarning = {
 
 export interface InteractiveNodeData {
 	id: string;
-	nodeType: "send-button" | "send-list" | "send-quick-reply";
+	nodeType: "send-button" | "send-list" | "send-quick-reply" | "send-poll";
 	label: string;
 	category: "interactive";
 	bodyText?: string;
 	footerText?: string;
 	buttonText?: string;
 	buttons?: { id: string; text: string }[];
+	question?: string;
+	options?: { id: string; text: string }[];
 	sections?: {
 		title: string;
 		rows: { id: string; title: string; description?: string }[];
@@ -182,7 +187,8 @@ export function isInteractiveBranchNode(
 	return (
 		data.nodeType === "send-button" ||
 		data.nodeType === "send-list" ||
-		data.nodeType === "send-quick-reply"
+		data.nodeType === "send-quick-reply" ||
+		data.nodeType === "send-poll"
 	);
 }
 
@@ -195,10 +201,10 @@ export function getInteractiveOptionHandles(
 			? (data.sections ?? []).flatMap((section) =>
 					(section.rows ?? []).map((row) => ({ id: row.id, label: row.title })),
 				)
-			: (data.buttons ?? []).map((button) => ({
-					id: button.id,
-					label: button.text,
-				}));
+			: (data.nodeType === "send-poll"
+					? (data.options ?? [])
+					: (data.buttons ?? [])
+				).map((option) => ({ id: option.id, label: option.text }));
 
 	return options.map((option, index) => ({
 		id: `option:${option.id}`,
@@ -613,6 +619,27 @@ export function SendQuickReplyNode({ data, selected }: NodeProps) {
 	);
 }
 
+export function SendPollNode({ data, selected }: NodeProps) {
+	const d = data as unknown as InteractiveNodeData;
+	return (
+		<BaseFlowNode
+			data={d}
+			selected={selected}
+			icon={List}
+			category="interactive"
+		>
+			{d.question && (
+				<span className="max-w-44 truncate text-[10px] text-muted-foreground">
+					{d.question}
+				</span>
+			)}
+			<span className="text-[10px] text-muted-foreground">
+				{d.options?.length ?? 0} options · {getWaitSummary(d)}
+			</span>
+		</BaseFlowNode>
+	);
+}
+
 // Logic nodes
 export function ConditionNode({ data, selected }: NodeProps) {
 	const d = data as unknown as LogicNodeData;
@@ -741,6 +768,7 @@ export const nodeTypes = {
 	"send-button": SendButtonNode,
 	"send-list": SendListNode,
 	"send-quick-reply": SendQuickReplyNode,
+	"send-poll": SendPollNode,
 	condition: ConditionNode,
 	delay: DelayNode,
 	"set-variable": SetVariableNode,
@@ -823,6 +851,12 @@ export const paletteCategories: PaletteCategory[] = [
 				icon: Reply,
 				category: "interactive",
 			},
+			{
+				type: "send-poll",
+				label: "Poll",
+				icon: List,
+				category: "interactive",
+			},
 		],
 	},
 	{
@@ -876,6 +910,10 @@ function nextNodeId() {
 	return `node_${Date.now()}_${nodeIdCounter}`;
 }
 
+function createPollOptionId() {
+	return globalThis.crypto.randomUUID();
+}
+
 const defaultLabels: Record<NodeTypeName, string> = {
 	trigger: "Trigger",
 	"send-text": "Send Text",
@@ -889,6 +927,7 @@ const defaultLabels: Record<NodeTypeName, string> = {
 	"send-button": "Send Buttons",
 	"send-list": "Send List",
 	"send-quick-reply": "Quick Reply",
+	"send-poll": "Send Poll",
 	condition: "Condition",
 	delay: "Delay",
 	"set-variable": "Set Variable",
@@ -912,6 +951,9 @@ export function createTriggerNode(): Node {
 			category: "trigger",
 			triggerKind: "keyword",
 			keyword: "",
+			chatScope: "any",
+			groupTagIds: [],
+			senderTagIds: [],
 		},
 	};
 }
@@ -988,6 +1030,20 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 					...base.data,
 					bodyText: "",
 					buttons: [],
+					timeoutMinutes: 1440,
+					replyWarnings: [],
+				},
+			};
+		case "send-poll":
+			return {
+				...base,
+				data: {
+					...base.data,
+					question: "",
+					options: [
+						{ id: createPollOptionId(), text: "" },
+						{ id: createPollOptionId(), text: "" },
+					],
 					timeoutMinutes: 1440,
 					replyWarnings: [],
 				},
@@ -1115,7 +1171,6 @@ export function remapLegacyEdges(edges: Edge[], nodes: Node[] = []): Edge[] {
 			)
 			.map((node) => node.id),
 	);
-	legacyTriggerIds.add("start");
 
 	return edges.map((e) => {
 		const edge = { ...e };

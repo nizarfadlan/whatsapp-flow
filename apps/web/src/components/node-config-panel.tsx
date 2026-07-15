@@ -1,3 +1,4 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import {
 	Command,
@@ -47,6 +48,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTRPC } from "@/utils/trpc";
 import { ContactCombobox } from "./contact-combobox";
 import type {
 	ActionNodeData,
@@ -275,6 +277,131 @@ function TriggerScheduleConfig({
 					onChange={(e) => onUpdate({ contactNumber: e.target.value })}
 				/>
 			</Field>
+		</>
+	);
+}
+
+function TriggerTagSelector({
+	label,
+	selectedIds,
+	onChange,
+}: {
+	label: string;
+	selectedIds: string[];
+	onChange: (ids: string[]) => void;
+}) {
+	const trpc = useTRPC();
+	const { data: tags = [] } = useSuspenseQuery(
+		trpc.contact.listTags.queryOptions(),
+	);
+	const selectedTags = tags.filter((tag) => selectedIds.includes(tag.id));
+
+	return (
+		<Field label={label}>
+			<div className="flex flex-wrap gap-1 rounded-md border bg-background p-1.5">
+				{selectedTags.map((tag) => (
+					<Button
+						key={tag.id}
+						type="button"
+						variant="secondary"
+						size="xs"
+						className="h-5 gap-1 px-1.5 text-[10px]"
+						onClick={() =>
+							onChange(selectedIds.filter((tagId) => tagId !== tag.id))
+						}
+					>
+						{tag.name}
+						<X className="size-2.5" />
+					</Button>
+				))}
+				<Popover>
+					<PopoverTrigger
+						render={
+							<Button
+								type="button"
+								variant="ghost"
+								size="xs"
+								className="h-5 px-1.5 text-[10px]"
+							/>
+						}
+					>
+						<Plus className="size-2.5" />
+						Add tag
+					</PopoverTrigger>
+					<PopoverContent className="w-52 p-1" align="start">
+						{tags.length === 0 ? (
+							<p className="p-2 text-[10px] text-muted-foreground">
+								Create tags from the Contacts table first.
+							</p>
+						) : (
+							tags.map((tag) => {
+								const selected = selectedIds.includes(tag.id);
+								return (
+									<Button
+										key={tag.id}
+										type="button"
+										variant="ghost"
+										className="h-7 w-full justify-start text-xs"
+										onClick={() =>
+											onChange(
+												selected
+													? selectedIds.filter((tagId) => tagId !== tag.id)
+													: [...selectedIds, tag.id],
+											)
+										}
+									>
+										{selected ? "✓ " : ""}
+										{tag.name}
+									</Button>
+								);
+							})
+						)}
+					</PopoverContent>
+				</Popover>
+			</div>
+		</Field>
+	);
+}
+
+function TriggerChatScopeConfig({
+	data,
+	onUpdate,
+}: {
+	data: TriggerNodeData;
+	onUpdate: (d: Partial<FlowNodeData>) => void;
+}) {
+	const chatScope = data.chatScope ?? "any";
+	return (
+		<>
+			<Field label="Chat scope">
+				<Select
+					value={chatScope}
+					onValueChange={(value) =>
+						onUpdate({ chatScope: value as TriggerNodeData["chatScope"] })
+					}
+				>
+					<SelectTrigger className="h-7 w-full text-xs" size="sm">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="any">Any chat</SelectItem>
+						<SelectItem value="private">Private chats</SelectItem>
+						<SelectItem value="groups">Groups</SelectItem>
+					</SelectContent>
+				</Select>
+			</Field>
+			{chatScope === "groups" && (
+				<TriggerTagSelector
+					label="Group must have any tag"
+					selectedIds={data.groupTagIds ?? []}
+					onChange={(groupTagIds) => onUpdate({ groupTagIds })}
+				/>
+			)}
+			<TriggerTagSelector
+				label="Sender must have any tag"
+				selectedIds={data.senderTagIds ?? []}
+				onChange={(senderTagIds) => onUpdate({ senderTagIds })}
+			/>
 		</>
 	);
 }
@@ -1244,6 +1371,156 @@ function InteractiveQuickReplyConfig({
 	);
 }
 
+function createPollOptionId() {
+	return globalThis.crypto.randomUUID();
+}
+
+function PollConfig({
+	data,
+	onUpdate,
+}: {
+	data: InteractiveNodeData;
+	onUpdate: (d: Partial<FlowNodeData>) => void;
+}) {
+	const options = data.options ?? [];
+	const trimmedLabels = options.map((option) => option.text.trim());
+	const duplicateLabels = new Set(
+		trimmedLabels.filter(
+			(label, index) => label && trimmedLabels.indexOf(label) !== index,
+		),
+	);
+	const updateOptions = (nextOptions: { id: string; text: string }[]) =>
+		onUpdate({ options: nextOptions });
+	const updateOption = (index: number, text: string) => {
+		const nextOptions = [...options];
+		nextOptions[index] = { ...nextOptions[index], text };
+		updateOptions(nextOptions);
+	};
+	const moveOption = (index: number, direction: -1 | 1) => {
+		const targetIndex = index + direction;
+		if (targetIndex < 0 || targetIndex >= options.length) return;
+		const nextOptions = [...options];
+		[nextOptions[index], nextOptions[targetIndex]] = [
+			nextOptions[targetIndex],
+			nextOptions[index],
+		];
+		updateOptions(nextOptions);
+	};
+
+	return (
+		<>
+			<Field label="Question">
+				<Textarea
+					className="min-h-16 text-xs"
+					maxLength={255}
+					placeholder="Ask a question..."
+					value={data.question ?? ""}
+					onChange={(event) => onUpdate({ question: event.target.value })}
+				/>
+				{!data.question?.trim() && (
+					<p className="text-[10px] text-destructive">
+						Question cannot be empty.
+					</p>
+				)}
+				<p className="text-[10px] text-muted-foreground">
+					{data.question?.length ?? 0}/255 characters
+				</p>
+			</Field>
+			<Field label={`Options (${options.length}/12)`}>
+				<div className="flex flex-col gap-1.5">
+					{options.map((option, index) => {
+						const trimmedLabel = option.text.trim();
+						const isDuplicate = duplicateLabels.has(trimmedLabel);
+						return (
+							<div key={option.id} className="flex flex-col gap-1">
+								<div className="flex items-center gap-1">
+									<Input
+										className="h-7 flex-1 text-xs"
+										maxLength={100}
+										placeholder={`Option ${index + 1}`}
+										value={option.text}
+										onChange={(event) =>
+											updateOption(index, event.target.value)
+										}
+									/>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-xs"
+										disabled={index === 0}
+										onClick={() => moveOption(index, -1)}
+										aria-label={`Move option ${index + 1} up`}
+									>
+										↑
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-xs"
+										disabled={index === options.length - 1}
+										onClick={() => moveOption(index, 1)}
+										aria-label={`Move option ${index + 1} down`}
+									>
+										↓
+									</Button>
+									{options.length > 2 && (
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-xs"
+											className="text-muted-foreground hover:text-destructive"
+											onClick={() =>
+												updateOptions(
+													options.filter((item) => item.id !== option.id),
+												)
+											}
+											aria-label={`Remove option ${index + 1}`}
+										>
+											<X className="size-3" />
+										</Button>
+									)}
+								</div>
+								{!trimmedLabel && (
+									<p className="text-[10px] text-destructive">
+										Option cannot be empty.
+									</p>
+								)}
+								{isDuplicate && (
+									<p className="text-[10px] text-destructive">
+										Option labels must be unique.
+									</p>
+								)}
+							</div>
+						);
+					})}
+					{options.length < 12 && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="h-7 justify-start text-xs"
+							onClick={() =>
+								updateOptions([
+									...options,
+									{ id: createPollOptionId(), text: "" },
+								])
+							}
+						>
+							<Plus className="size-3.5" />
+							Add option
+						</Button>
+					)}
+				</div>
+			</Field>
+			<ReplyWaitSettings
+				data={data}
+				onUpdate={onUpdate}
+				description="Waits for the contact to choose one of these poll options."
+			/>
+		</>
+	);
+}
+
 function ConditionConfig({
 	data,
 	onUpdate,
@@ -1818,6 +2095,9 @@ function TriggerConfigForm({
 					</SelectContent>
 				</Select>
 			</Field>
+			{(kind === "keyword" || kind === "any_message") && (
+				<TriggerChatScopeConfig data={data} onUpdate={onUpdate} />
+			)}
 			{kind === "keyword" && (
 				<TriggerKeywordConfig data={data} onUpdate={onUpdate} />
 			)}
@@ -1829,7 +2109,8 @@ function TriggerConfigForm({
 			)}
 			{kind === "any_message" && (
 				<p className="text-[10px] text-muted-foreground">
-					Fires on every incoming message from any contact.
+					Fires on each incoming message that matches the selected chat scope
+					and tag filters.
 				</p>
 			)}
 		</div>
@@ -1891,6 +2172,8 @@ function InteractiveConfigForm({
 			return <InteractiveListConfig data={data} onUpdate={onUpdate} />;
 		case "send-quick-reply":
 			return <InteractiveQuickReplyConfig data={data} onUpdate={onUpdate} />;
+		case "send-poll":
+			return <PollConfig data={data} onUpdate={onUpdate} />;
 		default:
 			return null;
 	}

@@ -51,10 +51,16 @@ mock.module("./flow-node-secrets", () => ({
 
 const {
 	buildFlowWaitTimeoutJob,
+	buildInteractiveWaitContext,
+	buildPollMessage,
 	getDelayContinuationClaimTransfer,
 	getFlowSessionClaimOutcome,
 	getInteractiveOptions,
+	getInteractiveWaitSnapshotTargets,
+	getWaitingBranchMissingError,
+	parseInteractiveWaitContext,
 	resolveInteractiveReply,
+	resolveInteractiveWaitReply,
 } = await import("./flow-executor");
 const { waitTimeoutJobIdempotencyKey } = await import("./job-types");
 
@@ -163,6 +169,187 @@ describe("interactive flow options", () => {
 		};
 
 		expect(resolveInteractiveReply(node, "billing")).toBeNull();
+	});
+});
+
+describe("poll message building", () => {
+	const node = {
+		id: "poll",
+		type: "send-poll",
+		data: {
+			question: "Choose {{variables.topic}}",
+			options: [
+				{ id: "sales", text: "{{variables.first}}" },
+				{ id: "support", text: "{{variables.second}}" },
+			],
+		},
+	};
+	const context = {
+		contactNumber: null,
+		contactKey: "lid:987654321@lid",
+		incomingText: "",
+		variables: {
+			topic: "a team",
+			first: "Sales",
+			second: "Support",
+		},
+	};
+
+	test("accepts private LID targets and builds the numbered fallback", () => {
+		expect(buildPollMessage(node, "987654321@lid", context)).toEqual({
+			message: {
+				type: "poll",
+				name: "Choose a team",
+				values: ["Sales", "Support"],
+				selectableCount: 1,
+				fallbackText: "Choose a team\n1. Sales\n2. Support",
+			},
+			options: [
+				{
+					handle: "option:sales",
+					id: "sales",
+					text: "Sales",
+					index: 1,
+				},
+				{
+					handle: "option:support",
+					id: "support",
+					text: "Support",
+					index: 2,
+				},
+			],
+		});
+	});
+
+	test("rejects option labels that collide after template rendering", () => {
+		expect(() =>
+			buildPollMessage(node, "15551234567@s.whatsapp.net", {
+				...context,
+				variables: {
+					...context.variables,
+					second: "Sales",
+				},
+			}),
+		).toThrow("Poll option text must be unique");
+	});
+});
+
+describe("interactive wait snapshots", () => {
+	const node = {
+		id: "buttons",
+		type: "send-button",
+		data: {
+			buttons: [
+				{ id: "sales", text: "Sales" },
+				{ id: "support", text: "Support" },
+			],
+		},
+	};
+	const adjacency = new Map([
+		[
+			"buttons",
+			[
+				{
+					id: "sales-edge",
+					source: "buttons",
+					target: "sales-target",
+					sourceHandle: "option:sales",
+				},
+				{
+					id: "support-edge",
+					source: "buttons",
+					target: "support-target",
+					sourceHandle: "option:support",
+				},
+			],
+		],
+	]);
+
+	test("captures immutable option metadata and branch targets", () => {
+		expect(buildInteractiveWaitContext(node, adjacency, "baileys")).toEqual({
+			version: 1,
+			kind: "interactive",
+			deliveryMode: "text_fallback",
+			provider: "baileys",
+			options: [
+				{
+					id: "sales",
+					text: "Sales",
+					index: 1,
+					handle: "option:sales",
+					nextNodeIds: ["sales-target"],
+				},
+				{
+					id: "support",
+					text: "Support",
+					index: 2,
+					handle: "option:support",
+					nextNodeIds: ["support-target"],
+				},
+			],
+		});
+	});
+
+	test("prefers a structured selected id over selected text and incoming text", () => {
+		const context = buildInteractiveWaitContext(node, adjacency);
+		expect(
+			resolveInteractiveWaitReply(context, "1", {
+				kind: "button",
+				selectedId: "support",
+				selectedText: "Sales",
+			})?.id,
+		).toBe("support");
+	});
+
+	test("uses structured selected text before the legacy incoming text fallback", () => {
+		const context = buildInteractiveWaitContext(node, adjacency);
+		expect(
+			resolveInteractiveWaitReply(context, "1", {
+				kind: "list",
+				selectedText: " support ",
+			})?.id,
+		).toBe("support");
+	});
+
+	test("routes a snapshot to its stored target after current edges change", () => {
+		const context = buildInteractiveWaitContext(node, adjacency);
+		const selected = resolveInteractiveWaitReply(context, "sales");
+		expect(selected).not.toBeNull();
+		if (!selected) throw new Error("Expected the sales option to resolve");
+		const editedNodes = [
+			{ id: "sales-target", type: "send-text", data: {} },
+			{ id: "new-sales-target", type: "send-text", data: {} },
+		];
+		const targets = getInteractiveWaitSnapshotTargets(selected, editedNodes);
+		expect(targets.nodes.map(({ id }) => id)).toEqual(["sales-target"]);
+		expect(targets.missingNodeIds).toEqual([]);
+	});
+
+	test("reports every missing snapshot branch target", () => {
+		const context = buildInteractiveWaitContext(node, adjacency);
+		const selected = resolveInteractiveWaitReply(context, "sales");
+		expect(selected).not.toBeNull();
+		if (!selected) throw new Error("Expected the sales option to resolve");
+		selected.nextNodeIds.push("deleted-target");
+		const targets = getInteractiveWaitSnapshotTargets(selected, [
+			{ id: "sales-target", type: "send-text", data: {} },
+		]);
+		expect(targets.nodes.map(({ id }) => id)).toEqual(["sales-target"]);
+		expect(targets.missingNodeIds).toEqual(["deleted-target"]);
+		expect(getWaitingBranchMissingError(selected, targets.missingNodeIds)).toBe(
+			"waiting_branch_missing: Selected option 1. Sales has missing target: deleted-target",
+		);
+	});
+
+	test("keeps null, invalid, or unknown contexts on legacy current-graph matching", () => {
+		expect(parseInteractiveWaitContext(null)).toBeNull();
+		expect(resolveInteractiveReply(node, "2")?.id).toBe("support");
+		expect(
+			parseInteractiveWaitContext({ version: 2, kind: "interactive" }),
+		).toBeNull();
+		expect(
+			parseInteractiveWaitContext({ version: 1, kind: "interactive" }),
+		).toBeNull();
 	});
 });
 

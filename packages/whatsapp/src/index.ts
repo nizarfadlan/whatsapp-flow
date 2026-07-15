@@ -36,6 +36,7 @@ export type {
 	ConnectionManagerEvents,
 	DeviceConnection,
 	DeviceStatus,
+	IncomingReplyDescriptor,
 	SyncedContact,
 	SyncedGroup,
 	SyncedNewsletter,

@@ -5,17 +5,6 @@ import {
 	Outlet,
 	useLocation,
 } from "@tanstack/react-router";
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogMedia,
-	AlertDialogTitle,
-} from "@whatsapp-flow/ui/components/alert-dialog";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
 import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
@@ -56,7 +45,7 @@ import {
 	Undo2,
 	Users,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	categoryAccents,
@@ -121,14 +110,26 @@ function getTriggerPayload(nodes: Node[]) {
 	const data = triggerNode?.data as FlowNodeData | undefined;
 	if (data?.nodeType !== "trigger") return null;
 
+	const messageTriggerConfig = {
+		chatScope: data.chatScope ?? "any",
+		groupTagIds: data.groupTagIds ?? [],
+		senderTagIds: data.senderTagIds ?? [],
+	};
+
 	switch (data.triggerKind) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keywords: parseTriggerKeywords(data) },
+				triggerConfig: {
+					keywords: parseTriggerKeywords(data),
+					...messageTriggerConfig,
+				},
 			};
 		case "any_message":
-			return { triggerType: "any_message" as const, triggerConfig: null };
+			return {
+				triggerType: "any_message" as const,
+				triggerConfig: messageTriggerConfig,
+			};
 		case "webhook":
 			return {
 				triggerType: "webhook" as const,
@@ -195,14 +196,14 @@ function reconcileInteractiveEdges(
 		getInteractiveOptionHandles(data).map((option) => [option.id, option]),
 	);
 
-	return edges.flatMap((edge) => {
+	return edges.map((edge) => {
 		if (edge.source !== nodeId || !edge.sourceHandle?.startsWith("option:")) {
-			return [edge];
+			return edge;
 		}
 		const option = validOptions.get(edge.sourceHandle);
 		return option
-			? [{ ...edge, label: `${option.index}. ${option.label}` }]
-			: [];
+			? { ...edge, label: `${option.index}. ${option.label}` }
+			: edge;
 	});
 }
 
@@ -224,10 +225,14 @@ function FlowEditor() {
 	);
 
 	const initialized = useRef(false);
+	const validationRequest = useRef(0);
 	const [reactFlowInstance, setReactFlowInstance] =
 		useState<ReactFlowInstance | null>(null);
 	const [renameOpen, setRenameOpen] = useState(false);
 	const [renameValue, setRenameValue] = useState(flow.name);
+	const [graphDiagnostics, setGraphDiagnostics] = useState(
+		flow.graphDiagnostics,
+	);
 
 	const pushHistory = useEditorStore((s) => s.pushHistory);
 	const undo = useEditorStore((s) => s.undo);
@@ -239,6 +244,26 @@ function FlowEditor() {
 	const isDirty = useEditorStore((s) => s.isDirty);
 	const markSaved = useEditorStore((s) => s.markSaved);
 	const reset = useEditorStore((s) => s.reset);
+	const { mutate: validateGraph } = useMutation(
+		trpc.flow.validateGraph.mutationOptions(),
+	);
+	const validationGraph = useMemo(
+		() =>
+			JSON.stringify({
+				nodes: nodes.map((node) => ({
+					id: node.id,
+					type: node.type,
+					data: node.data,
+				})),
+				edges: edges.map((edge) => ({
+					id: edge.id,
+					source: edge.source,
+					target: edge.target,
+					sourceHandle: edge.sourceHandle,
+				})),
+			}),
+		[nodes, edges],
+	);
 
 	useEffect(() => {
 		resetNodeIdCounter();
@@ -249,6 +274,31 @@ function FlowEditor() {
 	useEffect(() => {
 		setRenameValue(flow.name);
 	}, [flow.name]);
+
+	useEffect(() => {
+		setGraphDiagnostics(flow.graphDiagnostics);
+	}, [flow.graphDiagnostics]);
+
+	useEffect(() => {
+		const requestId = ++validationRequest.current;
+		const timeout = window.setTimeout(() => {
+			const graph = JSON.parse(validationGraph) as {
+				nodes: Record<string, unknown>[];
+				edges: Record<string, unknown>[];
+			};
+			validateGraph(
+				{ id: flowId, nodes: graph.nodes, edges: graph.edges },
+				{
+					onSuccess: (diagnostics) => {
+						if (requestId === validationRequest.current) {
+							setGraphDiagnostics(diagnostics);
+						}
+					},
+				},
+			);
+		}, 250);
+		return () => window.clearTimeout(timeout);
+	}, [flowId, validateGraph, validationGraph]);
 
 	useEffect(() => {
 		if (initialized.current) return;
@@ -282,6 +332,52 @@ function FlowEditor() {
 	const onPaneClick = useCallback(() => selectNode(null), [selectNode]);
 
 	const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
+	const diagnosticNodeIds = useMemo(
+		() => new Set(graphDiagnostics.map((diagnostic) => diagnostic.nodeId)),
+		[graphDiagnostics],
+	);
+	const diagnosticEdgeIds = useMemo(
+		() =>
+			new Set(
+				graphDiagnostics.flatMap((diagnostic) =>
+					diagnostic.edgeId ? [diagnostic.edgeId] : [],
+				),
+			),
+		[graphDiagnostics],
+	);
+	const displayNodes = useMemo(
+		() =>
+			nodes.map((node) =>
+				diagnosticNodeIds.has(node.id)
+					? {
+							...node,
+							style: {
+								...node.style,
+								outline: "2px solid var(--destructive)",
+								outlineOffset: 2,
+							},
+						}
+					: node,
+			),
+		[nodes, diagnosticNodeIds],
+	);
+	const displayEdges = useMemo(
+		() =>
+			edges.map((edge) =>
+				diagnosticEdgeIds.has(edge.id)
+					? {
+							...edge,
+							animated: true,
+							style: {
+								...edge.style,
+								stroke: "var(--destructive)",
+								strokeWidth: 2.5,
+							},
+						}
+					: edge,
+			),
+		[edges, diagnosticEdgeIds],
+	);
 
 	const updateNodeData = useCallback(
 		(id: string, data: Partial<FlowNodeData>) => {
@@ -330,9 +426,48 @@ function FlowEditor() {
 		[setNodes, setEdges, pushHistory, selectedNodeId, selectNode],
 	);
 
+	const focusDiagnostic = useCallback(
+		(diagnostic: (typeof graphDiagnostics)[number]) => {
+			selectNode(diagnostic.nodeId);
+			setNodes((current) =>
+				current.map((node) => ({
+					...node,
+					selected: node.id === diagnostic.nodeId,
+				})),
+			);
+			setEdges((current) =>
+				current.map((edge) => ({
+					...edge,
+					selected: edge.id === diagnostic.edgeId,
+				})),
+			);
+			const target = nodes.find((node) => node.id === diagnostic.nodeId);
+			if (target) {
+				void reactFlowInstance?.fitView({
+					nodes: [target],
+					padding: 0.8,
+					duration: 300,
+				});
+			}
+		},
+		[selectNode, setNodes, setEdges, nodes, reactFlowInstance],
+	);
+
+	const removeDiagnosticEdge = useCallback(
+		(edgeId: string) => {
+			setEdges((current) => {
+				const nextEdges = current.filter((edge) => edge.id !== edgeId);
+				pushHistory(nodes, nextEdges);
+				return nextEdges;
+			});
+		},
+		[setEdges, pushHistory, nodes],
+	);
+
 	const saveMut = useMutation(
 		trpc.flow.update.mutationOptions({
-			onSuccess: () => {
+			onSuccess: (updated) => {
+				setGraphDiagnostics(updated.graphDiagnostics);
 				markSaved();
 				toast.success("Flow saved");
 				refetch();
@@ -647,8 +782,8 @@ function FlowEditor() {
 					<CardContent className="h-full min-h-0 flex-1 p-0">
 						<ReactFlow
 							className="size-full"
-							nodes={nodes}
-							edges={edges}
+							nodes={displayNodes}
+							edges={displayEdges}
 							onNodesChange={onNodesChange}
 							onEdgesChange={onEdgesChange}
 							onConnect={onConnect}
@@ -684,6 +819,58 @@ function FlowEditor() {
 
 				<Card className="w-80 shrink-0 overflow-y-auto rounded-none border-0 border-l bg-card/80">
 					<CardContent className="p-0">
+						{graphDiagnostics.length > 0 && (
+							<div className="flex flex-col gap-2 border-b p-3">
+								<div className="flex items-center gap-2 font-medium text-destructive text-xs">
+									<AlertTriangle className="size-3.5" />
+									Graph issues ({graphDiagnostics.length})
+								</div>
+								{graphDiagnostics.map((diagnostic, index) => (
+									<div
+										key={`${diagnostic.issueCode}-${diagnostic.edgeId ?? diagnostic.nodeId}-${index}`}
+										className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2"
+									>
+										<p className="text-[11px] leading-relaxed">
+											{diagnostic.message}
+										</p>
+										{diagnostic.missingHandles?.length ? (
+											<p className="text-[10px] text-muted-foreground">
+												Missing: {diagnostic.missingHandles.join(", ")}
+											</p>
+										) : null}
+										<div className="flex gap-1">
+											<Button
+												type="button"
+												variant="outline"
+												size="xs"
+												onClick={() => focusDiagnostic(diagnostic)}
+											>
+												Focus
+											</Button>
+											{diagnostic.edgeId && (
+												<Button
+													type="button"
+													variant="outline"
+													size="xs"
+													className="text-destructive"
+													onClick={() => {
+														if (diagnostic.edgeId) {
+															removeDiagnosticEdge(diagnostic.edgeId);
+														}
+													}}
+												>
+													Delete edge
+												</Button>
+											)}
+										</div>
+									</div>
+								))}
+								<p className="text-[10px] text-muted-foreground">
+									Reconnect missing branches manually from the highlighted
+									option handle.
+								</p>
+							</div>
+						)}
 						<NodeConfigPanel
 							node={selectedNode}
 							flowId={flowId}
@@ -711,19 +898,13 @@ function DeployDialog({
 	const trpc = useTRPC();
 	const [open, setOpen] = useState(false);
 	const [deviceId, setDeviceId] = useState("");
-	const [showConfirm, setShowConfirm] = useState(false);
 
 	const { data: devices } = useSuspenseQuery(trpc.device.list.queryOptions());
-	const { data: flows, refetch: refetchFlows } = useSuspenseQuery(
-		trpc.flow.list.queryOptions(),
-	);
 
 	const deployMut = useMutation(
 		trpc.flow.deploy.mutationOptions({
 			onSuccess: () => {
 				setOpen(false);
-				setShowConfirm(false);
-				refetchFlows();
 				toast.success(`"${flowName}" deployed`);
 			},
 			onError: (err) => toast.error(err.message ?? "Deploy failed"),
@@ -736,121 +917,66 @@ function DeployDialog({
 		}
 	}, [open, devices, deviceId]);
 
-	const activeFlowOnSelectedDevice = deviceId
-		? (flows.find(
-				(f) =>
-					f.id !== flowId && f.status === "active" && f.deviceId === deviceId,
-			) ?? null)
-		: null;
-
-	const selectedDevice = devices?.find((d) => d.id === deviceId);
-
-	const handleDeployClick = () => {
-		if (activeFlowOnSelectedDevice) {
-			setShowConfirm(true);
-		} else {
-			deployMut.mutate({ id: flowId, deviceId });
-		}
-	};
-
 	return (
-		<>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogTrigger
-					disabled={disabled}
-					className={cn(buttonVariants({ size: "sm" }), "h-7 text-xs")}
-				>
-					<Play className="size-3.5" />
-					Deploy
-				</DialogTrigger>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Deploy Flow</DialogTitle>
-						<DialogDescription>
-							Select device to run this flow on.
-						</DialogDescription>
-					</DialogHeader>
-					{devices && devices.length > 0 ? (
-						<div className="flex flex-col gap-1">
-							{devices.map((d) => {
-								const activeFlowOnDevice = flows.find(
-									(f) => f.status === "active" && f.deviceId === d.id,
-								);
-								return (
-									<Button
-										key={d.id}
-										type="button"
-										variant="ghost"
-										className={cn(
-											"h-auto justify-start rounded-lg border px-3 py-2 text-left text-xs",
-											deviceId === d.id
-												? "border-primary bg-primary/10"
-												: "border-border hover:bg-muted",
-										)}
-										onClick={() => setDeviceId(d.id)}
-									>
-										<span className="flex flex-col items-start gap-0.5">
-											<span className="font-medium">{d.name}</span>
-											<span className="text-[10px] text-muted-foreground">
-												{d.phoneNumber ?? "No phone"} · {d.status}
-												{activeFlowOnDevice && (
-													<span className="ml-1 text-amber-600">
-														(dengan "{activeFlowOnDevice.name}" aktif)
-													</span>
-												)}
-											</span>
+		<Dialog open={open} onOpenChange={setOpen}>
+			<DialogTrigger
+				disabled={disabled}
+				className={cn(buttonVariants({ size: "sm" }), "h-7 text-xs")}
+			>
+				<Play className="size-3.5" />
+				Deploy
+			</DialogTrigger>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Deploy Flow</DialogTitle>
+					<DialogDescription>
+						Select device to run this flow on.
+					</DialogDescription>
+				</DialogHeader>
+				{devices && devices.length > 0 ? (
+					<div className="flex flex-col gap-1">
+						{devices.map((d) => {
+							return (
+								<Button
+									key={d.id}
+									type="button"
+									variant="ghost"
+									className={cn(
+										"h-auto justify-start rounded-lg border px-3 py-2 text-left text-xs",
+										deviceId === d.id
+											? "border-primary bg-primary/10"
+											: "border-border hover:bg-muted",
+									)}
+									onClick={() => setDeviceId(d.id)}
+								>
+									<span className="flex flex-col items-start gap-0.5">
+										<span className="font-medium">{d.name}</span>
+										<span className="text-[10px] text-muted-foreground">
+											{d.phoneNumber ?? "No phone"} · {d.status}
 										</span>
-									</Button>
-								);
-							})}
-						</div>
-					) : (
-						<p className="text-muted-foreground text-xs">
-							No devices available. Add device first.
-						</p>
-					)}
-					<DialogFooter>
-						<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-							Cancel
-						</Button>
-						<Button
-							size="sm"
-							disabled={!deviceId || deployMut.isPending}
-							onClick={handleDeployClick}
-						>
-							{deployMut.isPending ? "Deploying..." : "Deploy"}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-
-			<AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogMedia className="bg-destructive/10">
-							<AlertTriangle className="size-5 text-destructive" />
-						</AlertDialogMedia>
-						<AlertDialogTitle>Deploy dan replace?</AlertDialogTitle>
-						<AlertDialogDescription>
-							Deploy ke <strong>{selectedDevice?.name ?? "device ini"}</strong>{" "}
-							akan mem.pause flow{" "}
-							<strong>"{activeFlowOnSelectedDevice?.name}"</strong> yang sedang
-							aktif. Hanya satu flow bisa aktif per device.
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>Batal</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={() => {
-								deployMut.mutate({ id: flowId, deviceId });
-								setShowConfirm(false);
-							}}
-						>
-							Deploy
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
-		</>
+									</span>
+								</Button>
+							);
+						})}
+					</div>
+				) : (
+					<p className="text-muted-foreground text-xs">
+						No devices available. Add device first.
+					</p>
+				)}
+				<DialogFooter>
+					<Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+						Cancel
+					</Button>
+					<Button
+						size="sm"
+						disabled={!deviceId || deployMut.isPending}
+						onClick={() => deployMut.mutate({ id: flowId, deviceId })}
+					>
+						{deployMut.isPending ? "Deploying..." : "Deploy"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }

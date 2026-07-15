@@ -30,6 +30,13 @@ export type OutgoingMessage =
 			languageCode: string;
 			bodyParameters?: string[];
 			header?: TemplateHeaderParameter;
+	  }
+	| {
+			type: "poll";
+			name: string;
+			values: string[];
+			selectableCount: 1;
+			fallbackText: string;
 	  };
 
 export async function sendWhatsAppMessage(
@@ -74,9 +81,14 @@ export async function sendWhatsAppMessage(
 				throw new Error("Baileys reactions require a message key");
 			}
 			return socket.sendMessage(jid, {
-				react: {
-					text: message.text,
-					key: message.messageKey,
+				react: { text: message.text, key: message.messageKey },
+			});
+		case "poll":
+			return socket.sendMessage(jid, {
+				poll: {
+					name: message.name,
+					values: message.values,
+					selectableCount: message.selectableCount,
 				},
 			});
 		case "template":

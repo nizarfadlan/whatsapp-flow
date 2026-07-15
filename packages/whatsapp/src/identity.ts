@@ -1,3 +1,5 @@
+import type { WAMessageKey } from "baileys";
+
 export type PrivateIdentityInput = {
 	jid?: string | null;
 	number?: string | null;
@@ -44,6 +46,29 @@ export function derivePrivateIdentityKey(input: PrivateIdentityInput) {
 	if (lid) return `lid:${lid}`;
 
 	return `jid:${input.jid ?? "unknown"}`;
+}
+
+export function resolvePollUpdateVoter(
+	updateKey: WAMessageKey | null | undefined,
+) {
+	const aliases = [
+		updateKey?.participantAlt,
+		updateKey?.remoteJidAlt,
+		updateKey?.participant,
+		updateKey?.remoteJid,
+	].filter((jid): jid is string => Boolean(jid));
+	const jid = aliases[0];
+	if (!jid) return null;
+
+	const phoneJid = aliases.find(isPhoneJid);
+	const number = phoneNumberFromJid(phoneJid) ?? undefined;
+	const lid = aliases.find(isLidJid);
+	return {
+		jid,
+		number,
+		lid,
+		identityKey: derivePrivateIdentityKey({ jid, number, lid }),
+	};
 }
 
 export function deriveThreadKey(input: ThreadIdentityInput) {

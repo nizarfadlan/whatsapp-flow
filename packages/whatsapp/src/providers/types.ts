@@ -29,6 +29,11 @@ export type ProviderMessageRef = {
 export type SendResult = {
 	provider: WhatsAppProvider;
 	messageId?: string;
+	/** Complete Baileys key when a later protocol operation must bind to it. */
+	messageKey?: WAMessageKey;
+	deliveryMode?: "native_poll" | "text_fallback";
+	/** Whether the original Baileys message content was durably persisted. */
+	originalMessageStored?: boolean;
 	raw?: unknown;
 };
 

@@ -6,7 +6,10 @@ import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import { and, eq, sql } from "drizzle-orm";
 import { derivePrivateIdentityKey, deriveThreadKey } from "../../identity";
-import type { ConnectionManagerEvents } from "../../types";
+import type {
+	ConnectionManagerEvents,
+	IncomingReplyDescriptor,
+} from "../../types";
 import { getMetaAppSecret } from "./transport";
 
 type EmitDeviceMessage = (
@@ -230,8 +233,10 @@ export async function handleMetaWebhook(input: {
 				message: {
 					text: extractMetaMessageText(message),
 					type: message.type ?? "unknown",
+					reply: extractMetaMessageReply(message),
 					raw: message,
 					providerMessageId: message.id,
+					inboxReservation: reserved,
 				},
 			});
 			processed++;
@@ -336,7 +341,7 @@ async function reserveInboundMetaMessage(input: {
 	from: string;
 	contactName?: string;
 	message: MetaWebhookMessage;
-}) {
+}): Promise<{ messageId: string; threadId: string } | null> {
 	const now = new Date();
 	const chatJid = toPhoneJid(input.from);
 	const identityKey = derivePrivateIdentityKey({
@@ -405,7 +410,7 @@ async function reserveInboundMetaMessage(input: {
 		.returning({ id: inboxThread.id });
 
 	const threadId = savedThread?.id;
-	if (!threadId || !input.message.id) return false;
+	if (!threadId || !input.message.id) return null;
 
 	const [insertedMessage] = await db
 		.insert(inboxMessage)
@@ -422,7 +427,7 @@ async function reserveInboundMetaMessage(input: {
 		.onConflictDoNothing()
 		.returning({ id: inboxMessage.id });
 
-	if (!insertedMessage) return false;
+	if (!insertedMessage) return null;
 
 	await db
 		.update(inboxThread)
@@ -434,10 +439,10 @@ async function reserveInboundMetaMessage(input: {
 		})
 		.where(eq(inboxThread.id, threadId));
 
-	return true;
+	return { messageId: insertedMessage.id, threadId };
 }
 
-function extractMetaMessageText(message: MetaWebhookMessage) {
+export function extractMetaMessageText(message: MetaWebhookMessage) {
 	return (
 		message.text?.body ??
 		message.image?.caption ??
@@ -450,6 +455,38 @@ function extractMetaMessageText(message: MetaWebhookMessage) {
 		message.location?.name ??
 		undefined
 	);
+}
+
+export function extractMetaMessageReply(
+	message: MetaWebhookMessage,
+): IncomingReplyDescriptor | undefined {
+	const buttonReply = message.interactive?.button_reply;
+	if (buttonReply) {
+		return {
+			kind: "button",
+			selectedId: buttonReply.id,
+			selectedText: buttonReply.title,
+		};
+	}
+
+	const listReply = message.interactive?.list_reply;
+	if (listReply) {
+		return {
+			kind: "list",
+			selectedId: listReply.id,
+			selectedText: listReply.title,
+		};
+	}
+
+	if (message.button) {
+		return {
+			kind: "button",
+			selectedId: message.button.payload,
+			selectedText: message.button.text,
+		};
+	}
+
+	return undefined;
 }
 
 function toPhoneJid(phoneNumber: string) {

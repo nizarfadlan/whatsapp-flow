@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import { contact } from "@whatsapp-flow/db/schema/contact";
-import { device } from "@whatsapp-flow/db/schema/device";
+import { contact, contactTag, tag } from "@whatsapp-flow/db/schema/contact";
+import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import {
 	connectionManager,
@@ -8,7 +8,17 @@ import {
 	deriveThreadKey,
 	toPhoneJid,
 } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq, ilike, isNull, like, or } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	ilike,
+	inArray,
+	isNull,
+	like,
+	or,
+} from "drizzle-orm";
 import { z } from "zod";
 import { startDeviceResourceSync } from "../engine/device-resource-sync";
 import { protectedProcedure, router } from "../index";
@@ -29,6 +39,31 @@ async function requireDeviceOwnership(
 		.limit(1);
 	if (!rows[0]) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
+	}
+}
+
+function triggerConfigReferencesTag(config: unknown, tagId: string) {
+	if (!config || typeof config !== "object" || Array.isArray(config)) {
+		return false;
+	}
+	const data = config as Record<string, unknown>;
+	return [data.groupTagIds, data.senderTagIds].some(
+		(value) => Array.isArray(value) && value.includes(tagId),
+	);
+}
+
+async function requireOwnedTagIds(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	tagIds: string[],
+	userId: string,
+) {
+	if (tagIds.length === 0) return;
+	const rows = await db
+		.select({ id: tag.id })
+		.from(tag)
+		.where(and(eq(tag.userId, userId), inArray(tag.id, tagIds)));
+	if (rows.length !== tagIds.length) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Tag not found" });
 	}
 }
 
@@ -55,7 +90,7 @@ export const contactRouter = router({
 				if (searchClause) conditions.push(searchClause);
 			}
 
-			return ctx.db
+			const contacts = await ctx.db
 				.select({
 					id: contact.id,
 					deviceId: contact.deviceId,
@@ -75,6 +110,147 @@ export const contactRouter = router({
 				.where(and(...conditions))
 				.orderBy(desc(contact.updatedAt))
 				.limit(input.limit);
+			if (contacts.length === 0) return [];
+
+			const tagRows = await ctx.db
+				.select({
+					contactId: contactTag.contactId,
+					id: tag.id,
+					name: tag.name,
+				})
+				.from(contactTag)
+				.innerJoin(tag, eq(contactTag.tagId, tag.id))
+				.where(
+					and(
+						inArray(
+							contactTag.contactId,
+							contacts.map((row) => row.id),
+						),
+						eq(tag.userId, ctx.session.user.id),
+					),
+				)
+				.orderBy(asc(tag.name));
+			const tagsByContactId = new Map<string, { id: string; name: string }[]>();
+			for (const tagRow of tagRows) {
+				const tags = tagsByContactId.get(tagRow.contactId) ?? [];
+				tags.push({ id: tagRow.id, name: tagRow.name });
+				tagsByContactId.set(tagRow.contactId, tags);
+			}
+			return contacts.map((row) => ({
+				...row,
+				tags: tagsByContactId.get(row.id) ?? [],
+			}));
+		}),
+
+	listTags: protectedProcedure.query(async ({ ctx }) => {
+		return ctx.db
+			.select({ id: tag.id, name: tag.name })
+			.from(tag)
+			.where(eq(tag.userId, ctx.session.user.id))
+			.orderBy(asc(tag.name));
+	}),
+
+	createTag: protectedProcedure
+		.input(z.object({ name: z.string().trim().min(1).max(64) }))
+		.mutation(async ({ ctx, input }) => {
+			const [created] = await ctx.db
+				.insert(tag)
+				.values({
+					id: crypto.randomUUID(),
+					userId: ctx.session.user.id,
+					name: input.name,
+				})
+				.returning({ id: tag.id, name: tag.name });
+			return created;
+		}),
+
+	updateTag: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				name: z.string().trim().min(1).max(64),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const [updated] = await ctx.db
+				.update(tag)
+				.set({ name: input.name, updatedAt: new Date() })
+				.where(and(eq(tag.id, input.id), eq(tag.userId, ctx.session.user.id)))
+				.returning({ id: tag.id, name: tag.name });
+			if (!updated) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Tag not found" });
+			}
+			return updated;
+		}),
+
+	deleteTag: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const [ownedTag] = await ctx.db
+				.select({ id: tag.id })
+				.from(tag)
+				.where(and(eq(tag.id, input.id), eq(tag.userId, ctx.session.user.id)))
+				.limit(1);
+			if (!ownedTag) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Tag not found" });
+			}
+
+			const flows = await ctx.db
+				.select({ triggerConfig: flow.triggerConfig })
+				.from(flow);
+			if (
+				flows.some((row) =>
+					triggerConfigReferencesTag(row.triggerConfig, input.id),
+				)
+			) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "Tag is used by a flow trigger",
+				});
+			}
+
+			await ctx.db.delete(tag).where(eq(tag.id, input.id));
+			return { success: true };
+		}),
+
+	setTags: protectedProcedure
+		.input(
+			z.object({
+				contactId: z.string().min(1),
+				tagIds: z.array(z.string().min(1)).max(100),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const tagIds = [...new Set(input.tagIds)];
+			const [ownedContact] = await ctx.db
+				.select({ id: contact.id })
+				.from(contact)
+				.innerJoin(device, eq(contact.deviceId, device.id))
+				.where(
+					and(
+						eq(contact.id, input.contactId),
+						eq(device.userId, ctx.session.user.id),
+					),
+				)
+				.limit(1);
+			if (!ownedContact) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Contact not found",
+				});
+			}
+			await requireOwnedTagIds(ctx.db, tagIds, ctx.session.user.id);
+			await ctx.db
+				.delete(contactTag)
+				.where(eq(contactTag.contactId, input.contactId));
+			if (tagIds.length > 0) {
+				await ctx.db
+					.insert(contactTag)
+					.values(
+						tagIds.map((tagId) => ({ contactId: input.contactId, tagId })),
+					);
+			}
+			return { success: true };
 		}),
 
 	create: protectedProcedure

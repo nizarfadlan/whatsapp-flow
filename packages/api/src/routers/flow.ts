@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
+import { tag } from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { validateCronExpression } from "../engine/cron";
 import {
@@ -21,11 +22,77 @@ type FlowNode = {
 	data?: Record<string, unknown>;
 };
 
-type FlowEdge = {
+export type FlowEdge = {
+	id?: string;
 	source: string;
 	target: string;
 	sourceHandle?: string | null;
 };
+
+export type FlowGraphDiagnostic = {
+	issueCode: string;
+	message: string;
+	nodeId: string;
+	edgeId?: string;
+	expectedHandles?: string[];
+	missingHandles?: string[];
+};
+
+function normalizeTagIds(value: unknown) {
+	if (!Array.isArray(value)) return [];
+	return [
+		...new Set(
+			value.filter(
+				(item): item is string => typeof item === "string" && item.length > 0,
+			),
+		),
+	];
+}
+
+export function getTriggerTagIds(triggerConfig: unknown) {
+	if (
+		!triggerConfig ||
+		typeof triggerConfig !== "object" ||
+		Array.isArray(triggerConfig)
+	) {
+		return [];
+	}
+	const config = triggerConfig as Record<string, unknown>;
+	return [
+		...new Set([
+			...normalizeTagIds(config.groupTagIds),
+			...normalizeTagIds(config.senderTagIds),
+		]),
+	];
+}
+
+function getMessageTriggerConfig(data: Record<string, unknown>) {
+	const chatScope =
+		data.chatScope === "private" || data.chatScope === "groups"
+			? data.chatScope
+			: "any";
+	return {
+		chatScope,
+		groupTagIds: normalizeTagIds(data.groupTagIds),
+		senderTagIds: normalizeTagIds(data.senderTagIds),
+	};
+}
+
+async function requireTriggerTagOwnership(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	triggerConfig: unknown,
+	userId: string,
+) {
+	const tagIds = getTriggerTagIds(triggerConfig);
+	if (tagIds.length === 0) return;
+	const rows = await db
+		.select({ id: tag.id })
+		.from(tag)
+		.where(and(eq(tag.userId, userId), inArray(tag.id, tagIds)));
+	if (rows.length !== tagIds.length) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Tag not found" });
+	}
+}
 
 function getTriggerPayload(nodes: FlowNode[]) {
 	const trigger = nodes.find((node) => node.type === "trigger");
@@ -36,10 +103,16 @@ function getTriggerPayload(nodes: FlowNode[]) {
 		case "keyword":
 			return {
 				triggerType: "keyword" as const,
-				triggerConfig: { keywords: parseTriggerKeywords(data) },
+				triggerConfig: {
+					keywords: parseTriggerKeywords(data),
+					...getMessageTriggerConfig(data),
+				},
 			};
 		case "any_message":
-			return { triggerType: "any_message" as const, triggerConfig: null };
+			return {
+				triggerType: "any_message" as const,
+				triggerConfig: getMessageTriggerConfig(data),
+			};
 		case "webhook":
 			return {
 				triggerType: "webhook" as const,
@@ -449,8 +522,16 @@ async function sanitizeFlowNodesForStorage(
 	return sanitized;
 }
 
-function sanitizeFlowForClient<T extends { nodes: unknown }>(row: T) {
-	return { ...row, nodes: sanitizeFlowNodesForClient(row.nodes) };
+function sanitizeFlowForClient<T extends { nodes: unknown; edges?: unknown }>(
+	row: T,
+) {
+	const nodes = Array.isArray(row.nodes) ? (row.nodes as FlowNode[]) : [];
+	const edges = Array.isArray(row.edges) ? (row.edges as FlowEdge[]) : [];
+	return {
+		...row,
+		nodes: sanitizeFlowNodesForClient(row.nodes),
+		graphDiagnostics: validateFlowGraphDiagnostics(nodes, edges),
+	};
 }
 
 function stripWebhookSecretsForCopy(value: unknown) {
@@ -479,38 +560,212 @@ function isInteractiveNode(type: string | undefined) {
 	return (
 		type === "send-button" ||
 		type === "send-list" ||
-		type === "send-quick-reply"
+		type === "send-quick-reply" ||
+		type === "send-poll"
 	);
 }
 
-function getInteractiveOptionHandles(node: FlowNode) {
+type InteractiveOption = { id?: unknown; text?: unknown };
+
+function getInteractiveOptions(node: FlowNode): InteractiveOption[] {
 	if (!isInteractiveNode(node.type)) return [];
 	const data = node.data ?? {};
-	const options =
-		node.type === "send-list"
-			? (
-					(data.sections as
-						| { rows?: { id?: string; title?: string }[] }[]
-						| undefined) ?? []
-				).flatMap((section) =>
-					(section.rows ?? []).map((row) => ({
-						id: String(row.id ?? "").trim(),
-						text: String(row.title ?? "").trim(),
-					})),
-				)
-			: (
-					(data.buttons as { id?: string; text?: string }[] | undefined) ?? []
-				).map((button) => ({
-					id: String(button.id ?? "").trim(),
-					text: String(button.text ?? "").trim(),
-				}));
+	if (node.type === "send-list") {
+		const sections = Array.isArray(data.sections) ? data.sections : [];
+		return sections.flatMap((section) => {
+			if (!section || typeof section !== "object") return [];
+			const rows = (section as { rows?: unknown }).rows;
+			return Array.isArray(rows)
+				? rows.map((row) =>
+						row && typeof row === "object"
+							? {
+									id: (row as { id?: unknown }).id,
+									text: (row as { title?: unknown }).title,
+								}
+							: {},
+					)
+				: [];
+		});
+	}
+	const options = node.type === "send-poll" ? data.options : data.buttons;
+	return Array.isArray(options)
+		? options.map((option) =>
+				option && typeof option === "object"
+					? {
+							id: (option as { id?: unknown }).id,
+							text: (option as { text?: unknown }).text,
+						}
+					: {},
+			)
+		: [];
+}
 
-	return options
-		.filter((option) => option.id && option.text)
-		.map((option) => `option:${option.id}`);
+function getInteractiveOptionHandles(node: FlowNode) {
+	return getInteractiveOptions(node)
+		.filter((option) => nonEmpty(option.id) && nonEmpty(option.text))
+		.map((option) => `option:${String(option.id)}`);
+}
+
+function validatePollConfiguration(node: FlowNode): FlowGraphDiagnostic[] {
+	const data = node.data ?? {};
+	const diagnostics: FlowGraphDiagnostic[] = [];
+	const question =
+		typeof data.question === "string" ? data.question.trim() : "";
+	if (!question || question.length > 255) {
+		diagnostics.push({
+			issueCode: "poll_invalid_question",
+			message: "send-poll node needs a non-empty question up to 255 characters",
+			nodeId: node.id,
+		});
+	}
+
+	const options = getInteractiveOptions(node);
+	if (options.length < 2 || options.length > 12) {
+		diagnostics.push({
+			issueCode: "poll_invalid_option_count",
+			message: "send-poll node needs between 2 and 12 options",
+			nodeId: node.id,
+		});
+	}
+
+	const ids = new Set<string>();
+	const labels = new Set<string>();
+	for (const option of options) {
+		const rawId = typeof option.id === "string" ? option.id : "";
+		const id = rawId.trim();
+		const label = typeof option.text === "string" ? option.text.trim() : "";
+		if (!id || rawId !== id || !label || label.length > 100) {
+			diagnostics.push({
+				issueCode: "poll_invalid_option",
+				message:
+					"send-poll options need trimmed IDs and non-empty labels up to 100 characters",
+				nodeId: node.id,
+			});
+		}
+		if (id) {
+			if (ids.has(id)) {
+				diagnostics.push({
+					issueCode: "poll_duplicate_option_id",
+					message: "send-poll option IDs must be unique",
+					nodeId: node.id,
+				});
+			} else {
+				ids.add(id);
+			}
+		}
+		if (label) {
+			if (labels.has(label)) {
+				diagnostics.push({
+					issueCode: "poll_duplicate_option_label",
+					message: "send-poll option labels must be unique",
+					nodeId: node.id,
+				});
+			} else {
+				labels.add(label);
+			}
+		}
+	}
+
+	const timeoutMinutes = Number(data.timeoutMinutes ?? 1440);
+	if (
+		!Number.isInteger(timeoutMinutes) ||
+		timeoutMinutes < 1 ||
+		timeoutMinutes > 10_080
+	) {
+		diagnostics.push({
+			issueCode: "poll_invalid_timeout",
+			message: "send-poll timeout must be between 1 and 10080 minutes",
+			nodeId: node.id,
+		});
+	} else if (
+		(data.replyWarnings !== undefined && !Array.isArray(data.replyWarnings)) ||
+		validateReplyWarnings(data, timeoutMinutes)
+	) {
+		diagnostics.push({
+			issueCode: "poll_invalid_warning",
+			message: "send-poll warnings must be valid and before the timeout",
+			nodeId: node.id,
+		});
+	}
+	return diagnostics;
+}
+
+export function validateFlowGraphDiagnostics(
+	nodes: FlowNode[],
+	edges: FlowEdge[],
+): FlowGraphDiagnostic[] {
+	const diagnostics: FlowGraphDiagnostic[] = [];
+	for (const node of nodes) {
+		if (!isInteractiveNode(node.type)) continue;
+		if (node.type === "send-poll") {
+			diagnostics.push(...validatePollConfiguration(node));
+		}
+
+		const expectedHandles = [...new Set(getInteractiveOptionHandles(node))];
+		if (expectedHandles.length === 0) {
+			diagnostics.push({
+				issueCode: "interactive_missing_options",
+				message: `${node.type} node needs at least one option`,
+				nodeId: node.id,
+			});
+			continue;
+		}
+
+		const branches = new Map<string, FlowEdge>();
+		for (const edge of edges.filter(
+			(candidate) => candidate.source === node.id,
+		)) {
+			if (!edge.sourceHandle) {
+				diagnostics.push({
+					issueCode: "interactive_missing_handle",
+					message: `${node.type} node branches must use option handles`,
+					nodeId: node.id,
+					...(edge.id ? { edgeId: edge.id } : {}),
+					expectedHandles,
+				});
+				continue;
+			}
+			if (!expectedHandles.includes(edge.sourceHandle)) {
+				diagnostics.push({
+					issueCode: "interactive_stale_handle",
+					message: `${node.type} node has a stale option branch`,
+					nodeId: node.id,
+					...(edge.id ? { edgeId: edge.id } : {}),
+					expectedHandles,
+				});
+				continue;
+			}
+			if (branches.has(edge.sourceHandle)) {
+				diagnostics.push({
+					issueCode: "interactive_duplicate_branch",
+					message: `${node.type} node has duplicate option branches`,
+					nodeId: node.id,
+					...(edge.id ? { edgeId: edge.id } : {}),
+					expectedHandles,
+				});
+				continue;
+			}
+			branches.set(edge.sourceHandle, edge);
+		}
+
+		for (const handle of expectedHandles) {
+			if (!branches.has(handle)) {
+				diagnostics.push({
+					issueCode: "interactive_missing_branch",
+					message: `${node.type} node needs a connected branch for ${handle}`,
+					nodeId: node.id,
+					expectedHandles,
+					missingHandles: [handle],
+				});
+			}
+		}
+	}
+	return diagnostics;
 }
 
 export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
+	const diagnostic = validateFlowGraphDiagnostics(nodes, edges)[0];
+	if (diagnostic) return diagnostic.message;
 	if (nodes.length === 0) return "Flow has no nodes";
 
 	const triggers = nodes.filter((node) => node.type === "trigger");
@@ -571,28 +826,6 @@ export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 					return "Send Location node needs valid latitude and longitude";
 				}
 				break;
-			case "send-button":
-			case "send-quick-reply":
-			case "send-list": {
-				const optionHandles = new Set(getInteractiveOptionHandles(node));
-				if (optionHandles.size === 0) {
-					return `${node.type} node needs at least one option`;
-				}
-
-				const outgoing = edges.filter((edge) => edge.source === node.id);
-				for (const edge of outgoing) {
-					if (!edge.sourceHandle) {
-						return `${node.type} node branches must use option handles`;
-					}
-					if (!optionHandles.has(edge.sourceHandle)) {
-						return `${node.type} node has a stale option branch`;
-					}
-				}
-				if (outgoing.length === 0) {
-					return `${node.type} node needs at least one connected option branch`;
-				}
-				break;
-			}
 			case "condition":
 				if (!nonEmpty(data.field) || !nonEmpty(data.value)) {
 					return "Condition node needs field and value";
@@ -713,6 +946,25 @@ export const flowRouter = router({
 			return sanitizeFlowForClient(found);
 		}),
 
+	validateGraph: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				nodes: jsonSchema,
+				edges: jsonSchema,
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			await requireFlowOwnership(ctx.db, input.id, ctx.session.user.id);
+			const nodes = Array.isArray(input.nodes)
+				? (input.nodes as FlowNode[])
+				: [];
+			const edges = Array.isArray(input.edges)
+				? (input.edges as FlowEdge[])
+				: [];
+			return validateFlowGraphDiagnostics(nodes, edges);
+		}),
+
 	create: protectedProcedure
 		.input(
 			z.object({
@@ -725,6 +977,11 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			await requireTriggerTagOwnership(
+				ctx.db,
+				input.triggerConfig,
+				ctx.session.user.id,
+			);
 			const id = crypto.randomUUID();
 			const rows = await ctx.db
 				.insert(flow)
@@ -796,6 +1053,11 @@ export const flowRouter = router({
 
 					const triggerPayload = getTriggerPayload(sanitizedNodes);
 					if (triggerPayload) {
+						await requireTriggerTagOwnership(
+							db,
+							triggerPayload.triggerConfig,
+							ctx.session.user.id,
+						);
 						updates.triggerType = triggerPayload.triggerType;
 						updates.triggerConfig = triggerPayload.triggerConfig;
 					}
@@ -886,20 +1148,6 @@ export const flowRouter = router({
 						message: "Device must be connected before activation",
 					});
 				}
-
-				const [existing] = await ctx.db
-					.select({ id: flow.id })
-					.from(flow)
-					.where(
-						and(eq(flow.deviceId, found.deviceId), eq(flow.status, "active")),
-					)
-					.limit(1);
-				if (existing && existing.id !== input.id) {
-					await ctx.db
-						.update(flow)
-						.set({ status: "paused" })
-						.where(eq(flow.id, existing.id));
-				}
 			}
 
 			await ctx.db
@@ -960,20 +1208,11 @@ export const flowRouter = router({
 					message: "Flow needs a trigger node",
 				});
 			}
-
-			const [existing] = await ctx.db
-				.select({ id: flow.id })
-				.from(flow)
-				.where(
-					and(eq(flow.deviceId, input.deviceId), eq(flow.status, "active")),
-				)
-				.limit(1);
-			if (existing && existing.id !== input.id) {
-				await ctx.db
-					.update(flow)
-					.set({ status: "paused" })
-					.where(eq(flow.id, existing.id));
-			}
+			await requireTriggerTagOwnership(
+				ctx.db,
+				triggerPayload.triggerConfig,
+				ctx.session.user.id,
+			);
 
 			await ctx.db
 				.update(flow)

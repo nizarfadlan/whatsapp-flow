@@ -8,9 +8,12 @@ process.env.CORS_ORIGIN ??= "http://localhost:3001";
 process.env.META_WEBHOOK_VERIFY_TOKEN = "verify-token";
 process.env.NODE_ENV = "test";
 
-const { verifyMetaWebhookChallenge, verifyMetaWebhookSignature } = await import(
-	"./webhook"
-);
+const {
+	extractMetaMessageReply,
+	extractMetaMessageText,
+	verifyMetaWebhookChallenge,
+	verifyMetaWebhookSignature,
+} = await import("./webhook");
 
 describe("Meta webhook verification", () => {
 	test("returns the challenge for valid subscription verification", () => {
@@ -48,5 +51,38 @@ describe("Meta webhook verification", () => {
 			false,
 		);
 		expect(verifyMetaWebhookSignature(body, null, "secret")).toBe(false);
+	});
+});
+
+describe("Meta reply normalization", () => {
+	test("normalizes interactive button and list replies", () => {
+		expect(
+			extractMetaMessageReply({
+				interactive: { button_reply: { id: "button-id", title: "Continue" } },
+			}),
+		).toEqual({
+			kind: "button",
+			selectedId: "button-id",
+			selectedText: "Continue",
+		});
+		expect(
+			extractMetaMessageReply({
+				interactive: { list_reply: { id: "row-id", title: "Premium" } },
+			}),
+		).toEqual({
+			kind: "list",
+			selectedId: "row-id",
+			selectedText: "Premium",
+		});
+	});
+
+	test("normalizes legacy button payloads while preserving button text", () => {
+		const message = { button: { payload: "legacy-id", text: "Legacy choice" } };
+		expect(extractMetaMessageText(message)).toBe("Legacy choice");
+		expect(extractMetaMessageReply(message)).toEqual({
+			kind: "button",
+			selectedId: "legacy-id",
+			selectedText: "Legacy choice",
+		});
 	});
 });

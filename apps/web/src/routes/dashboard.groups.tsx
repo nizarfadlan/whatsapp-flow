@@ -17,6 +17,7 @@ import {
 	ResourceSyncControls,
 	useResourceSyncCompletion,
 } from "@/components/resource-sync-controls";
+import { TagBadges, TagPicker } from "@/components/tag-picker";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/groups")({
@@ -27,7 +28,7 @@ function GroupsPage() {
 	const trpc = useTRPC();
 	const trackSyncCompletion = useResourceSyncCompletion("groups");
 	const [search, setSearch] = useState("");
-	const { data: groups = [] } = useSuspenseQuery(
+	const { data: groups = [], refetch } = useSuspenseQuery(
 		trpc.group.list.queryOptions({ search: search || undefined, limit: 100 }),
 	);
 	const { data: devices = [] } = useSuspenseQuery(
@@ -94,6 +95,21 @@ function GroupsPage() {
 				>
 					{row.isMember ? "✓" : "Left"}
 				</Badge>
+			),
+		},
+		{
+			key: "tags",
+			header: "Tags",
+			cell: (row: (typeof groups)[0]) => (
+				<div className="flex items-center gap-1">
+					<TagBadges tags={row.tags} />
+					<TagPicker
+						resource="group"
+						resourceId={row.id}
+						tags={row.tags}
+						onSaved={refetch}
+					/>
+				</div>
 			),
 		},
 		{

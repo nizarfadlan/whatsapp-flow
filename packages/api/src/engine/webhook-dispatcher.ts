@@ -17,7 +17,6 @@ import {
 } from "@whatsapp-flow/whatsapp";
 import { and, asc, eq, lte, or, sql } from "drizzle-orm";
 import { logger } from "../observability/logger";
-import { enrichInboundMedia, type WebhookMedia } from "./inbound-media";
 import { enqueueJob } from "./job-queue";
 import { webhookDeliveryJobIdempotencyKey } from "./job-types";
 import {
@@ -25,6 +24,23 @@ import {
 	type WebhookEventType,
 } from "./webhook-events";
 import { fetchSafeOutboundWebhookUrl } from "./webhook-url-safety";
+
+type WebhookMedia = {
+	type: "image" | "video" | "audio" | "document" | "sticker";
+	providerMediaId?: string;
+	mimeType?: string | null;
+	fileName?: string | null;
+	caption?: string | null;
+	size?: number | null;
+	sha256?: string | null;
+	stored: boolean;
+	storage?: {
+		driver: "local" | "s3";
+		key: string;
+		url: string;
+	} | null;
+	storageError?: string;
+};
 
 const MAX_WEBHOOK_ATTEMPTS = 5;
 
@@ -39,7 +55,7 @@ type EnqueueWebhookInput = {
 	flowId?: string | null;
 };
 
-type DeviceMessageEvent = ConnectionManagerEvents["device:message"];
+type DeviceMessageEvent = ConnectionManagerEvents["device:message-persisted"];
 type ChatType = "private" | "group" | "channel" | "broadcast";
 type Identity = {
 	jid?: string;
@@ -58,6 +74,65 @@ function normalizeStringArray(value: unknown) {
 	return Array.isArray(value)
 		? value.filter((item): item is string => typeof item === "string" && !!item)
 		: [];
+}
+
+export function extractCanonicalMedia(raw: unknown): WebhookMedia | null {
+	if (!raw || typeof raw !== "object" || !("media" in raw)) return null;
+	const media = raw.media;
+	if (!media || typeof media !== "object") return null;
+	const value = media as Record<string, unknown>;
+	if (
+		!["image", "video", "audio", "document", "sticker"].includes(
+			value.type as string,
+		) ||
+		typeof value.stored !== "boolean"
+	) {
+		return null;
+	}
+
+	const storage = extractCanonicalStorage(value.storage);
+	if (value.storage !== undefined && value.storage !== null && !storage)
+		return null;
+	return {
+		type: value.type as WebhookMedia["type"],
+		providerMediaId: optionalString(value.providerMediaId),
+		mimeType: optionalNullableString(value.mimeType),
+		fileName: optionalNullableString(value.fileName),
+		caption: optionalNullableString(value.caption),
+		size: optionalNullableNumber(value.size),
+		sha256: optionalNullableString(value.sha256),
+		stored: value.stored,
+		storage,
+		storageError: optionalString(value.storageError),
+	};
+}
+
+function extractCanonicalStorage(
+	value: unknown,
+): WebhookMedia["storage"] | undefined {
+	if (value === null) return null;
+	if (!value || typeof value !== "object") return undefined;
+	const storage = value as Record<string, unknown>;
+	if (
+		(storage.driver !== "local" && storage.driver !== "s3") ||
+		typeof storage.key !== "string" ||
+		typeof storage.url !== "string"
+	) {
+		return undefined;
+	}
+	return { driver: storage.driver, key: storage.key, url: storage.url };
+}
+
+function optionalString(value: unknown) {
+	return typeof value === "string" ? value : undefined;
+}
+
+function optionalNullableString(value: unknown) {
+	return value === null || typeof value === "string" ? value : undefined;
+}
+
+function optionalNullableNumber(value: unknown) {
+	return value === null || typeof value === "number" ? value : undefined;
 }
 
 function endpointMatchesEvent(
@@ -93,14 +168,7 @@ export async function buildMessageReceivedPayload(ev: DeviceMessageEvent) {
 	const group = chat.isGroup
 		? await normalizeGroup(ev, chat.jid, sender)
 		: undefined;
-	const mediaResult = await enrichInboundMedia({
-		deviceId: ev.deviceId,
-		provider: ev.provider ?? "baileys",
-		providerMessageId:
-			ev.message.providerMessageId ?? ev.message.messageKey?.id ?? undefined,
-		messageType: ev.message.type,
-		raw: ev.message.raw,
-	});
+	const media = extractCanonicalMedia(ev.message.raw);
 	const mentions = await resolveMentions(
 		ev.deviceId,
 		extractMentionJids(ev.message.raw),
@@ -114,10 +182,7 @@ export async function buildMessageReceivedPayload(ev: DeviceMessageEvent) {
 		chat,
 		sender,
 		group,
-		message: serializeMessageForWebhook(ev.message, {
-			media: mediaResult.media,
-			mentions,
-		}),
+		message: serializeMessageForWebhook(ev.message, { media, mentions }),
 	};
 }
 
@@ -485,7 +550,7 @@ export function startWebhookDispatcher() {
 
 	void tick();
 
-	connectionManager.on("device:message", async (ev) => {
+	connectionManager.on("device:message-persisted", async (ev) => {
 		try {
 			const d = await db
 				.select({ userId: device.userId })

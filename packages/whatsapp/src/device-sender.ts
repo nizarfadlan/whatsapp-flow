@@ -35,19 +35,30 @@ export async function sendDeviceMessage(
 		throw new Error("Device is not connected");
 	}
 	const result = await sendWhatsAppMessage(connection.socket, to, message);
+	let originalMessageStored: boolean | undefined;
 	if (result) {
 		try {
 			await baileysMessageStore.store(deviceId, result);
-		} catch {
+			originalMessageStored = Boolean(result.message);
+		} catch (error) {
+			originalMessageStored = false;
 			console.error("Failed to persist sent Baileys message content", {
 				deviceId,
 				messageId: result.key.id,
+				error,
 			});
 		}
 	}
 	return {
 		provider: "baileys",
 		messageId: result?.key?.id ?? undefined,
+		...(message.type === "poll"
+			? {
+					deliveryMode: "native_poll" as const,
+					messageKey: result?.key,
+					originalMessageStored: originalMessageStored === true,
+				}
+			: {}),
 		raw: result,
 	};
 }

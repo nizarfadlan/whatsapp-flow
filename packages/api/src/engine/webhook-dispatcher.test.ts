@@ -10,7 +10,6 @@ process.env.NODE_ENV = "test";
 type SelectQueue = unknown[][];
 
 let selectQueue: SelectQueue = [];
-let mediaResult: unknown = { raw: {}, media: null };
 
 mock.module("@whatsapp-flow/db", () => ({
 	db: {
@@ -34,10 +33,6 @@ mock.module("@whatsapp-flow/db", () => ({
 	},
 }));
 
-mock.module("./inbound-media", () => ({
-	enrichInboundMedia: mock(() => Promise.resolve(mediaResult)),
-}));
-
 const { buildMessageReceivedPayload, buildWebhookDeliveryRows } = await import(
 	"./webhook-dispatcher"
 );
@@ -58,7 +53,6 @@ function webhookEndpoint(
 
 beforeEach(() => {
 	selectQueue = [];
-	mediaResult = { raw: {}, media: null };
 });
 
 describe("lazy webhook payload evaluation", () => {
@@ -148,6 +142,8 @@ describe("message.received webhook payload contract", () => {
 
 		const payload = await buildMessageReceivedPayload({
 			deviceId: "dev_123",
+			inboxMessageId: "inbox_1",
+			threadId: "thread_1",
 			provider: "baileys",
 			contact: {
 				jid: "6281234567890@s.whatsapp.net",
@@ -245,6 +241,8 @@ describe("message.received webhook payload contract", () => {
 
 		const payload = await buildMessageReceivedPayload({
 			deviceId: "dev_123",
+			inboxMessageId: "inbox_1",
+			threadId: "thread_1",
 			provider: "baileys",
 			contact: {
 				jid: "120363000000000000@g.us",
@@ -313,6 +311,8 @@ describe("message.received webhook payload contract", () => {
 
 		const payload = await buildMessageReceivedPayload({
 			deviceId: "dev_123",
+			inboxMessageId: "inbox_1",
+			threadId: "thread_1",
 			provider: "baileys",
 			contact: { jid: "120363000000000000@g.us" },
 			chat: {
@@ -363,25 +363,7 @@ describe("message.received webhook payload contract", () => {
 		]);
 	});
 
-	test("includes media storage metadata returned by media enrichment", async () => {
-		mediaResult = {
-			raw: {},
-			media: {
-				type: "image",
-				providerMediaId: "media_123",
-				mimeType: "image/jpeg",
-				fileName: "media_123.jpeg",
-				caption: "Payment proof",
-				size: 204800,
-				sha256: "hash",
-				stored: true,
-				storage: {
-					driver: "s3",
-					key: "whatsapp/meta/dev_123/wamid.x/media_123.jpeg",
-					url: "https://cdn.example.com/media_123.jpeg",
-				},
-			},
-		};
+	test("uses the canonical media descriptor from persisted raw", async () => {
 		selectQueue = [
 			[
 				{
@@ -396,9 +378,26 @@ describe("message.received webhook payload contract", () => {
 				},
 			],
 		];
+		const media = {
+			type: "image" as const,
+			providerMediaId: "media_123",
+			mimeType: "image/jpeg",
+			fileName: "media_123.jpeg",
+			caption: "Payment proof",
+			size: 204800,
+			sha256: "hash",
+			stored: true,
+			storage: {
+				driver: "s3" as const,
+				key: "whatsapp/meta/dev_123/wamid.x/media_123.jpeg",
+				url: "https://cdn.example.com/media_123.jpeg",
+			},
+		};
 
 		const payload = await buildMessageReceivedPayload({
 			deviceId: "dev_123",
+			inboxMessageId: "inbox_1",
+			threadId: "thread_1",
 			provider: "meta_cloud",
 			contact: {
 				jid: "6281234567890@s.whatsapp.net",
@@ -418,30 +417,19 @@ describe("message.received webhook payload contract", () => {
 			message: {
 				text: "Payment proof",
 				type: "image",
-				raw: { image: { id: "media_123" } },
+				raw: { image: { id: "media_123" }, media },
 				providerMessageId: "wamid.x",
 			},
 		});
 
-		expect(payload.message.media).toEqual(mediaResult.media);
+		expect(payload.message.media).toEqual(media);
 	});
 
-	test("keeps media errors in payload instead of dropping the message", async () => {
-		mediaResult = {
-			raw: {},
-			media: {
-				type: "document",
-				providerMediaId: "media_404",
-				mimeType: "application/pdf",
-				fileName: "invoice.pdf",
-				stored: false,
-				storage: null,
-				storageError: "Failed to download media",
-			},
-		};
-
+	test("keeps canonical media errors in payload instead of dropping the message", async () => {
 		const payload = await buildMessageReceivedPayload({
 			deviceId: "dev_123",
+			inboxMessageId: "inbox_1",
+			threadId: "thread_1",
 			provider: "meta_cloud",
 			contact: {
 				jid: "6281234567890@s.whatsapp.net",
@@ -458,7 +446,18 @@ describe("message.received webhook payload contract", () => {
 			},
 			message: {
 				type: "document",
-				raw: { document: { id: "media_404" } },
+				raw: {
+					document: { id: "media_404" },
+					media: {
+						type: "document",
+						providerMediaId: "media_404",
+						mimeType: "application/pdf",
+						fileName: "invoice.pdf",
+						stored: false,
+						storage: null,
+						storageError: "Failed to download media",
+					},
+				},
 				providerMessageId: "wamid.y",
 			},
 		});

@@ -10,6 +10,7 @@ import { executeFlow } from "@whatsapp-flow/api/engine/flow-executor";
 import {
 	processFlowContinueJob,
 	processFlowExecuteJob,
+	processFlowPollResumeJob,
 	processFlowResumeJob,
 	processFlowWaitTimeoutJob,
 	processFlowWaitWarningJob,
@@ -37,7 +38,14 @@ import { channel, chatGroup } from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
-import { isLocalStorageDriver, storage } from "@whatsapp-flow/storage";
+import {
+	isLocalStorageDriver,
+	LocalStorageDriver,
+	normalizeStorageKey,
+	S3StorageDriver,
+	storage,
+	verifyLocalUploadGrant,
+} from "@whatsapp-flow/storage";
 import {
 	connectionManager,
 	deriveThreadKey,
@@ -46,7 +54,6 @@ import {
 } from "@whatsapp-flow/whatsapp";
 import { and, eq, isNotNull, or, sql } from "drizzle-orm";
 import { Hono, type Context as HonoContext } from "hono";
-import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
@@ -119,31 +126,162 @@ app.use(
 	}),
 );
 
-// Serve locally stored media files
-app.use(
-	"/uploads/*",
-	serveStatic({
-		root: env.LOCAL_UPLOAD_DIR ?? "uploads",
-		rewriteRequestPath: (p) => p.replace("/uploads", ""),
-	}),
-);
+function contentTypeWithoutParameters(value: string | undefined) {
+	return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
 
-// Local-driver direct upload endpoint (POST multipart or raw body)
-app.post("/api/uploads/local/:key{.+}", async (c) => {
-	if (!isLocalStorageDriver()) {
-		return c.text("Local uploads are disabled", 404);
+function safeMediaContentType(value: unknown) {
+	const mimeType = contentTypeWithoutParameters(
+		typeof value === "string" ? value : undefined,
+	);
+	return /^[!#$%&'*+.^_`|~\w-]+\/[!#$%&'*+.^_`|~\w-]+$/.test(mimeType)
+		? mimeType
+		: "application/octet-stream";
+}
+
+function safeDownloadName(value: unknown) {
+	const fallback = "media";
+	if (typeof value !== "string") return fallback;
+	const normalized = value.replace(/[\\/\r\n\0"]/g, "_").trim();
+	return normalized.slice(0, 255) || fallback;
+}
+
+function inboundMediaStorage(raw: unknown) {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const media = (raw as Record<string, unknown>).media;
+	if (!media || typeof media !== "object" || Array.isArray(media)) return null;
+	const mediaRecord = media as Record<string, unknown>;
+	const storageInfo = mediaRecord.storage;
+	if (
+		!storageInfo ||
+		typeof storageInfo !== "object" ||
+		Array.isArray(storageInfo)
+	) {
+		return null;
 	}
+	const storageRecord = storageInfo as Record<string, unknown>;
+	if (
+		(storageRecord.driver !== "local" && storageRecord.driver !== "s3") ||
+		typeof storageRecord.key !== "string"
+	) {
+		return null;
+	}
+	try {
+		const key = normalizeStorageKey(storageRecord.key);
+		if (!key.startsWith("whatsapp/")) return null;
+		return {
+			driver: storageRecord.driver,
+			key,
+			mimeType: safeMediaContentType(mediaRecord.mimeType),
+			fileName: safeDownloadName(mediaRecord.fileName),
+		};
+	} catch {
+		return null;
+	}
+}
 
+app.get("/api/media/public/:key{.+}", async (c) => {
+	if (!isLocalStorageDriver() || !(storage instanceof LocalStorageDriver)) {
+		return c.text("Local media is unavailable", 404);
+	}
+	const key = c.req.param("key");
+	try {
+		const safeKey = normalizeStorageKey(key);
+		if (!safeKey.startsWith("media/")) return c.text("Not found", 404);
+		const data = await storage.read(safeKey);
+		return c.body(new Uint8Array(data), 200, {
+			"Content-Type": "application/octet-stream",
+		});
+	} catch {
+		return c.text("Not found", 404);
+	}
+});
+
+app.get("/api/inbox/media/:messageId", async (c) => {
 	const authResult = await requireActiveSession(c);
 	if (authResult.response) return authResult.response;
+	const [message] = await authResult.db
+		.select({ raw: inboxMessage.raw })
+		.from(inboxMessage)
+		.innerJoin(inboxThread, eq(inboxMessage.threadId, inboxThread.id))
+		.innerJoin(device, eq(inboxThread.deviceId, device.id))
+		.where(
+			and(
+				eq(inboxMessage.id, c.req.param("messageId")),
+				eq(device.userId, authResult.session.user.id),
+			),
+		)
+		.limit(1);
+	if (!message) return c.text("Not found", 404);
+	const media = inboundMediaStorage(message.raw);
+	if (!media) return c.text("Not found", 404);
 
+	if (media.driver === "local") {
+		if (!(storage instanceof LocalStorageDriver))
+			return c.text("Not found", 404);
+		try {
+			const data = await storage.read(media.key);
+			return c.body(new Uint8Array(data), 200, {
+				"Content-Type": media.mimeType,
+				"Content-Disposition": `attachment; filename="${media.fileName}"`,
+			});
+		} catch {
+			return c.text("Not found", 404);
+		}
+	}
+	if (!(storage instanceof S3StorageDriver)) return c.text("Not found", 404);
+	return c.redirect(
+		await storage.presignGet(media.key, 60, {
+			fileName: media.fileName,
+			contentType: media.mimeType,
+		}),
+		302,
+	);
+});
+
+// Local-driver direct uploads require a short-lived grant bound to one user and key.
+app.post("/api/uploads/local/:key{.+}", async (c) => {
+	if (!isLocalStorageDriver() || !(storage instanceof LocalStorageDriver)) {
+		return c.text("Local uploads are disabled", 404);
+	}
+	const authResult = await requireActiveSession(c);
+	if (authResult.response) return authResult.response;
 	const key = c.req.param("key");
-	const contentType =
-		c.req.header("content-type") ?? "application/octet-stream";
-	const arrayBuffer = await c.req.arrayBuffer();
-	const data = new Uint8Array(arrayBuffer);
-	const result = await storage.put(key, data, contentType);
-	return c.json({ url: result.url, key: result.key });
+	const contentType = contentTypeWithoutParameters(
+		c.req.header("content-type"),
+	);
+	const grant = c.req.query("grant");
+	if (!grant || !contentType) return c.text("Invalid upload grant", 400);
+	const payload = verifyLocalUploadGrant(grant, env.BETTER_AUTH_SECRET, {
+		key,
+		userId: authResult.session.user.id,
+		mimeType: contentType,
+	});
+	if (!payload)
+		return c.text("Invalid, expired, or unauthorized upload grant", 403);
+	const contentLength = c.req.header("content-length");
+	if (contentLength) {
+		const length = Number(contentLength);
+		if (!Number.isSafeInteger(length) || length < 0) {
+			return c.text("Invalid Content-Length", 400);
+		}
+		if (length > payload.maxBytes)
+			return c.text("Upload exceeds allowed size", 413);
+	}
+	try {
+		const result = await storage.createFromStream(
+			payload.key,
+			c.req.raw.body,
+			payload.maxBytes,
+		);
+		if (result.status === "conflict")
+			return c.text("Upload key already exists", 409);
+		if (result.status === "oversize")
+			return c.text("Upload exceeds allowed size", 413);
+		return c.json({ url: result.object.url, key: result.object.key });
+	} catch {
+		return c.text("Failed to store upload", 500);
+	}
 });
 
 app.get("/api/whatsapp/meta/webhook", (c) => {
@@ -464,6 +602,36 @@ connectionManager.on("device:message", async (ev) => {
 			return;
 		}
 
+		if (message.inboxReservation) {
+			const { messageId, threadId } = message.inboxReservation;
+			const mediaResult = await enrichInboundMedia({
+				inboxMessageId: messageId,
+				deviceId,
+				provider: ev.provider ?? "baileys",
+				providerMessageId: message.providerMessageId,
+				messageType: message.type,
+				raw: message.raw,
+			});
+			const raw = mediaResult.raw ?? message.raw;
+			await db
+				.update(inboxMessage)
+				.set({ raw, updatedAt: new Date() })
+				.where(
+					and(
+						eq(inboxMessage.id, messageId),
+						eq(inboxMessage.threadId, threadId),
+					),
+				);
+			connectionManager.emit("inbox:updated", { deviceId, threadId });
+			connectionManager.emit("device:message-persisted", {
+				...ev,
+				message: { ...message, raw },
+				inboxMessageId: messageId,
+				threadId,
+			});
+			return;
+		}
+
 		let chatType: "private" | "group" | "channel" | "broadcast" = "private";
 		if (contact.jid.endsWith("@g.us")) {
 			chatType = "group";
@@ -603,62 +771,62 @@ connectionManager.on("device:message", async (ev) => {
 
 		const threadId = savedThread?.id;
 
-		if (threadId) {
-			const mediaResult = await enrichInboundMedia({
-				deviceId,
-				provider: ev.provider ?? "baileys",
-				providerMessageId: message.providerMessageId,
+		if (!threadId) return;
+
+		const [insertedMessage] = await db
+			.insert(inboxMessage)
+			.values({
+				id: crypto.randomUUID(),
+				threadId,
+				direction: "inbound",
 				messageType: message.type,
+				text: message.text ?? null,
+				providerMessageId: message.providerMessageId ?? null,
+				deliveryStatus: "received",
 				raw: message.raw,
+			})
+			.onConflictDoNothing()
+			.returning({ id: inboxMessage.id });
+
+		if (!insertedMessage) {
+			console.info("Duplicate inbound WhatsApp message ignored", {
+				deviceId,
+				threadId,
+				providerMessageId: message.providerMessageId,
 			});
-			const messageRaw = mediaResult.raw;
-			const [insertedMessage] = await db
-				.insert(inboxMessage)
-				.values({
-					id: crypto.randomUUID(),
-					threadId,
-					direction: "inbound",
-					messageType: message.type,
-					text: message.text ?? null,
-					providerMessageId: message.providerMessageId ?? null,
-					deliveryStatus: "received",
-					raw: messageRaw,
-				})
-				.onConflictDoNothing()
-				.returning({ id: inboxMessage.id });
-
-			if (!insertedMessage) {
-				if (message.providerMessageId && messageRaw) {
-					await db
-						.update(inboxMessage)
-						.set({ raw: messageRaw, updatedAt: now })
-						.where(
-							and(
-								eq(inboxMessage.threadId, threadId),
-								eq(inboxMessage.providerMessageId, message.providerMessageId),
-							),
-						);
-					connectionManager.emit("inbox:updated", { deviceId, threadId });
-				}
-				console.info("Duplicate inbound WhatsApp message ignored", {
-					deviceId,
-					threadId,
-					providerMessageId: message.providerMessageId,
-				});
-				return;
-			}
-
-			await db
-				.update(inboxThread)
-				.set({
-					lastMessageText: message.text ?? `[${message.type}]`,
-					lastMessageAt: now,
-					unreadCount: sql`${inboxThread.unreadCount} + 1`,
-					updatedAt: now,
-				})
-				.where(eq(inboxThread.id, threadId));
-			connectionManager.emit("inbox:updated", { deviceId, threadId });
+			return;
 		}
+
+		await db
+			.update(inboxThread)
+			.set({
+				lastMessageText: message.text ?? `[${message.type}]`,
+				lastMessageAt: now,
+				unreadCount: sql`${inboxThread.unreadCount} + 1`,
+				updatedAt: now,
+			})
+			.where(eq(inboxThread.id, threadId));
+
+		const mediaResult = await enrichInboundMedia({
+			inboxMessageId: insertedMessage.id,
+			deviceId,
+			provider: ev.provider ?? "baileys",
+			providerMessageId: message.providerMessageId,
+			messageType: message.type,
+			raw: message.raw,
+		});
+		const raw = mediaResult.raw ?? message.raw;
+		await db
+			.update(inboxMessage)
+			.set({ raw, updatedAt: new Date() })
+			.where(eq(inboxMessage.id, insertedMessage.id));
+		connectionManager.emit("inbox:updated", { deviceId, threadId });
+		connectionManager.emit("device:message-persisted", {
+			...ev,
+			message: { ...message, raw },
+			inboxMessageId: insertedMessage.id,
+			threadId,
+		});
 	} catch (err) {
 		console.error("Failed to persist inbox message", err);
 	}
@@ -766,6 +934,7 @@ async function startBackgroundServices() {
 			"flow.continue": (job) => processFlowContinueJob(job.payload),
 			"flow.execute": (job) => processFlowExecuteJob(job.payload),
 			"flow.resume": (job) => processFlowResumeJob(job),
+			"flow.poll_resume": (job) => processFlowPollResumeJob(job),
 			"flow.wait_timeout": (job) => processFlowWaitTimeoutJob(job.payload),
 			"flow.wait_warning": (job) => processFlowWaitWarningJob(job.payload),
 			"webhook.deliver": (job) => processWebhookDeliveryJob(job.payload),

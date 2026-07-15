@@ -27,6 +27,24 @@ export const env = createEnv({
 				return true;
 			}, z.boolean())
 			.default(true),
+		INBOUND_MEDIA_MAX_BYTES: z.coerce
+			.number()
+			.int()
+			.positive()
+			.max(512 * 1024 * 1024)
+			.default(64 * 1024 * 1024),
+		INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: z.coerce
+			.number()
+			.int()
+			.min(1_000)
+			.max(5 * 60 * 1_000)
+			.default(30_000),
+		INBOUND_MEDIA_DOWNLOAD_CONCURRENCY: z.coerce
+			.number()
+			.int()
+			.min(1)
+			.max(50)
+			.default(3),
 		META_GRAPH_API_VERSION: z.string().default("v23.0"),
 		META_APP_SECRET: z.string().optional(),
 		META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),

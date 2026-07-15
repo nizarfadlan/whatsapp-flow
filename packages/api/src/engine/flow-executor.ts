@@ -14,6 +14,7 @@ import {
 } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import type {
+	IncomingReplyDescriptor,
 	OutgoingMessage,
 	ProviderMessageRef,
 	SendResult,
@@ -59,6 +60,20 @@ type InteractiveOption = {
 	index: number;
 };
 
+export type WaitContextV1 = {
+	version: 1;
+	kind: "interactive" | "poll";
+	deliveryMode: "text_fallback" | "native_poll";
+	provider?: SendResult["provider"];
+	/** Complete creation key required to bind native Baileys poll updates. */
+	pollMessageKey?: import("baileys").WAMessageKey;
+	options: Array<
+		InteractiveOption & {
+			nextNodeIds: string[];
+		}
+	>;
+};
+
 type NodeResult = {
 	nodeId: string;
 	status: "success" | "error";
@@ -83,6 +98,8 @@ type ExecutionContext = TemplateContext & {
 	claimJobId?: string | null;
 	triggerMessageKey?: import("baileys").WAMessageKey;
 	triggerProviderMessageId?: string;
+	interactiveSendResult?: SendResult;
+	interactiveOptions?: InteractiveOption[];
 };
 
 type ExecutionStatus = "running" | "waiting" | "completed" | "failed";
@@ -161,15 +178,22 @@ function getNextNodes(
 		.filter((node): node is FlowNode => node != null);
 }
 
-function getNextNodeIds(nodeId: string, adjacency: Map<string, FlowEdge[]>) {
-	return (adjacency.get(nodeId) ?? []).map((edge) => edge.target);
+function getNextNodeIds(
+	nodeId: string,
+	adjacency: Map<string, FlowEdge[]>,
+	handle?: string,
+) {
+	return (adjacency.get(nodeId) ?? [])
+		.filter((edge) => !handle || edge.sourceHandle === handle)
+		.map((edge) => edge.target);
 }
 
 export function isInteractiveNode(type: string) {
 	return (
 		type === "send-button" ||
 		type === "send-list" ||
-		type === "send-quick-reply"
+		type === "send-quick-reply" ||
+		type === "send-poll"
 	);
 }
 
@@ -191,7 +215,9 @@ export function getInteractiveOptions(node: FlowNode): InteractiveOption[] {
 						text: row.title,
 					})),
 				)
-			: ((data.buttons as { id: string; text: string }[] | undefined) ?? []);
+			: (((node.type === "send-poll" ? data.options : data.buttons) as
+					| { id: string; text: string }[]
+					| undefined) ?? []);
 
 	return options
 		.map((option, index) => ({
@@ -204,7 +230,13 @@ export function getInteractiveOptions(node: FlowNode): InteractiveOption[] {
 }
 
 export function resolveInteractiveReply(node: FlowNode, incomingText: string) {
-	const options = getInteractiveOptions(node);
+	return resolveInteractiveOption(getInteractiveOptions(node), incomingText);
+}
+
+function resolveInteractiveOption<T extends InteractiveOption>(
+	options: T[],
+	incomingText: string,
+): T | null {
 	const normalized = incomingText.trim();
 	const numeric = Number(normalized);
 	if (Number.isInteger(numeric) && numeric >= 1) {
@@ -221,11 +253,162 @@ export function resolveInteractiveReply(node: FlowNode, incomingText: string) {
 	);
 }
 
+export function buildInteractiveWaitContext(
+	node: FlowNode,
+	adjacency: Map<string, FlowEdge[]>,
+	sendResult?: SendResult | SendResult["provider"],
+	optionsOverride?: InteractiveOption[],
+): WaitContextV1 {
+	const poll = node.type === "send-poll";
+	const result = typeof sendResult === "string" ? undefined : sendResult;
+	const provider =
+		typeof sendResult === "string" ? sendResult : result?.provider;
+	return {
+		version: 1,
+		kind: poll ? "poll" : "interactive",
+		deliveryMode:
+			poll && result?.deliveryMode === "native_poll"
+				? "native_poll"
+				: "text_fallback",
+		...(provider ? { provider } : {}),
+		...(poll && result?.messageKey
+			? { pollMessageKey: result.messageKey }
+			: {}),
+		options: (optionsOverride ?? getInteractiveOptions(node)).map((option) => ({
+			...option,
+			nextNodeIds: getNextNodeIds(node.id, adjacency, option.handle),
+		})),
+	};
+}
+
+export function parseInteractiveWaitContext(
+	value: unknown,
+): WaitContextV1 | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const context = value as Record<string, unknown>;
+	if (
+		context.version !== 1 ||
+		(context.kind !== "interactive" && context.kind !== "poll") ||
+		(context.deliveryMode !== "text_fallback" &&
+			context.deliveryMode !== "native_poll") ||
+		!Array.isArray(context.options)
+	) {
+		return null;
+	}
+
+	const provider = context.provider;
+	if (
+		provider !== undefined &&
+		provider !== "baileys" &&
+		provider !== "meta_cloud"
+	) {
+		return null;
+	}
+
+	const options: WaitContextV1["options"] = [];
+	for (const value of context.options) {
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			return null;
+		const option = value as Record<string, unknown>;
+		const index = option.index;
+		if (
+			typeof option.id !== "string" ||
+			typeof option.text !== "string" ||
+			typeof option.handle !== "string" ||
+			typeof index !== "number" ||
+			!Number.isInteger(index) ||
+			index < 1 ||
+			!Array.isArray(option.nextNodeIds) ||
+			!option.nextNodeIds.every((nodeId) => typeof nodeId === "string")
+		) {
+			return null;
+		}
+		options.push({
+			id: option.id,
+			text: option.text,
+			handle: option.handle,
+			index,
+			nextNodeIds: option.nextNodeIds,
+		});
+	}
+
+	const kind = context.kind;
+	const deliveryMode = context.deliveryMode;
+	const pollMessageKey = context.pollMessageKey;
+	if (kind === "interactive" && deliveryMode !== "text_fallback") return null;
+	if (
+		kind === "poll" &&
+		deliveryMode === "native_poll" &&
+		(!pollMessageKey ||
+			typeof pollMessageKey !== "object" ||
+			typeof (pollMessageKey as { id?: unknown }).id !== "string" ||
+			typeof (pollMessageKey as { remoteJid?: unknown }).remoteJid !== "string")
+	) {
+		return null;
+	}
+	return {
+		version: 1,
+		kind,
+		deliveryMode,
+		...(provider ? { provider } : {}),
+		...(kind === "poll" && pollMessageKey
+			? { pollMessageKey: pollMessageKey as import("baileys").WAMessageKey }
+			: {}),
+		options,
+	};
+}
+
+export function resolveInteractiveWaitReply(
+	context: WaitContextV1,
+	incomingText: string,
+	reply?: IncomingReplyDescriptor,
+) {
+	if (reply?.selectedId) {
+		const selected = context.options.find(
+			(option) => option.id === reply.selectedId,
+		);
+		if (selected) return selected;
+	}
+	if (reply?.selectedText) {
+		const selected = context.options.find(
+			(option) =>
+				option.text.toLowerCase() === reply.selectedText?.trim().toLowerCase(),
+		);
+		if (selected) return selected;
+	}
+	return resolveInteractiveOption(context.options, incomingText);
+}
+
 function getNodesByIds(nodeIds: string[], nodes: FlowNode[]) {
 	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
 	return nodeIds
 		.map((nodeId) => nodeMap.get(nodeId))
 		.filter((node): node is FlowNode => node != null);
+}
+
+export function getInteractiveWaitSnapshotTargets(
+	selected: WaitContextV1["options"][number],
+	nodes: FlowNode[],
+) {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	const missingNodeIds = selected.nextNodeIds.filter(
+		(nodeId) => !nodeMap.has(nodeId),
+	);
+	return {
+		nodes: selected.nextNodeIds
+			.map((nodeId) => nodeMap.get(nodeId))
+			.filter((node): node is FlowNode => node != null),
+		missingNodeIds,
+	};
+}
+
+export function getWaitingBranchMissingError(
+	selected: InteractiveOption,
+	missingNodeIds: string[] = [],
+) {
+	const detail =
+		missingNodeIds.length > 0 ? `: ${missingNodeIds.join(", ")}` : "";
+	return `waiting_branch_missing: Selected option ${selected.index}. ${selected.text} has missing target${missingNodeIds.length === 1 ? "" : "s"}${detail}`;
 }
 
 function evaluateCondition(
@@ -256,6 +439,46 @@ function evaluateCondition(
 		default:
 			return false;
 	}
+}
+
+export function buildPollMessage(
+	node: FlowNode,
+	jid: string,
+	ctx: TemplateContext,
+) {
+	if (!jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@lid")) {
+		throw new Error("Poll flows are supported only in private chats");
+	}
+	const name = resolveFlowTemplate(
+		String(node.data.question ?? ""),
+		ctx,
+	).trim();
+	const options = getInteractiveOptions(node).map((option) => ({
+		...option,
+		text: resolveFlowTemplate(option.text, ctx).trim(),
+	}));
+	if (!name || options.length < 2 || options.some((option) => !option.text)) {
+		throw new Error(
+			"Poll question and at least two non-empty options are required",
+		);
+	}
+	if (new Set(options.map((option) => option.text)).size !== options.length) {
+		throw new Error("Poll option text must be unique");
+	}
+	const fallbackText = [
+		name,
+		...options.map((option) => `${option.index}. ${option.text}`),
+	].join("\n");
+	return {
+		message: {
+			type: "poll" as const,
+			name,
+			values: options.map((option) => option.text),
+			selectableCount: 1 as const,
+			fallbackText,
+		},
+		options,
+	};
 }
 
 async function executeNode(node: FlowNode, ctx: ExecutionContext) {
@@ -439,7 +662,7 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 				const footer = data.footerText
 					? resolveTemplate(String(data.footerText), ctx)
 					: undefined;
-				await sendDeviceMessage(ctx.deviceId, jid, {
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: [
 						bodyText,
@@ -449,6 +672,14 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 						.filter(Boolean)
 						.join("\n"),
 				});
+				await recordOutboundMessage(
+					ctx,
+					"text",
+					bodyText,
+					undefined,
+					sendResult,
+				);
+				ctx.interactiveSendResult = sendResult;
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
 			}
@@ -478,25 +709,58 @@ async function executeNode(node: FlowNode, ctx: ExecutionContext) {
 					}
 				}
 				if (footer) lines.push(`\n_${footer}_`);
-				await sendDeviceMessage(ctx.deviceId, jid, {
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: lines.join("\n"),
 				});
+				await recordOutboundMessage(
+					ctx,
+					"text",
+					bodyText,
+					undefined,
+					sendResult,
+				);
+				ctx.interactiveSendResult = sendResult;
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
 			}
 			case "send-quick-reply": {
 				const bodyText = resolveTemplate(String(data.bodyText ?? ""), ctx);
 				const buttons =
-					(data.buttons as { id: string; text: string }[] | undefined) ?? [];
+					((node.type === "send-poll" ? data.options : data.buttons) as
+						| { id: string; text: string }[]
+						| undefined) ?? [];
 				const lines: string[] = [bodyText];
 				for (let i = 0; i < buttons.length; i++) {
 					lines.push(`${i + 1}. ${buttons[i]?.text ?? ""}`);
 				}
-				await sendDeviceMessage(ctx.deviceId, jid, {
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, {
 					type: "text",
 					text: lines.join("\n"),
 				});
+				await recordOutboundMessage(
+					ctx,
+					"text",
+					bodyText,
+					undefined,
+					sendResult,
+				);
+				ctx.interactiveSendResult = sendResult;
+				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
+				return true;
+			}
+			case "send-poll": {
+				const { message, options } = buildPollMessage(node, jid, ctx);
+				const sendResult = await sendDeviceMessage(ctx.deviceId, jid, message);
+				await recordOutboundMessage(
+					ctx,
+					"poll",
+					message.fallbackText,
+					undefined,
+					sendResult,
+				);
+				ctx.interactiveSendResult = sendResult;
+				ctx.interactiveOptions = options;
 				ctx.nodeResults.push({ nodeId: node.id, status: "success" });
 				return true;
 			}
@@ -1089,20 +1353,23 @@ async function recordOutboundMessage(
 		const threadId = savedThread?.id;
 
 		if (threadId) {
-			await db.insert(inboxMessage).values({
-				id: crypto.randomUUID(),
-				threadId,
-				direction: "outbound",
-				messageType,
-				text: text ?? null,
-				providerMessageId: sendResult?.messageId ?? null,
-				deliveryStatus: sendResult
-					? sendResult.provider === "meta_cloud"
-						? "accepted"
-						: "sent"
-					: null,
-				raw: storedRaw ?? null,
-			});
+			await db
+				.insert(inboxMessage)
+				.values({
+					id: crypto.randomUUID(),
+					threadId,
+					direction: "outbound",
+					messageType,
+					text: text ?? null,
+					providerMessageId: sendResult?.messageId ?? null,
+					deliveryStatus: sendResult
+						? sendResult.provider === "meta_cloud"
+							? "accepted"
+							: "sent"
+						: null,
+					raw: storedRaw ?? null,
+				})
+				.onConflictDoNothing();
 			connectionManager.emit("inbox:updated", {
 				deviceId: ctx.deviceId,
 				threadId,
@@ -1617,6 +1884,34 @@ async function createWaitingSession(
 	);
 	const expiresAt = new Date(Date.now() + timeoutMinutes * 60_000);
 	const nextNodeIds = interactive ? [] : getNextNodeIds(node.id, adjacency);
+	const waitContext = interactive
+		? buildInteractiveWaitContext(
+				node,
+				adjacency,
+				ctx.interactiveSendResult,
+				node.type === "send-poll" ? ctx.interactiveOptions : undefined,
+			)
+		: null;
+	const waitingProviderMessageId = ctx.interactiveSendResult?.messageId ?? null;
+	if (
+		node.type === "send-poll" &&
+		ctx.interactiveSendResult?.deliveryMode === "native_poll" &&
+		(!ctx.interactiveSendResult.messageKey ||
+			ctx.interactiveSendResult.originalMessageStored !== true)
+	) {
+		await recordFlowExecutionEvent({
+			executionLogId: ctx.logId,
+			flowId: ctx.flowId,
+			deviceId: ctx.deviceId,
+			contactNumber: ctx.contactNumber,
+			contactKey: ctx.contactKey,
+			type: "poll_wait_binding_failed",
+			nodeId: node.id,
+			message: "Native poll message binding could not be persisted",
+			payload: { messageId: ctx.interactiveSendResult.messageId ?? null },
+		});
+		throw new Error("poll_wait_binding_failed");
+	}
 	const variableName = interactive
 		? "selectedOption"
 		: String(node.data.variableName ?? "reply");
@@ -1638,6 +1933,8 @@ async function createWaitingSession(
 					status: "waiting",
 					waitingNodeId: node.id,
 					nextNodeIds,
+					waitContext,
+					waitingProviderMessageId,
 					variables: ctx.variables,
 					nodeResults: ctx.nodeResults,
 					expiresAt,
@@ -1693,6 +1990,8 @@ async function createWaitingSession(
 				status: "waiting",
 				waitingNodeId: node.id,
 				nextNodeIds,
+				waitContext,
+				waitingProviderMessageId,
 				variables: ctx.variables,
 				nodeResults: ctx.nodeResults,
 				expiresAt,
@@ -1766,6 +2065,7 @@ export async function resumeWaitingSession(
 	incomingText: string,
 	replyJid = `${contactNumber}@s.whatsapp.net`,
 	triggerRef?: ProviderMessageRef,
+	reply?: IncomingReplyDescriptor,
 ): Promise<ExecutionResult | null> {
 	const contactKey = derivePrivateIdentityKey({
 		jid: replyJid,
@@ -1787,7 +2087,7 @@ export async function resumeWaitingSession(
 
 	const claimed = await claimWaitingSession(waiting);
 	if (!claimed) return null;
-	return resumeFlowSession(claimed, incomingText, replyJid, triggerRef);
+	return resumeFlowSession(claimed, incomingText, replyJid, triggerRef, reply);
 }
 
 export async function resumeWaitingSessionById(
@@ -1796,6 +2096,7 @@ export async function resumeWaitingSessionById(
 	replyJid: string,
 	triggerRef?: ProviderMessageRef,
 	claimJobId?: string,
+	reply?: IncomingReplyDescriptor,
 ): Promise<ExecutionResult | null> {
 	const [waiting] = await db
 		.select()
@@ -1807,7 +2108,7 @@ export async function resumeWaitingSessionById(
 
 	const claimed = await claimWaitingSession(waiting, claimJobId);
 	if (!claimed) return null;
-	return resumeFlowSession(claimed, incomingText, replyJid, triggerRef);
+	return resumeFlowSession(claimed, incomingText, replyJid, triggerRef, reply);
 }
 
 async function claimWaitingSession(
@@ -1880,6 +2181,7 @@ async function resumeFlowSession(
 	incomingText: string,
 	replyJid: string,
 	triggerRef?: ProviderMessageRef,
+	reply?: IncomingReplyDescriptor,
 ): Promise<ExecutionResult> {
 	const [flowRow] = await db
 		.select()
@@ -1895,8 +2197,11 @@ async function resumeFlowSession(
 	const nodes = (flowRow.nodes ?? []) as FlowNode[];
 	const edges = (flowRow.edges ?? []) as FlowEdge[];
 	const adjacency = buildAdjacencyMap(edges);
+	const interactiveWaitContext = parseInteractiveWaitContext(
+		session.waitContext,
+	);
 	const waitingNode = nodes.find((node) => node.id === session.waitingNodeId);
-	if (!waitingNode) {
+	if (!interactiveWaitContext && !waitingNode) {
 		await markSessionFailed(session, "Waiting node not found");
 		return {
 			status: "failed",
@@ -1909,8 +2214,13 @@ async function resumeFlowSession(
 	const nodeResults = normalizeNodeResults(session.nodeResults);
 	let startNodes: FlowNode[];
 
-	if (isInteractiveNode(waitingNode.type)) {
-		const selected = resolveInteractiveReply(waitingNode, incomingText);
+	if (interactiveWaitContext || isInteractiveNode(waitingNode?.type ?? "")) {
+		const selectedFromSnapshot = interactiveWaitContext
+			? resolveInteractiveWaitReply(interactiveWaitContext, incomingText, reply)
+			: null;
+		const selected = interactiveWaitContext
+			? selectedFromSnapshot
+			: resolveInteractiveReply(waitingNode as FlowNode, incomingText);
 		await recordFlowExecutionEvent({
 			executionLogId: session.executionLogId,
 			flowId: session.flowId,
@@ -1967,12 +2277,17 @@ async function resumeFlowSession(
 		variables.selectedOptionId = selected.id;
 		variables.selectedOptionText = selected.text;
 		variables.selectedOptionIndex = String(selected.index);
-		startNodes = getNextNodes(
-			waitingNode.id,
-			adjacency,
-			nodes,
-			selected.handle,
-		);
+		const snapshotTargets = selectedFromSnapshot
+			? getInteractiveWaitSnapshotTargets(selectedFromSnapshot, nodes)
+			: null;
+		startNodes = snapshotTargets
+			? snapshotTargets.nodes
+			: getNextNodes(
+					(waitingNode as FlowNode).id,
+					adjacency,
+					nodes,
+					selected.handle,
+				);
 
 		await recordFlowExecutionEvent({
 			executionLogId: session.executionLogId,
@@ -1992,9 +2307,23 @@ async function resumeFlowSession(
 			},
 		});
 
-		if (startNodes.length === 0) {
-			const error = `Selected option ${selected.index}. ${selected.text} is not connected`;
-			await markSessionFailed(session, error, nodeResults, variables);
+		if (
+			startNodes.length === 0 ||
+			(snapshotTargets && snapshotTargets.missingNodeIds.length > 0)
+		) {
+			const error = interactiveWaitContext
+				? getWaitingBranchMissingError(
+						selected,
+						snapshotTargets?.missingNodeIds,
+					)
+				: `Selected option ${selected.index}. ${selected.text} is not connected`;
+			await markSessionFailed(
+				session,
+				error,
+				nodeResults,
+				variables,
+				interactiveWaitContext ? "waiting_branch_missing" : undefined,
+			);
 			return {
 				status: "failed",
 				logId: session.executionLogId,
@@ -2004,7 +2333,7 @@ async function resumeFlowSession(
 		}
 	} else {
 		const variableName = String(
-			waitingNode.data.variableName ?? "reply",
+			(waitingNode as FlowNode).data.variableName ?? "reply",
 		).trim();
 		const savedVariableName = variableName || "reply";
 		variables[savedVariableName] = incomingText;
@@ -2123,6 +2452,7 @@ async function markSessionFailed(
 	error: string,
 	nodeResults = normalizeNodeResults(session.nodeResults),
 	variables = normalizeVariables(session.variables),
+	failureCode = "execution_failed",
 ) {
 	await persistProgress(session.executionLogId, nodeResults, error, "failed");
 	const [updated] = await db
@@ -2133,7 +2463,7 @@ async function markSessionFailed(
 			nodeResults,
 			claimJobId: null,
 			claimedAt: null,
-			failureCode: "execution_failed",
+			failureCode,
 			completedAt: new Date(),
 		})
 		.where(runningSessionOwnershipFilter(session))

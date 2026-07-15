@@ -235,6 +235,8 @@ export const flowSession = pgTable(
 		status: flowSessionStatusEnum("status").default("waiting").notNull(),
 		waitingNodeId: text("waiting_node_id").notNull(),
 		nextNodeIds: jsonb("next_node_ids").default("[]").notNull(),
+		waitContext: jsonb("wait_context"),
+		waitingProviderMessageId: text("waiting_provider_message_id"),
 		variables: jsonb("variables").default("{}").notNull(),
 		nodeResults: jsonb("node_results").default("[]").notNull(),
 		expiresAt: timestamp("expires_at"),
@@ -262,6 +264,11 @@ export const flowSession = pgTable(
 		index("flow_session_contact_status_idx").on(
 			table.deviceId,
 			table.contactNumber,
+			table.status,
+		),
+		index("flow_session_device_waiting_provider_status_idx").on(
+			table.deviceId,
+			table.waitingProviderMessageId,
 			table.status,
 		),
 		index("flow_session_flowId_idx").on(table.flowId),

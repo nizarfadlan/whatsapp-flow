@@ -34,6 +34,7 @@ import {
 	ResourceSyncControls,
 	useResourceSyncCompletion,
 } from "@/components/resource-sync-controls";
+import { TagBadges, TagPicker } from "@/components/tag-picker";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/contacts")({
@@ -144,6 +145,21 @@ function ContactsPage() {
 				>
 					{row.isWaContact ? "✓" : "—"}
 				</Badge>
+			),
+		},
+		{
+			key: "tags",
+			header: "Tags",
+			cell: (row: (typeof contacts)[0]) => (
+				<div className="flex items-center gap-1">
+					<TagBadges tags={row.tags} />
+					<TagPicker
+						resource="contact"
+						resourceId={row.id}
+						tags={row.tags}
+						onSaved={refetch}
+					/>
+				</div>
 			),
 		},
 		{

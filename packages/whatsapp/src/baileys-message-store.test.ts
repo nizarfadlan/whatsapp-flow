@@ -65,4 +65,16 @@ describe("Baileys message cache", () => {
 		expect(Buffer.isBuffer(revived.imageMessage?.jpegThumbnail)).toBe(true);
 		expect(revived.imageMessage?.jpegThumbnail).toEqual(Buffer.from([1, 2, 3]));
 	});
+
+	test("preserves poll creation secrets through BufferJSON", () => {
+		const message: proto.IMessage = {
+			pollCreationMessage: {
+				name: "Choose",
+				encKey: Buffer.from([9, 8, 7]),
+				selectableOptionsCount: 1,
+			},
+		};
+		const revived = reviveMessageContent(serializeMessageContent(message));
+		expect(revived.pollCreationMessage?.encKey).toEqual(Buffer.from([9, 8, 7]));
+	});
 });

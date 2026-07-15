@@ -129,6 +129,7 @@ type StoredMedia = {
 	url?: string | null;
 	mimeType?: string | null;
 	fileName?: string | null;
+	storage?: { url?: string | null } | null;
 };
 
 type MessageContentInput = {
@@ -158,45 +159,46 @@ function getTemplateSummary(raw: unknown) {
 
 function MessageContent({ message }: { message: MessageContentInput }) {
 	const media = getMessageMedia(message.raw);
+	const mediaUrl = media?.storage?.url ?? media?.url;
 	const templateSummary = getTemplateSummary(message.raw);
-	if (media?.url && message.messageType === "image") {
+	if (mediaUrl && message.messageType === "image") {
 		return (
 			<div className="space-y-1">
 				<img
-					src={media.url}
-					alt={media.fileName ?? "WhatsApp image"}
+					src={mediaUrl}
+					alt={media?.fileName ?? "WhatsApp image"}
 					className="max-h-64 rounded-lg object-cover"
 				/>
 				{message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
 			</div>
 		);
 	}
-	if (media?.url && message.messageType === "video") {
+	if (mediaUrl && message.messageType === "video") {
 		return (
 			<div className="space-y-1">
-				<video src={media.url} controls className="max-h-64 rounded-lg">
+				<video src={mediaUrl} controls className="max-h-64 rounded-lg">
 					<track kind="captions" />
 				</video>
 				{message.text && <p className="whitespace-pre-wrap">{message.text}</p>}
 			</div>
 		);
 	}
-	if (media?.url && message.messageType === "audio") {
+	if (mediaUrl && message.messageType === "audio") {
 		return (
-			<audio src={media.url} controls className="w-64 max-w-full">
+			<audio src={mediaUrl} controls className="w-64 max-w-full">
 				<track kind="captions" />
 			</audio>
 		);
 	}
-	if (media?.url && message.messageType === "document") {
+	if (mediaUrl && message.messageType === "document") {
 		return (
 			<a
-				href={media.url}
+				href={mediaUrl}
 				target="_blank"
 				rel="noreferrer"
 				className="font-medium underline underline-offset-2"
 			>
-				{media.fileName ?? message.text ?? "Download document"}
+				{media?.fileName ?? message.text ?? "Download document"}
 			</a>
 		);
 	}

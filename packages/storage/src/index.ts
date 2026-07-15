@@ -2,7 +2,24 @@ import { env } from "@whatsapp-flow/env/server";
 import { LocalStorageDriver } from "./local";
 import { S3StorageDriver } from "./s3";
 
-export type { PresignedUpload, StorageDriver, StoredObject } from "./types";
+export { normalizeStorageKey, resolveStoragePath } from "./key";
+export { LocalStorageDriver } from "./local";
+export {
+	createLocalUploadGrant,
+	type LocalUploadGrantPayload,
+	verifyLocalUploadGrant,
+} from "./local-upload-grant";
+export { S3StorageDriver } from "./s3";
+export type {
+	LocalReadableStorage,
+	LocalUploadResult,
+	PresignedReadableStorage,
+	PresignedUpload,
+	PresignGetOptions,
+	PresignPutOptions,
+	StorageDriver,
+	StoredObject,
+} from "./types";
 
 function hasS3Config() {
 	return Boolean(

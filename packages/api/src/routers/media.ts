@@ -1,3 +1,4 @@
+import { env } from "@whatsapp-flow/env/server";
 import { storage } from "@whatsapp-flow/storage";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
@@ -47,8 +48,8 @@ function ext(mimeType: string) {
 
 export const mediaRouter = router({
 	/**
-	 * Creates a presigned upload URL (S3) or a direct-upload endpoint (local).
-	 * The client uploads to `uploadUrl` via PUT (S3) or POST (local route).
+	 * Creates a presigned POST (S3) or a direct-upload endpoint (local).
+	 * The client uploads to `uploadUrl` with the returned method and fields.
 	 * After upload the `publicUrl` is used as `mediaUrl` on the node.
 	 */
 	createUploadUrl: protectedProcedure
@@ -56,21 +57,31 @@ export const mediaRouter = router({
 			z.object({
 				fileName: z.string().min(1).max(255),
 				mimeType: z.string().min(1),
-				size: z.number().positive().max(MAX_BYTES),
+				size: z.number().int().positive().max(MAX_BYTES),
 			}),
 		)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input, ctx }) => {
+			if (storage.driver === "s3" && !env.S3_PUBLIC_URL) {
+				throw new Error(
+					"S3_PUBLIC_URL is required for direct outbound S3 uploads",
+				);
+			}
 			if (!ALLOWED_MIME_TYPES.has(input.mimeType)) {
 				throw new Error(`File type not allowed: ${input.mimeType}`);
 			}
 
 			const key = `media/${crypto.randomUUID()}.${ext(input.mimeType)}`;
-			const presigned = await storage.presignPut(key, input.mimeType, 300);
+			const presigned = await storage.presignPut(key, input.mimeType, 300, {
+				userId: ctx.session.user.id,
+				maxBytes: input.size,
+			});
 
 			return {
 				driver: storage.driver,
 				key: presigned.key,
 				uploadUrl: presigned.uploadUrl,
+				uploadMethod: presigned.uploadMethod,
+				fields: presigned.fields,
 				publicUrl: presigned.publicUrl,
 				mimeType: input.mimeType,
 				fileName: input.fileName,

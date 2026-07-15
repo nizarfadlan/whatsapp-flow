@@ -2,10 +2,9 @@ import { env } from "@whatsapp-flow/env/server";
 import type { OutgoingMessage } from "../../message-sender";
 
 const GRAPH_BASE_URL = "https://graph.facebook.com";
-const MAX_META_MEDIA_BYTES = 64 * 1024 * 1024;
 const GRAPH_REQUEST_TIMEOUT_MS = 10_000;
-const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAX_TRANSIENT_ATTEMPTS = 3;
+const MAX_MEDIA_REDIRECTS = 3;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 
 type GraphErrorResponse = {
@@ -98,6 +97,17 @@ export async function sendMetaMessage(input: {
 	);
 }
 
+export class MetaMediaDownloadError extends Error {
+	constructor(
+		readonly code: "oversize" | "timeout" | "network" | "download" | "policy",
+		message: string,
+		readonly retryable: boolean,
+	) {
+		super(message);
+		this.name = "MetaMediaDownloadError";
+	}
+}
+
 export async function downloadMetaMedia(input: {
 	credentials: MetaCredentials;
 	mediaId: string;
@@ -108,37 +118,187 @@ export async function downloadMetaMedia(input: {
 		{ method: "GET" },
 	);
 	if (!metadata.url) {
-		throw new Error("Meta media metadata did not include a download URL");
+		throw new MetaMediaDownloadError(
+			"download",
+			"Meta media download failed",
+			false,
+		);
 	}
-	if (metadata.file_size && metadata.file_size > MAX_META_MEDIA_BYTES) {
-		throw new Error("Meta media file exceeds the inbound download limit");
+	if (metadata.file_size && metadata.file_size > env.INBOUND_MEDIA_MAX_BYTES) {
+		throw new MetaMediaDownloadError(
+			"oversize",
+			"Media exceeds the inbound download limit",
+			false,
+		);
 	}
 
-	const { response } = await fetchWithRetry(metadata.url, {
-		timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
-		init: {
-			headers: { Authorization: `Bearer ${input.credentials.accessToken}` },
-		},
-	});
+	const response = await fetchMetaMediaWithRedirects(
+		metadata.url,
+		input.credentials.accessToken,
+	);
 	if (!response.ok) {
-		throw new Error(
-			`Meta media download failed with status ${response.status}`,
+		throw new MetaMediaDownloadError(
+			"download",
+			"Meta media download failed",
+			isRetryableStatus(response.status),
 		);
 	}
 
 	const contentLength = Number(response.headers.get("content-length"));
-	if (Number.isFinite(contentLength) && contentLength > MAX_META_MEDIA_BYTES) {
-		throw new Error("Meta media file exceeds the inbound download limit");
+	if (
+		Number.isFinite(contentLength) &&
+		contentLength > env.INBOUND_MEDIA_MAX_BYTES
+	) {
+		await response.body?.cancel();
+		throw new MetaMediaDownloadError(
+			"oversize",
+			"Media exceeds the inbound download limit",
+			false,
+		);
 	}
+	const bytes = await readMediaBody(response, env.INBOUND_MEDIA_MAX_BYTES);
 
 	return {
-		bytes: new Uint8Array(await response.arrayBuffer()),
+		bytes,
 		mimeType: metadata.mime_type ?? response.headers.get("content-type"),
 		size:
 			metadata.file_size ??
-			(Number.isFinite(contentLength) ? contentLength : null),
+			(Number.isFinite(contentLength) ? contentLength : bytes.byteLength),
 		sha256: metadata.sha256 ?? null,
 	};
+}
+
+export function isAllowedMetaMediaUrl(value: URL | string) {
+	let url: URL;
+	try {
+		url = typeof value === "string" ? new URL(value) : value;
+	} catch {
+		return false;
+	}
+	if (url.protocol !== "https:") return false;
+	const hostname = url.hostname.toLowerCase();
+	return ["facebook.com", "fbsbx.com", "fbcdn.net"].some(
+		(domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+	);
+}
+
+export async function readMediaBody(response: Response, maxBytes: number) {
+	if (!response.body) return new Uint8Array(await response.arrayBuffer());
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > maxBytes) {
+				await reader.cancel();
+				throw new MetaMediaDownloadError(
+					"oversize",
+					"Media exceeds the inbound download limit",
+					false,
+				);
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
+}
+
+async function fetchMetaMediaWithRedirects(
+	urlValue: string,
+	accessToken: string,
+) {
+	let url: URL;
+	try {
+		url = new URL(urlValue);
+	} catch {
+		throw new MetaMediaDownloadError(
+			"policy",
+			"Meta media URL is not allowed",
+			false,
+		);
+	}
+	for (let redirect = 0; redirect <= MAX_MEDIA_REDIRECTS; redirect++) {
+		if (!isAllowedMetaMediaUrl(url)) {
+			throw new MetaMediaDownloadError(
+				"policy",
+				"Meta media URL is not allowed",
+				false,
+			);
+		}
+		const response = await fetchMetaMediaRequest(url, accessToken);
+		if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+		const location = response.headers.get("location");
+		await response.body?.cancel();
+		if (!location || redirect === MAX_MEDIA_REDIRECTS) {
+			throw new MetaMediaDownloadError(
+				"policy",
+				"Meta media redirect is not allowed",
+				false,
+			);
+		}
+		try {
+			url = new URL(location, url);
+		} catch {
+			throw new MetaMediaDownloadError(
+				"policy",
+				"Meta media redirect is not allowed",
+				false,
+			);
+		}
+	}
+	throw new MetaMediaDownloadError(
+		"policy",
+		"Meta media redirect is not allowed",
+		false,
+	);
+}
+
+async function fetchMetaMediaRequest(url: URL, accessToken: string) {
+	let lastError: MetaMediaDownloadError | undefined;
+	for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt++) {
+		try {
+			const response = await fetch(url, {
+				headers: { Authorization: `Bearer ${accessToken}` },
+				redirect: "manual",
+				signal: AbortSignal.timeout(env.INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS),
+			});
+			if (
+				attempt < MAX_TRANSIENT_ATTEMPTS &&
+				isRetryableStatus(response.status)
+			) {
+				await response.body?.cancel();
+				await backoff(attempt);
+				continue;
+			}
+			return response;
+		} catch (error) {
+			lastError = new MetaMediaDownloadError(
+				error instanceof DOMException && error.name === "TimeoutError"
+					? "timeout"
+					: "network",
+				error instanceof DOMException && error.name === "TimeoutError"
+					? "Media download timed out"
+					: "Meta media download failed",
+				true,
+			);
+			if (attempt < MAX_TRANSIENT_ATTEMPTS) await backoff(attempt);
+		}
+	}
+	throw (
+		lastError ??
+		new MetaMediaDownloadError("network", "Meta media download failed", true)
+	);
 }
 
 export async function exchangeMetaOAuthCode(input: {
@@ -176,19 +336,21 @@ export async function exchangeMetaOAuthCode(input: {
 
 async function fetchWithRetry(
 	url: URL | string,
-	options: { init?: RequestInit; timeoutMs: number },
+	options: {
+		init?: RequestInit;
+		timeoutMs: number;
+		maxAttempts?: number;
+	},
 ) {
+	const maxAttempts = options.maxAttempts ?? MAX_TRANSIENT_ATTEMPTS;
 	let lastError: unknown;
-	for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt++) {
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		try {
 			const response = await fetch(url, {
 				...options.init,
 				signal: AbortSignal.timeout(options.timeoutMs),
 			});
-			if (
-				attempt < MAX_TRANSIENT_ATTEMPTS &&
-				isRetryableStatus(response.status)
-			) {
+			if (attempt < maxAttempts && isRetryableStatus(response.status)) {
 				await response.arrayBuffer().catch(() => undefined);
 				await backoff(attempt);
 				continue;
@@ -196,7 +358,7 @@ async function fetchWithRetry(
 			return { response, attempts: attempt };
 		} catch (error) {
 			lastError = error;
-			if (attempt >= MAX_TRANSIENT_ATTEMPTS) break;
+			if (attempt >= maxAttempts) break;
 			await backoff(attempt);
 		}
 	}
@@ -234,6 +396,7 @@ async function graphRequest<T>(
 
 	const { response, attempts } = await fetchWithRetry(url, {
 		timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
+		maxAttempts: options.method === "GET" ? MAX_TRANSIENT_ATTEMPTS : 1,
 		init: {
 			method: options.method,
 			headers: {
@@ -372,6 +535,12 @@ function toMetaMessagePayload(to: string, message: OutgoingMessage) {
 					longitude: message.longitude,
 					name: message.name,
 				},
+			};
+		case "poll":
+			return {
+				...base,
+				type: "text",
+				text: { body: message.fallbackText, preview_url: false },
 			};
 		case "template": {
 			const name = message.name.trim();
