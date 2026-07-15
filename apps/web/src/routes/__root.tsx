@@ -1,17 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import {
 	createRootRouteWithContext,
 	HeadContent,
 	Outlet,
 	Scripts,
 } from "@tanstack/react-router";
-import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import type { TRPCOptionsProxy } from "@trpc/tanstack-react-query";
 import type { AppRouter } from "@whatsapp-flow/api/routers/index";
 import { Toaster } from "@whatsapp-flow/ui/components/sonner";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { useTRPC } from "@/utils/trpc";
 import appCss from "../index.css?url";
@@ -22,6 +20,9 @@ export interface RouterAppContext {
 
 const DEFAULT_APP_NAME = "WhatsApp Flow";
 const BRAND_FAVICON_ID = "brand-favicon";
+const DevelopmentDevtools = import.meta.env.DEV
+	? lazy(() => import("@/components/development-devtools"))
+	: null;
 const THEME_VARIABLES = [
 	"--primary",
 	"--primary-foreground",
@@ -142,8 +143,11 @@ function RootDocument() {
 					<Outlet />
 				</div>
 				<Toaster richColors />
-				<TanStackRouterDevtools position="bottom-left" />
-				<ReactQueryDevtools position="bottom" buttonPosition="bottom-right" />
+				{DevelopmentDevtools ? (
+					<Suspense fallback={null}>
+						<DevelopmentDevtools />
+					</Suspense>
+				) : null}
 				<Scripts />
 			</body>
 		</html>
