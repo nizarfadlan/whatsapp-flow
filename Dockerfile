@@ -63,6 +63,7 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3001
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
+COPY --from=prod-deps --chown=node:node /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=builder --chown=node:node /app/package.json ./package.json
 COPY --from=builder --chown=node:node /app/apps/web/package.json ./apps/web/package.json
 COPY --from=builder --chown=node:node /app/apps/web/dist ./apps/web/dist
