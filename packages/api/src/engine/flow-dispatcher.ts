@@ -3,6 +3,7 @@ import { flow, flowSession } from "@whatsapp-flow/db/schema/device";
 import type { IncomingMessage } from "@whatsapp-flow/whatsapp";
 import {
 	connectionManager,
+	derivePrivateIdentityKey,
 	matchesKeywordTrigger,
 } from "@whatsapp-flow/whatsapp";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
@@ -50,13 +51,19 @@ export function startFlowDispatcher(): void {
 	connectionManager.on("device:message", async (event: IncomingMessage) => {
 		const { deviceId, message, contact } = event;
 		const text = message.text ?? "";
+		const contactKey =
+			contact.identityKey ??
+			derivePrivateIdentityKey({
+				jid: contact.jid,
+				number: contact.number,
+				lid: contact.lid,
+			});
+		const contactNumber = contact.number ?? null;
 
 		try {
-			if (!contact.number) return;
-
 			const waitingSession = await findActiveWaitingSession(
 				deviceId,
-				contact.number,
+				contactKey,
 			);
 			if (waitingSession) {
 				await enqueueJob({
@@ -64,7 +71,8 @@ export function startFlowDispatcher(): void {
 					payload: {
 						sessionId: waitingSession.id,
 						deviceId,
-						contactNumber: contact.number,
+						contactNumber,
+						contactKey,
 						incomingText: text,
 						replyJid: contact.jid,
 						triggerMessageKey: message.messageKey,
@@ -89,7 +97,8 @@ export function startFlowDispatcher(): void {
 					payload: {
 						flowId: flowRow.id,
 						deviceId,
-						contactNumber: contact.number,
+						contactNumber,
+						contactKey,
 						incomingText: text,
 						replyJid: contact.jid,
 						triggerSource: "message",
@@ -102,7 +111,7 @@ export function startFlowDispatcher(): void {
 		} catch (error) {
 			console.error("Failed to dispatch incoming WhatsApp message", {
 				deviceId,
-				contactNumber: contact.number,
+				contactNumber,
 				error,
 			});
 		}
@@ -146,6 +155,7 @@ export function startScheduleDispatcher(): void {
 						flowId: flowRow.id,
 						deviceId: flowRow.deviceId,
 						contactNumber,
+						contactKey: derivePrivateIdentityKey({ number: contactNumber }),
 						incomingText: "",
 						triggerSource: "schedule",
 					},
@@ -165,17 +175,14 @@ export function startScheduleDispatcher(): void {
 	}, 60_000);
 }
 
-async function findActiveWaitingSession(
-	deviceId: string,
-	contactNumber: string,
-) {
+async function findActiveWaitingSession(deviceId: string, contactKey: string) {
 	const [waiting] = await db
 		.select({ id: flowSession.id })
 		.from(flowSession)
 		.where(
 			and(
 				eq(flowSession.deviceId, deviceId),
-				eq(flowSession.contactNumber, contactNumber),
+				eq(flowSession.contactKey, contactKey),
 				eq(flowSession.status, "waiting"),
 				or(
 					isNull(flowSession.expiresAt),

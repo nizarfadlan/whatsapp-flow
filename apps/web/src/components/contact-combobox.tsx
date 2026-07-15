@@ -62,8 +62,8 @@ export function ContactCombobox({
 
 	const options: Option[] = [
 		...contacts.map((c) => ({
-			label: c.name ?? c.pushName ?? c.phoneNumber ?? c.jid,
-			sub: c.phoneNumber ?? c.jid,
+			label: c.phoneNumber ?? c.name ?? c.pushName ?? c.jid,
+			sub: c.name ?? c.pushName ?? c.jid,
 			value: c.jid,
 		})),
 		...(includeGroups
@@ -132,10 +132,10 @@ export function ContactCombobox({
 											)}
 										/>
 										<span className="min-w-0 flex-1 truncate">
-											{c.name ?? c.pushName ?? c.phoneNumber ?? c.jid}
+											{c.phoneNumber ?? c.name ?? c.pushName ?? c.jid}
 										</span>
 										<span className="text-[10px] text-muted-foreground">
-											{c.phoneNumber}
+											{c.name ?? c.pushName ?? c.jid}
 										</span>
 									</CommandItem>
 								))}

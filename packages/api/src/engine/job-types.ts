@@ -7,7 +7,8 @@ export type WebhookDeliverJobPayload = {
 export type FlowExecuteJobPayload = {
 	flowId: string;
 	deviceId: string;
-	contactNumber: string;
+	contactNumber: string | null;
+	contactKey: string;
 	incomingText: string;
 	replyJid?: string;
 	triggerSource: "message" | "schedule" | "webhook";
@@ -18,7 +19,8 @@ export type FlowExecuteJobPayload = {
 export type FlowResumeJobPayload = {
 	sessionId: string;
 	deviceId: string;
-	contactNumber: string;
+	contactNumber: string | null;
+	contactKey: string;
 	incomingText: string;
 	replyJid?: string;
 	triggerMessageKey?: WAMessageKey;
@@ -29,7 +31,8 @@ export type FlowContinueJobPayload = {
 	executionLogId: string;
 	flowId: string;
 	deviceId: string;
-	contactNumber: string;
+	contactNumber: string | null;
+	contactKey: string;
 	incomingText: string;
 	replyJid?: string;
 	sessionId?: string;
@@ -45,7 +48,8 @@ export type FlowWaitWarningJobPayload = {
 	executionLogId: string;
 	flowId: string;
 	deviceId: string;
-	contactNumber: string;
+	contactNumber: string | null;
+	contactKey: string;
 	replyJid?: string;
 	waitingNodeId: string;
 	warningId: string;
@@ -56,18 +60,34 @@ export type FlowWaitWarningJobPayload = {
 	expiresAt: string;
 };
 
+export type FlowWaitTimeoutJobPayload = {
+	sessionId: string;
+	waitingNodeId: string;
+	expiresAt: string;
+};
+
+export type DeviceResourceSyncJobPayload = {
+	syncRunId: string;
+};
+
 export type JobPayloadByKind = {
 	"webhook.deliver": WebhookDeliverJobPayload;
 	"flow.execute": FlowExecuteJobPayload;
 	"flow.resume": FlowResumeJobPayload;
 	"flow.continue": FlowContinueJobPayload;
 	"flow.wait_warning": FlowWaitWarningJobPayload;
+	"flow.wait_timeout": FlowWaitTimeoutJobPayload;
+	"device.resource_sync": DeviceResourceSyncJobPayload;
 };
 
 export type JobKind = keyof JobPayloadByKind;
 
 export function webhookDeliveryJobIdempotencyKey(deliveryId: string) {
 	return `webhook:delivery:${deliveryId}`;
+}
+
+export function deviceResourceSyncJobIdempotencyKey(syncRunId: string) {
+	return `device:resource-sync:${syncRunId}`;
 }
 
 export function scheduledFlowJobIdempotencyKey(
@@ -107,4 +127,12 @@ export function waitWarningJobIdempotencyKey(input: {
 	expiresAt: string;
 }) {
 	return `flow:wait-warning:${input.sessionId}:${input.waitingNodeId}:${input.warningId}:${input.expiresAt}`;
+}
+
+export function waitTimeoutJobIdempotencyKey(input: {
+	sessionId: string;
+	waitingNodeId: string;
+	expiresAt: string;
+}) {
+	return `flow:wait-timeout:${input.sessionId}:${input.waitingNodeId}:${input.expiresAt}`;
 }

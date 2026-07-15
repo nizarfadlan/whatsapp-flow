@@ -138,7 +138,7 @@ function ContactCell({ log }: { log: FlowLogRow }) {
 		return (
 			<Link
 				to="/dashboard/contacts"
-				search={{ search: log.contactNumber }}
+				search={{ search: log.contactNumber ?? undefined }}
 				className="group inline-flex flex-col hover:text-primary"
 			>
 				<span className="font-medium">{displayName}</span>
@@ -381,7 +381,7 @@ function LogDetailPanel({
 					{log.contactId && (
 						<Link
 							to="/dashboard/contacts"
-							search={{ search: log.contactNumber }}
+							search={{ search: log.contactNumber ?? undefined }}
 							className={cn(
 								buttonVariants({ variant: "outline", size: "sm" }),
 								"h-8 w-full justify-start text-xs",

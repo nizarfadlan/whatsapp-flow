@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { trpcServer } from "@hono/trpc-server";
 import { createContext } from "@whatsapp-flow/api/context";
+import { processDeviceResourceSyncJob } from "@whatsapp-flow/api/engine/device-resource-sync";
 import {
 	startFlowDispatcher,
 	startScheduleDispatcher,
@@ -10,10 +11,18 @@ import {
 	processFlowContinueJob,
 	processFlowExecuteJob,
 	processFlowResumeJob,
+	processFlowWaitTimeoutJob,
 	processFlowWaitWarningJob,
 } from "@whatsapp-flow/api/engine/flow-jobs";
+import {
+	reconcileFlowSessions,
+	startFlowSessionReconciler,
+} from "@whatsapp-flow/api/engine/flow-reconciliation";
 import { enrichInboundMedia } from "@whatsapp-flow/api/engine/inbound-media";
-import { startJobWorker } from "@whatsapp-flow/api/engine/job-queue";
+import {
+	releaseExpiredLeases,
+	startJobWorker,
+} from "@whatsapp-flow/api/engine/job-queue";
 import {
 	processWebhookDeliveryJob,
 	startWebhookDispatcher,
@@ -24,18 +33,14 @@ import { appRouter } from "@whatsapp-flow/api/routers/index";
 import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
 import { user } from "@whatsapp-flow/db/schema/auth";
-import {
-	channel,
-	chatGroup,
-	contact as contactTable,
-	groupParticipant,
-} from "@whatsapp-flow/db/schema/contact";
+import { channel, chatGroup } from "@whatsapp-flow/db/schema/contact";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import { isLocalStorageDriver, storage } from "@whatsapp-flow/storage";
 import {
 	connectionManager,
+	deriveThreadKey,
 	handleMetaWebhook,
 	verifyMetaWebhookChallenge,
 } from "@whatsapp-flow/whatsapp";
@@ -45,6 +50,16 @@ import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
+import {
+	mergePrivateThreadsForContact,
+	upsertPrivateContact,
+} from "./whatsapp-identity";
+import {
+	persistSyncedContacts,
+	persistSyncedGroups,
+	persistSyncedNewsletters,
+	upsertGroupParticipantSender,
+} from "./whatsapp-persistence";
 
 function validateProductionSecrets() {
 	if (env.NODE_ENV !== "production") return;
@@ -367,7 +382,8 @@ app.get("/api/events", async (c) => {
 			flowId: string;
 			deviceId: string;
 			executionLogId: string;
-			contactNumber: string;
+			contactNumber: string | null;
+			contactKey: string;
 			status: string;
 		}) => {
 			if (deviceIds.has(ev.deviceId)) {
@@ -379,6 +395,7 @@ app.get("/api/events", async (c) => {
 						deviceId: ev.deviceId,
 						executionLogId: ev.executionLogId,
 						contactNumber: ev.contactNumber,
+						contactKey: ev.contactKey,
 						status: ev.status,
 					}),
 				});
@@ -457,54 +474,56 @@ connectionManager.on("device:message", async (ev) => {
 		}
 		const now = new Date();
 		let contactId: string | null = null;
+		let contactIdentityKey: string | null = null;
+		let contactNumber: string | null = null;
+		let contactName: string | null = contact.name ?? null;
 		let groupId: string | null = null;
 		let channelId: string | null = null;
 
 		if (chatType === "private") {
-			const [savedContact] = await db
-				.insert(contactTable)
-				.values({
-					id: crypto.randomUUID(),
-					deviceId,
-					jid: contact.jid,
-					phoneNumber: contact.number ?? null,
-					lid: contact.lid ?? null,
-					name: contact.name ?? null,
-					pushName: contact.name ?? null,
-					profileName: contact.name ?? null,
-					providerContactId:
-						contact.providerContactId ?? contact.number ?? null,
-					source: "message",
-				})
-				.onConflictDoUpdate({
-					target: [contactTable.deviceId, contactTable.jid],
-					set: {
-						phoneNumber: contact.number ?? null,
-						lid: contact.lid ?? null,
-						name: contact.name ?? null,
-						pushName: contact.name ?? null,
-						profileName: contact.name ?? null,
-						providerContactId:
-							contact.providerContactId ?? contact.number ?? null,
-						updatedAt: now,
-					},
-				})
-				.returning({ id: contactTable.id });
+			const savedContact = await upsertPrivateContact(db, {
+				deviceId,
+				jid: contact.jid,
+				number: contact.number,
+				lid: contact.lid,
+				username: contact.username,
+				identityKey: contact.identityKey,
+				name: contact.name,
+				pushName: contact.name,
+				providerContactId: contact.providerContactId,
+				source: "message",
+			});
 			contactId = savedContact?.id ?? null;
+			contactIdentityKey = savedContact?.identityKey ?? null;
+			contactNumber = savedContact?.phoneNumber ?? null;
+			contactName = savedContact?.name ?? contact.name ?? null;
+			if (savedContact) {
+				await mergePrivateThreadsForContact(db, {
+					deviceId,
+					contactId: savedContact.id,
+					identityKey: savedContact.identityKey,
+					jid: contact.jid,
+					phoneNumber: savedContact.phoneNumber,
+					lid: savedContact.lid,
+					name: savedContact.name,
+					now,
+				});
+			}
 		} else if (chatType === "group") {
+			const groupSubject = ev.group?.name ?? contact.jid;
 			const [savedGroup] = await db
 				.insert(chatGroup)
 				.values({
 					id: crypto.randomUUID(),
 					deviceId,
 					jid: contact.jid,
-					subject: contact.name ?? contact.jid,
+					subject: groupSubject,
 					source: "sync",
 				})
 				.onConflictDoUpdate({
 					target: [chatGroup.deviceId, chatGroup.jid],
 					set: {
-						subject: contact.name ?? contact.jid,
+						subject: groupSubject === contact.jid ? undefined : groupSubject,
 						updatedAt: now,
 					},
 				})
@@ -539,38 +558,45 @@ connectionManager.on("device:message", async (ev) => {
 			);
 		}
 
+		const threadKey = deriveThreadKey({
+			chatType,
+			chatJid: contact.jid,
+			contactIdentityKey,
+			groupJid: chatType === "group" ? contact.jid : null,
+			channelJid: chatType === "channel" ? contact.jid : null,
+		});
+
 		const [savedThread] = await db
 			.insert(inboxThread)
 			.values({
 				id: crypto.randomUUID(),
 				deviceId,
 				chatType,
+				threadKey,
 				chatJid: contact.jid,
 				contactId,
 				groupId,
 				channelId,
 				groupJid: chatType === "group" ? contact.jid : null,
 				channelJid: chatType === "channel" ? contact.jid : null,
-				contactNumber: chatType === "private" ? (contact.number ?? null) : null,
-				contactName: contact.name ?? null,
+				contactNumber: chatType === "private" ? contactNumber : null,
+				contactName,
 				lastMessageText: message.text ?? `[${message.type}]`,
 				lastMessageAt: now,
 				unreadCount: 0,
 			})
 			.onConflictDoUpdate({
-				target: [inboxThread.deviceId, inboxThread.chatJid],
+				target: [inboxThread.deviceId, inboxThread.threadKey],
 				set: {
 					chatType,
+					chatJid: contact.jid,
 					contactId,
 					groupId,
 					channelId,
 					groupJid: chatType === "group" ? contact.jid : null,
 					channelJid: chatType === "channel" ? contact.jid : null,
-					contactNumber:
-						chatType === "private" ? (contact.number ?? null) : null,
-					contactName: Object.hasOwn(contact, "name")
-						? (contact.name ?? null)
-						: undefined, // undefined skips updating if not present in payload
+					contactNumber: chatType === "private" ? contactNumber : null,
+					contactName,
 				},
 			})
 			.returning({ id: inboxThread.id });
@@ -640,33 +666,7 @@ connectionManager.on("device:message", async (ev) => {
 
 connectionManager.on("device:contacts", async (ev) => {
 	try {
-		const now = new Date();
-		for (const item of ev.contacts) {
-			await db
-				.insert(contactTable)
-				.values({
-					id: crypto.randomUUID(),
-					deviceId: ev.deviceId,
-					jid: item.jid,
-					phoneNumber: item.phoneNumber ?? null,
-					lid: item.lid ?? null,
-					name: item.name ?? null,
-					pushName: item.pushName ?? null,
-					isWaContact: item.isWaContact ?? true,
-					source: "sync",
-				})
-				.onConflictDoUpdate({
-					target: [contactTable.deviceId, contactTable.jid],
-					set: {
-						phoneNumber: item.phoneNumber ?? null,
-						lid: item.lid ?? null,
-						name: item.name ?? null,
-						pushName: item.pushName ?? null,
-						isWaContact: item.isWaContact ?? true,
-						updatedAt: now,
-					},
-				});
-		}
+		await persistSyncedContacts(ev);
 	} catch (err) {
 		console.error("Failed to persist contacts sync", err);
 	}
@@ -674,37 +674,7 @@ connectionManager.on("device:contacts", async (ev) => {
 
 connectionManager.on("device:groups", async (ev) => {
 	try {
-		const now = new Date();
-		for (const item of ev.groups) {
-			const [savedGroup] = await db
-				.insert(chatGroup)
-				.values({
-					id: crypto.randomUUID(),
-					deviceId: ev.deviceId,
-					jid: item.jid,
-					subject: item.subject,
-					description: item.description ?? null,
-					ownerJid: item.ownerJid ?? null,
-					participantCount: item.participantCount ?? 0,
-					isMember: item.isMember ?? true,
-					source: "sync",
-				})
-				.onConflictDoUpdate({
-					target: [chatGroup.deviceId, chatGroup.jid],
-					set: {
-						subject: item.subject === item.jid ? undefined : item.subject,
-						description: item.description ?? undefined,
-						ownerJid: item.ownerJid ?? undefined,
-						participantCount: item.participantCount,
-						isMember: item.isMember ?? true,
-						updatedAt: now,
-					},
-				})
-				.returning({ id: chatGroup.id });
-			if (savedGroup) {
-				await upsertGroupParticipantsFromRaw(savedGroup.id, item.raw, now);
-			}
-		}
+		await persistSyncedGroups(ev);
 	} catch (err) {
 		console.error("Failed to persist groups sync", err);
 	}
@@ -712,100 +682,14 @@ connectionManager.on("device:groups", async (ev) => {
 
 connectionManager.on("device:channels", async (ev) => {
 	try {
-		const now = new Date();
-		for (const item of ev.channels) {
-			await db
-				.insert(channel)
-				.values({
-					id: crypto.randomUUID(),
-					deviceId: ev.deviceId,
-					jid: item.jid,
-					name: item.name,
-					description: item.description ?? null,
-					ownerJid: item.ownerJid ?? null,
-					subscribersCount: item.subscribersCount ?? 0,
-					isSubscribed: item.isSubscribed ?? true,
-					verificationStatus: item.verificationStatus ?? null,
-					source: "sync",
-				})
-				.onConflictDoUpdate({
-					target: [channel.deviceId, channel.jid],
-					set: {
-						name: item.name,
-						description: item.description ?? null,
-						ownerJid: item.ownerJid ?? null,
-						subscribersCount: item.subscribersCount ?? 0,
-						isSubscribed: item.isSubscribed ?? true,
-						verificationStatus: item.verificationStatus ?? null,
-						updatedAt: now,
-					},
-				});
-		}
+		await persistSyncedNewsletters({
+			deviceId: ev.deviceId,
+			newsletters: ev.channels,
+		});
 	} catch (err) {
 		console.error("Failed to persist channels sync", err);
 	}
 });
-
-async function upsertGroupParticipantSender(
-	groupId: string,
-	jid: string | null | undefined,
-	now: Date,
-) {
-	if (!jid) return;
-	await db
-		.insert(groupParticipant)
-		.values({
-			id: crypto.randomUUID(),
-			groupId,
-			jid,
-			role: "member",
-		})
-		.onConflictDoUpdate({
-			target: [groupParticipant.groupId, groupParticipant.jid],
-			set: { updatedAt: now },
-		});
-}
-
-async function upsertGroupParticipantsFromRaw(
-	groupId: string,
-	raw: unknown,
-	now: Date,
-) {
-	if (!raw || typeof raw !== "object") return;
-	const participants = (raw as Record<string, unknown>).participants;
-	if (!Array.isArray(participants)) return;
-
-	for (const participant of participants) {
-		if (!participant || typeof participant !== "object") continue;
-		const record = participant as Record<string, unknown>;
-		const jid =
-			typeof record.id === "string"
-				? record.id
-				: typeof record.jid === "string"
-					? record.jid
-					: undefined;
-		if (!jid) continue;
-		const admin = typeof record.admin === "string" ? record.admin : undefined;
-		const role =
-			admin === "superadmin"
-				? "superadmin"
-				: admin === "admin"
-					? "admin"
-					: "member";
-		await db
-			.insert(groupParticipant)
-			.values({
-				id: crypto.randomUUID(),
-				groupId,
-				jid,
-				role,
-			})
-			.onConflictDoUpdate({
-				target: [groupParticipant.groupId, groupParticipant.jid],
-				set: { role, updatedAt: now },
-			});
-	}
-}
 
 async function reconnectDevices() {
 	const reconnectable = await db
@@ -859,18 +743,39 @@ function isValidWebhookToken(triggerConfig: unknown, token: string) {
 	return safeEqual(token, expected);
 }
 
-void reconnectDevices();
-startFlowDispatcher();
-startScheduleDispatcher();
-startWebhookDispatcher();
-startJobWorker({
-	handlers: {
-		"flow.continue": (job) => processFlowContinueJob(job.payload),
-		"flow.execute": (job) => processFlowExecuteJob(job.payload),
-		"flow.resume": (job) => processFlowResumeJob(job.payload),
-		"flow.wait_warning": (job) => processFlowWaitWarningJob(job.payload),
-		"webhook.deliver": (job) => processWebhookDeliveryJob(job.payload),
-	},
+async function startBackgroundServices() {
+	await releaseExpiredLeases(db);
+	await reconcileFlowSessions({ db });
+	startFlowDispatcher();
+	startScheduleDispatcher();
+	startWebhookDispatcher();
+	startFlowSessionReconciler({ db });
+	startJobWorker({
+		db,
+		handlers: {
+			"device.resource_sync": (job) =>
+				processDeviceResourceSyncJob(
+					job,
+					{
+						persistContacts: persistSyncedContacts,
+						persistGroups: persistSyncedGroups,
+						persistNewsletters: persistSyncedNewsletters,
+					},
+					db,
+				),
+			"flow.continue": (job) => processFlowContinueJob(job.payload),
+			"flow.execute": (job) => processFlowExecuteJob(job.payload),
+			"flow.resume": (job) => processFlowResumeJob(job),
+			"flow.wait_timeout": (job) => processFlowWaitTimeoutJob(job.payload),
+			"flow.wait_warning": (job) => processFlowWaitWarningJob(job.payload),
+			"webhook.deliver": (job) => processWebhookDeliveryJob(job.payload),
+		},
+	});
+	await reconnectDevices();
+}
+
+void startBackgroundServices().catch((error) => {
+	console.error("Failed to start background services", error);
 });
 
 export default app;

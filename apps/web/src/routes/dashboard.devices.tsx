@@ -35,6 +35,7 @@ import {
 	Power,
 	PowerOff,
 	QrCode,
+	RefreshCw,
 	Settings,
 	Smartphone,
 	Trash2,
@@ -707,6 +708,12 @@ function DevicesPage() {
 			},
 		}),
 	);
+	const syncAllMut = useMutation(
+		trpc.device.startSync.mutationOptions({
+			onSuccess: () => toast.success("Resource sync queued"),
+			onError: (error) => toast.error(error.message),
+		}),
+	);
 
 	const handleConnect = (deviceId: string, provider?: string) => {
 		connectMut.mutate({ id: deviceId });
@@ -792,6 +799,22 @@ function DevicesPage() {
 												<MoreHorizontal className="size-4" />
 											</DropdownMenuTrigger>
 											<DropdownMenuContent>
+												{d.provider !== "meta_cloud" &&
+													d.status === "connected" && (
+														<DropdownMenuItem
+															disabled={syncAllMut.isPending}
+															onClick={() =>
+																syncAllMut.mutate({
+																	id: d.id,
+																	resource: "all",
+																	mode: "normal",
+																})
+															}
+														>
+															<RefreshCw className="size-3.5" />
+															Sync All
+														</DropdownMenuItem>
+													)}
 												{d.status === "disconnected" && (
 													<DropdownMenuItem
 														onClick={() => handleConnect(d.id, d.provider)}

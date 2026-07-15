@@ -1,21 +1,44 @@
 import { db } from "@whatsapp-flow/db";
-import { flow, flowSession } from "@whatsapp-flow/db/schema/device";
+import {
+	flow,
+	flowExecutionLog,
+	flowSession,
+} from "@whatsapp-flow/db/schema/device";
 import { sendDeviceMessage } from "@whatsapp-flow/whatsapp";
-import { eq } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 import { logger } from "../observability/logger";
 import {
 	continueFlowExecution,
+	emitFlowSessionUpdated,
 	executeFlow,
 	recordFlowExecutionEvent,
 	resolveFlowTemplate,
 	resumeWaitingSessionById,
 } from "./flow-executor";
+import type { JobRecord } from "./job-queue";
 import type {
 	FlowContinueJobPayload,
 	FlowExecuteJobPayload,
 	FlowResumeJobPayload,
+	FlowWaitTimeoutJobPayload,
 	FlowWaitWarningJobPayload,
 } from "./job-types";
+
+function resolveJobReplyJid(input: {
+	replyJid?: string;
+	contactNumber: string | null;
+	contactKey: string;
+}) {
+	if (input.replyJid) return input.replyJid;
+	if (input.contactNumber) return `${input.contactNumber}@s.whatsapp.net`;
+	if (
+		input.contactKey.startsWith("lid:") ||
+		input.contactKey.startsWith("jid:")
+	) {
+		return input.contactKey.slice(input.contactKey.indexOf(":") + 1);
+	}
+	return null;
+}
 
 export async function processFlowExecuteJob(input: FlowExecuteJobPayload) {
 	const [flowRow] = await db
@@ -32,6 +55,7 @@ export async function processFlowExecuteJob(input: FlowExecuteJobPayload) {
 		input.incomingText,
 		{
 			replyJid: input.replyJid,
+			contactKey: input.contactKey,
 			triggerSource: input.triggerSource,
 			triggerMessageKey: input.triggerMessageKey,
 			triggerProviderMessageId: input.triggerProviderMessageId,
@@ -49,18 +73,35 @@ export async function processFlowExecuteJob(input: FlowExecuteJobPayload) {
 	}
 }
 
-export async function processFlowResumeJob(input: FlowResumeJobPayload) {
+export async function processFlowResumeJob(
+	job: JobRecord & { kind: "flow.resume"; payload: FlowResumeJobPayload },
+) {
+	const input = job.payload;
+	const replyJid = resolveJobReplyJid(input);
+	if (!replyJid) return;
+
 	const result = await resumeWaitingSessionById(
 		input.sessionId,
 		input.incomingText,
-		input.replyJid ?? `${input.contactNumber}@s.whatsapp.net`,
+		replyJid,
 		{
 			messageKey: input.triggerMessageKey,
 			providerMessageId: input.triggerProviderMessageId,
 		},
+		job.id,
 	);
 
-	if (result?.status === "failed") {
+	if (!result) {
+		logger.info("flow.session_resume.noop", {
+			jobId: job.id,
+			sessionId: input.sessionId,
+			deviceId: input.deviceId,
+			contactNumber: input.contactNumber,
+		});
+		return;
+	}
+
+	if (result.status === "failed") {
 		logger.error("flow.session_resume.failed", {
 			sessionId: input.sessionId,
 			deviceId: input.deviceId,
@@ -86,6 +127,77 @@ export async function processFlowContinueJob(input: FlowContinueJobPayload) {
 	}
 }
 
+export function isMatchingWaitTimeoutGeneration(input: {
+	sessionId: string;
+	sessionStatus: string;
+	sessionWaitingNodeId: string;
+	sessionExpiresAt: Date | null;
+	jobSessionId: string;
+	jobWaitingNodeId: string;
+	jobExpiresAt: string;
+	now: Date;
+}) {
+	return (
+		input.sessionId === input.jobSessionId &&
+		input.sessionStatus === "waiting" &&
+		input.sessionWaitingNodeId === input.jobWaitingNodeId &&
+		input.sessionExpiresAt?.toISOString() === input.jobExpiresAt &&
+		input.sessionExpiresAt <= input.now
+	);
+}
+
+export async function processFlowWaitTimeoutJob(
+	input: FlowWaitTimeoutJobPayload,
+) {
+	const expiresAt = new Date(input.expiresAt);
+	if (Number.isNaN(expiresAt.getTime())) return;
+
+	const [expired] = await db
+		.update(flowSession)
+		.set({
+			status: "expired",
+			claimJobId: null,
+			claimedAt: null,
+			failureCode: "wait_timeout",
+			completedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(flowSession.id, input.sessionId),
+				eq(flowSession.status, "waiting"),
+				eq(flowSession.waitingNodeId, input.waitingNodeId),
+				eq(flowSession.expiresAt, expiresAt),
+				lte(flowSession.expiresAt, new Date()),
+			),
+		)
+		.returning();
+
+	if (!expired) return;
+
+	await db
+		.update(flowExecutionLog)
+		.set({
+			status: "failed",
+			error: "Flow session expired",
+			completedAt: new Date(),
+		})
+		.where(eq(flowExecutionLog.id, expired.executionLogId));
+
+	await recordFlowExecutionEvent({
+		executionLogId: expired.executionLogId,
+		flowId: expired.flowId,
+		deviceId: expired.deviceId,
+		contactNumber: expired.contactNumber,
+		contactKey: expired.contactKey,
+		sessionId: expired.id,
+		type: "session.expired",
+		nodeId: expired.waitingNodeId,
+		message: "Flow session expired",
+		payload: { expiresAt: expiresAt.toISOString(), source: "timeout_job" },
+	});
+	emitFlowSessionUpdated(expired);
+}
+
 export async function processFlowWaitWarningJob(
 	input: FlowWaitWarningJobPayload,
 ) {
@@ -98,23 +210,24 @@ export async function processFlowWaitWarningJob(
 	if (!session) return;
 	if (session.status !== "waiting") return;
 	if (session.waitingNodeId !== input.waitingNodeId) return;
+	if (session.expiresAt?.toISOString() !== input.expiresAt) return;
 	if (session.expiresAt && session.expiresAt <= new Date()) return;
 
 	const text = resolveFlowTemplate(input.message, {
 		contactNumber: input.contactNumber,
+		contactKey: input.contactKey,
 		incomingText: input.incomingText,
 		variables: input.variables,
 	});
-	await sendDeviceMessage(
-		input.deviceId,
-		input.replyJid ?? `${input.contactNumber}@s.whatsapp.net`,
-		{ type: "text", text },
-	);
+	const replyJid = resolveJobReplyJid(input);
+	if (!replyJid) return;
+	await sendDeviceMessage(input.deviceId, replyJid, { type: "text", text });
 	await recordFlowExecutionEvent({
 		executionLogId: input.executionLogId,
 		flowId: input.flowId,
 		deviceId: input.deviceId,
 		contactNumber: input.contactNumber,
+		contactKey: input.contactKey,
 		sessionId: input.sessionId,
 		type: "session.warning_sent",
 		nodeId: input.waitingNodeId,

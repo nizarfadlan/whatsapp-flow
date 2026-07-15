@@ -55,14 +55,20 @@ type ThreadRow = {
 };
 
 function getThreadTitle(thread: ThreadRow) {
-	return (
-		thread.contactName ??
-		thread.contactNumber ??
-		thread.groupJid ??
-		thread.channelJid ??
-		thread.chatJid ??
-		"Unknown chat"
-	);
+	if (thread.chatType === "private") {
+		return (
+			thread.contactNumber ??
+			thread.contactName ??
+			thread.chatJid ??
+			"Unknown chat"
+		);
+	}
+	if (thread.chatType === "group")
+		return thread.groupJid ?? thread.chatJid ?? "Unknown group";
+	if (thread.chatType === "channel") {
+		return thread.channelJid ?? thread.chatJid ?? "Unknown channel";
+	}
+	return thread.chatJid ?? "Unknown broadcast";
 }
 
 function getThreadSubtitle(thread: ThreadRow) {

@@ -1,4 +1,4 @@
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
 import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
@@ -23,10 +23,12 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	Cloud,
+	LoaderCircle,
 	LogOut,
 	Power,
 	PowerOff,
 	QrCode,
+	RefreshCw,
 	Settings,
 	Smartphone,
 } from "lucide-react";
@@ -100,6 +102,180 @@ function getMetaWarnings(device: {
 		!device.lastWebhookAt ? "No webhook received yet" : null,
 		device.lastError ? `Last error: ${device.lastError}` : null,
 	].filter(Boolean) as string[];
+}
+
+const activeSyncStatuses = new Set(["queued", "running"]);
+
+function SyncStatusBadge({ status }: { status: string }) {
+	const variant =
+		status === "succeeded"
+			? "default"
+			: status === "failed"
+				? "destructive"
+				: "secondary";
+	return <Badge variant={variant}>{status}</Badge>;
+}
+
+function syncRunSummary(status: string) {
+	switch (status) {
+		case "queued":
+			return "Queued";
+		case "running":
+			return "In progress (indeterminate)";
+		case "succeeded":
+			return "Completed";
+		case "partial":
+			return "Completed with errors";
+		case "failed":
+			return "Failed";
+		case "cancelled":
+			return "Cancelled";
+		default:
+			return status;
+	}
+}
+
+function ResourceSyncCard({ deviceId }: { deviceId: string }) {
+	const trpc = useTRPC();
+	const syncStatus = useQuery({
+		...trpc.device.syncStatus.queryOptions({ id: deviceId, limit: 12 }),
+		refetchInterval: (query) =>
+			query.state.data?.some((run) => activeSyncStatuses.has(run.status))
+				? 3_000
+				: 15_000,
+	});
+	const startSync = useMutation(
+		trpc.device.startSync.mutationOptions({
+			onSuccess: () => {
+				toast.success("Resource sync queued");
+				syncStatus.refetch();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const queueSync = (
+		resource: "contacts" | "groups" | "newsletters" | "all",
+		mode: "normal" | "repair" = "normal",
+	) => startSync.mutate({ id: deviceId, resource, mode });
+
+	return (
+		<Card>
+			<CardHeader>
+				<CardTitle className="text-sm">Resource synchronization</CardTitle>
+				<p className="text-muted-foreground text-xs">
+					Queue a durable sync for resources already available to this linked
+					device. Discovery is not authoritative for every contact or
+					newsletter.
+				</p>
+			</CardHeader>
+			<CardContent className="space-y-4">
+				<div className="flex flex-wrap gap-2">
+					<Button
+						size="sm"
+						disabled={startSync.isPending}
+						onClick={() => queueSync("all")}
+					>
+						<RefreshCw className="size-3.5" />
+						Sync All
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={startSync.isPending}
+						onClick={() => queueSync("contacts")}
+					>
+						Contacts
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={startSync.isPending}
+						onClick={() => queueSync("groups")}
+					>
+						Groups
+					</Button>
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={startSync.isPending}
+						onClick={() => queueSync("newsletters")}
+					>
+						Newsletters
+					</Button>
+				</div>
+
+				<div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<div>
+							<p className="font-medium text-amber-950 text-xs">
+								Repair Contacts
+							</p>
+							<p className="mt-1 text-amber-900 text-xs">
+								Triggers an app-state resync before refreshing contacts.
+							</p>
+						</div>
+						<Button
+							size="sm"
+							variant="outline"
+							className="border-amber-300 bg-background text-amber-950 hover:bg-amber-100"
+							disabled={startSync.isPending}
+							onClick={() => queueSync("contacts", "repair")}
+						>
+							Repair Contacts
+						</Button>
+					</div>
+				</div>
+
+				<div className="space-y-2">
+					<div className="flex items-center justify-between">
+						<p className="font-medium text-xs">Recent durable runs</p>
+						{syncStatus.isFetching && (
+							<LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+						)}
+					</div>
+					{syncStatus.data?.length === 0 && (
+						<p className="text-muted-foreground text-xs">No sync runs yet.</p>
+					)}
+					{syncStatus.data?.map((run) => {
+						return (
+							<div key={run.id} className="rounded-md border p-3 text-xs">
+								<div className="flex flex-wrap items-center justify-between gap-2">
+									<div className="flex items-center gap-2">
+										{run.status === "running" && (
+											<LoaderCircle className="size-3.5 animate-spin" />
+										)}
+										<p className="font-medium">
+											{run.resource} · {run.scopeKey === "all" ? "all" : "one"}
+											{run.mode === "repair" ? " · repair" : ""}
+										</p>
+										<SyncStatusBadge status={run.status} />
+									</div>
+									<p className="text-muted-foreground">
+										{syncRunSummary(run.status)}
+									</p>
+								</div>
+								<p className="mt-2 text-muted-foreground">
+									Processed {run.processedCount} · Created {run.createdCount} ·
+									Updated {run.updatedCount} · Skipped {run.skippedCount} ·
+									Failed {run.failedCount}
+								</p>
+								<p className="mt-1 text-muted-foreground">
+									Queued {formatDate(run.createdAt)} · Started{" "}
+									{formatDate(run.startedAt)} · Finished{" "}
+									{formatDate(run.completedAt)}
+								</p>
+								{run.lastError && (
+									<p className="mt-1 text-destructive">
+										Last error: {run.lastError}
+									</p>
+								)}
+							</div>
+						);
+					})}
+				</div>
+			</CardContent>
+		</Card>
+	);
 }
 
 function QrModal({
@@ -379,6 +555,10 @@ function DeviceDetailPage() {
 					{isMeta ? "Remove credentials" : "Reset session"}
 				</Button>
 			</div>
+
+			{!isMeta && device.status === "connected" && (
+				<ResourceSyncCard deviceId={id} />
+			)}
 
 			<Separator />
 

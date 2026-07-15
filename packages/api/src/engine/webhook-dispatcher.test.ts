@@ -38,11 +38,83 @@ mock.module("./inbound-media", () => ({
 	enrichInboundMedia: mock(() => Promise.resolve(mediaResult)),
 }));
 
-const { buildMessageReceivedPayload } = await import("./webhook-dispatcher");
+const { buildMessageReceivedPayload, buildWebhookDeliveryRows } = await import(
+	"./webhook-dispatcher"
+);
+
+type WebhookEndpoint = Parameters<typeof buildWebhookDeliveryRows>[1][number];
+
+function webhookEndpoint(
+	input: Partial<WebhookEndpoint> = {},
+): WebhookEndpoint {
+	return {
+		id: "endpoint_1",
+		subscribedEvents: ["*"],
+		deviceIds: [],
+		flowIds: [],
+		...input,
+	} as WebhookEndpoint;
+}
 
 beforeEach(() => {
 	selectQueue = [];
 	mediaResult = { raw: {}, media: null };
+});
+
+describe("lazy webhook payload evaluation", () => {
+	test("does not build a payload when no endpoint matches", async () => {
+		const payloadFactory = mock(() => Promise.resolve({ message: "unused" }));
+
+		const rows = await buildWebhookDeliveryRows(
+			{
+				userId: "user_1",
+				deviceId: "device_1",
+				eventType: "message.received",
+				payload: payloadFactory,
+			},
+			[],
+			"delivery",
+		);
+
+		expect(rows).toEqual([]);
+		expect(payloadFactory).toHaveBeenCalledTimes(0);
+	});
+
+	test("builds one payload for all matching endpoints", async () => {
+		const payloadFactory = mock(() => Promise.resolve({ message: "hello" }));
+
+		const rows = await buildWebhookDeliveryRows(
+			{
+				userId: "user_1",
+				deviceId: "device_1",
+				eventType: "message.received",
+				payload: payloadFactory,
+			},
+			[
+				webhookEndpoint({ id: "endpoint_1" }),
+				webhookEndpoint({ id: "endpoint_2" }),
+			],
+			"delivery",
+		);
+
+		expect(payloadFactory).toHaveBeenCalledTimes(1);
+		expect(rows).toEqual([
+			{
+				id: "delivery-0",
+				endpointId: "endpoint_1",
+				eventType: "message.received",
+				payload: { message: "hello" },
+				status: "pending",
+			},
+			{
+				id: "delivery-1",
+				endpointId: "endpoint_2",
+				eventType: "message.received",
+				payload: { message: "hello" },
+				status: "pending",
+			},
+		]);
+	});
 });
 
 describe("message.received webhook payload contract", () => {
@@ -51,6 +123,19 @@ describe("message.received webhook payload contract", () => {
 			[
 				{
 					jid: "6281234567890@s.whatsapp.net",
+					identityKey: "phone:6281234567890",
+					phoneNumber: "6281234567890",
+					lid: null,
+					name: "Customer",
+					pushName: "Customer Push",
+					profileName: null,
+					providerContactId: "6281234567890",
+				},
+			],
+			[
+				{
+					jid: "6281234567890@s.whatsapp.net",
+					identityKey: "phone:6281234567890",
 					phoneNumber: "6281234567890",
 					lid: null,
 					name: "Customer",
@@ -99,6 +184,10 @@ describe("message.received webhook payload contract", () => {
 			contact: {
 				jid: "6281234567890@s.whatsapp.net",
 				number: "6281234567890",
+				phoneNumber: "6281234567890",
+				identityKey: "phone:6281234567890",
+				identifier: "phone:6281234567890",
+				resolved: true,
 			},
 			chat: {
 				jid: "6281234567890@s.whatsapp.net",
@@ -108,8 +197,10 @@ describe("message.received webhook payload contract", () => {
 			sender: {
 				jid: "6281234567890@s.whatsapp.net",
 				number: "6281234567890",
+				phoneNumber: "6281234567890",
+				identityKey: "phone:6281234567890",
 				name: "Customer",
-				identifier: "6281234567890@s.whatsapp.net",
+				identifier: "phone:6281234567890",
 				resolved: true,
 			},
 			message: {
@@ -130,6 +221,18 @@ describe("message.received webhook payload contract", () => {
 	test("adds group sender participant data without using sender name as group name", async () => {
 		selectQueue = [
 			[],
+			[
+				{
+					jid: "6281234567890@s.whatsapp.net",
+					identityKey: "phone:6281234567890",
+					phoneNumber: "6281234567890",
+					lid: null,
+					name: "Sender Name",
+					pushName: null,
+					profileName: null,
+					providerContactId: null,
+				},
+			],
 			[
 				{
 					id: "group_1",
@@ -181,9 +284,11 @@ describe("message.received webhook payload contract", () => {
 			senderParticipant: {
 				jid: "6281234567890@s.whatsapp.net",
 				number: "6281234567890",
+				phoneNumber: "6281234567890",
+				identityKey: "phone:6281234567890",
 				name: "Sender Name",
 				role: "admin",
-				identifier: "6281234567890@s.whatsapp.net",
+				identifier: "phone:6281234567890",
 			},
 		});
 		expect(payload.group?.name).not.toBe("Sender Name");
@@ -192,6 +297,7 @@ describe("message.received webhook payload contract", () => {
 
 	test("keeps unresolved LID mentions as fallback identifiers", async () => {
 		selectQueue = [
+			[],
 			[],
 			[
 				{
@@ -242,12 +348,16 @@ describe("message.received webhook payload contract", () => {
 			expect.objectContaining({
 				jid: "6289999999999@s.whatsapp.net",
 				number: "6289999999999",
-				identifier: "6289999999999@s.whatsapp.net",
+				phoneNumber: "6289999999999",
+				identityKey: "phone:6289999999999",
+				identifier: "phone:6289999999999",
 				resolved: false,
 			}),
 			expect.objectContaining({
+				jid: "987654321@lid",
 				lid: "987654321@lid",
-				identifier: "987654321@lid",
+				identityKey: "lid:987654321@lid",
+				identifier: "lid:987654321@lid",
 				resolved: false,
 			}),
 		]);
@@ -276,6 +386,7 @@ describe("message.received webhook payload contract", () => {
 			[
 				{
 					jid: "6281234567890@s.whatsapp.net",
+					identityKey: "phone:6281234567890",
 					phoneNumber: "6281234567890",
 					lid: null,
 					name: "Customer",

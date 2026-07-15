@@ -1,6 +1,7 @@
 import { db } from "@whatsapp-flow/db";
 import { device } from "@whatsapp-flow/db/schema/device";
 import { eq } from "drizzle-orm";
+import { baileysMessageStore } from "./baileys-message-store";
 import { connectionManager } from "./connection-manager";
 import type { OutgoingMessage } from "./message-sender";
 import { sendWhatsAppMessage } from "./message-sender";
@@ -34,6 +35,16 @@ export async function sendDeviceMessage(
 		throw new Error("Device is not connected");
 	}
 	const result = await sendWhatsAppMessage(connection.socket, to, message);
+	if (result) {
+		try {
+			await baileysMessageStore.store(deviceId, result);
+		} catch {
+			console.error("Failed to persist sent Baileys message content", {
+				deviceId,
+				messageId: result.key.id,
+			});
+		}
+	}
 	return {
 		provider: "baileys",
 		messageId: result?.key?.id ?? undefined,

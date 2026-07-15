@@ -2,19 +2,19 @@ import { TRPCError } from "@trpc/server";
 import { contact } from "@whatsapp-flow/db/schema/contact";
 import { device } from "@whatsapp-flow/db/schema/device";
 import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
-import { connectionManager } from "@whatsapp-flow/whatsapp";
+import {
+	connectionManager,
+	derivePrivateIdentityKey,
+	deriveThreadKey,
+	toPhoneJid,
+} from "@whatsapp-flow/whatsapp";
 import { and, desc, eq, ilike, isNull, like, or } from "drizzle-orm";
 import { z } from "zod";
+import { startDeviceResourceSync } from "../engine/device-resource-sync";
 import { protectedProcedure, router } from "../index";
 
 function normalizeNumber(value: string) {
 	return value.replace(/[^\d]/g, "");
-}
-
-function toPhoneJid(phoneNumber: string) {
-	return phoneNumber.includes("@")
-		? phoneNumber
-		: `${phoneNumber}@s.whatsapp.net`;
 }
 
 async function requireDeviceOwnership(
@@ -88,20 +88,23 @@ export const contactRouter = router({
 		.mutation(async ({ ctx, input }) => {
 			await requireDeviceOwnership(ctx.db, input.deviceId, ctx.session.user.id);
 			const number = normalizeNumber(input.phoneNumber);
-			const jid = `${number}@s.whatsapp.net`;
+			const jid = toPhoneJid(number);
+			const identityKey = derivePrivateIdentityKey({ jid, number });
 			const [row] = await ctx.db
 				.insert(contact)
 				.values({
 					id: crypto.randomUUID(),
 					deviceId: input.deviceId,
 					jid,
+					identityKey,
 					phoneNumber: number,
 					name: input.name ?? null,
 					source: "manual",
 				})
 				.onConflictDoUpdate({
-					target: [contact.deviceId, contact.jid],
+					target: [contact.deviceId, contact.identityKey],
 					set: {
+						jid,
 						phoneNumber: number,
 						name: input.name ?? null,
 						source: "manual",
@@ -142,7 +145,11 @@ export const contactRouter = router({
 			if (input.name !== undefined) updates.name = input.name;
 			if (input.phoneNumber !== undefined) {
 				updates.phoneNumber = normalizeNumber(input.phoneNumber);
-				updates.jid = `${updates.phoneNumber}@s.whatsapp.net`;
+				updates.jid = toPhoneJid(updates.phoneNumber);
+				updates.identityKey = derivePrivateIdentityKey({
+					jid: updates.jid,
+					number: updates.phoneNumber,
+				});
 			}
 			if (input.isBlocked !== undefined) updates.isBlocked = input.isBlocked;
 
@@ -213,11 +220,27 @@ export const contactRouter = router({
 
 				resolved += 1;
 				const phoneNumber = normalizeNumber(pnJid);
+				const identityKey = derivePrivateIdentityKey({
+					jid: pnJid,
+					number: phoneNumber,
+				});
+				const threadKey = deriveThreadKey({
+					chatType: "private",
+					chatJid: pnJid,
+					contactIdentityKey: identityKey,
+				});
 				const [existing] = await ctx.db
 					.select({ id: contact.id })
 					.from(contact)
 					.where(
-						and(eq(contact.deviceId, input.deviceId), eq(contact.jid, pnJid)),
+						and(
+							eq(contact.deviceId, input.deviceId),
+							or(
+								eq(contact.identityKey, identityKey),
+								eq(contact.jid, pnJid),
+								eq(contact.phoneNumber, phoneNumber),
+							),
+						),
 					)
 					.limit(1);
 
@@ -226,6 +249,8 @@ export const contactRouter = router({
 						.update(inboxThread)
 						.set({
 							contactId: existing.id,
+							threadKey,
+							chatJid: pnJid,
 							contactNumber: phoneNumber,
 							updatedAt: now,
 						})
@@ -239,11 +264,21 @@ export const contactRouter = router({
 					.update(contact)
 					.set({
 						jid: pnJid,
+						identityKey,
 						phoneNumber,
 						lid,
 						updatedAt: now,
 					})
 					.where(eq(contact.id, row.id));
+				await ctx.db
+					.update(inboxThread)
+					.set({
+						threadKey,
+						chatJid: pnJid,
+						contactNumber: phoneNumber,
+						updatedAt: now,
+					})
+					.where(eq(inboxThread.contactId, row.id));
 				updated += 1;
 			}
 
@@ -253,6 +288,51 @@ export const contactRouter = router({
 				merged,
 				updated,
 			};
+		}),
+
+	syncOne: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				mode: z.enum(["normal", "repair"]).default("normal"),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const [owned] = await ctx.db
+				.select({
+					deviceId: contact.deviceId,
+					identityKey: contact.identityKey,
+					provider: device.provider,
+				})
+				.from(contact)
+				.innerJoin(device, eq(contact.deviceId, device.id))
+				.where(
+					and(eq(contact.id, input.id), eq(device.userId, ctx.session.user.id)),
+				)
+				.limit(1);
+			if (!owned) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Contact not found",
+				});
+			}
+			if (
+				owned.provider !== "baileys" ||
+				connectionManager.getConnection(owned.deviceId)?.status !== "connected"
+			) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "A connected Baileys device is required",
+				});
+			}
+			return startDeviceResourceSync({
+				deviceId: owned.deviceId,
+				requestedByUserId: ctx.session.user.id,
+				resource: "contacts",
+				scopeKey: owned.identityKey,
+				mode: input.mode,
+				db: ctx.db,
+			});
 		}),
 
 	delete: protectedProcedure

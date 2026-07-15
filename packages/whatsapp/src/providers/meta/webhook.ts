@@ -5,6 +5,7 @@ import { device } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import { and, eq, sql } from "drizzle-orm";
+import { derivePrivateIdentityKey, deriveThreadKey } from "../../identity";
 import type { ConnectionManagerEvents } from "../../types";
 import { getMetaAppSecret } from "./transport";
 
@@ -90,17 +91,19 @@ type MetaWebhookStatus = {
 	}[];
 };
 
-export function verifyMetaWebhookChallenge(query: {
-	mode?: string | null;
-	verifyToken?: string | null;
-	challenge?: string | null;
-}) {
-	const expected = env.META_WEBHOOK_VERIFY_TOKEN;
-	if (!expected) return null;
+export function verifyMetaWebhookChallenge(
+	query: {
+		mode?: string | null;
+		verifyToken?: string | null;
+		challenge?: string | null;
+	},
+	expectedVerifyToken = env.META_WEBHOOK_VERIFY_TOKEN,
+) {
+	if (!expectedVerifyToken) return null;
 	if (query.mode !== "subscribe" || !query.challenge || !query.verifyToken) {
 		return null;
 	}
-	if (!safeEqual(query.verifyToken, expected)) return null;
+	if (!safeEqual(query.verifyToken, expectedVerifyToken)) return null;
 	return query.challenge;
 }
 
@@ -197,23 +200,30 @@ export async function handleMetaWebhook(input: {
 			}
 
 			const senderName = contacts.get(from);
+			const chatJid = toPhoneJid(from);
+			const identityKey = derivePrivateIdentityKey({
+				jid: chatJid,
+				number: from,
+			});
 			input.emitDeviceMessage({
 				deviceId: deviceRow.id,
 				provider: "meta_cloud",
 				contact: {
-					jid: toPhoneJid(from),
+					jid: chatJid,
 					number: from,
+					identityKey,
 					name: senderName,
 					providerContactId: from,
 				},
 				chat: {
-					jid: toPhoneJid(from),
+					jid: chatJid,
 					type: "private",
 					isGroup: false,
 				},
 				sender: {
-					jid: toPhoneJid(from),
+					jid: chatJid,
 					number: from,
+					identityKey,
 					name: senderName,
 					providerContactId: from,
 				},
@@ -329,6 +339,15 @@ async function reserveInboundMetaMessage(input: {
 }) {
 	const now = new Date();
 	const chatJid = toPhoneJid(input.from);
+	const identityKey = derivePrivateIdentityKey({
+		jid: chatJid,
+		number: input.from,
+	});
+	const threadKey = deriveThreadKey({
+		chatType: "private",
+		chatJid,
+		contactIdentityKey: identityKey,
+	});
 	const text = extractMetaMessageText(input.message);
 	const [savedContact] = await db
 		.insert(contactTable)
@@ -336,6 +355,7 @@ async function reserveInboundMetaMessage(input: {
 			id: crypto.randomUUID(),
 			deviceId: input.deviceId,
 			jid: chatJid,
+			identityKey,
 			phoneNumber: input.from,
 			name: input.contactName ?? null,
 			pushName: input.contactName ?? null,
@@ -344,8 +364,9 @@ async function reserveInboundMetaMessage(input: {
 			source: "message",
 		})
 		.onConflictDoUpdate({
-			target: [contactTable.deviceId, contactTable.jid],
+			target: [contactTable.deviceId, contactTable.identityKey],
 			set: {
+				jid: chatJid,
 				phoneNumber: input.from,
 				name: input.contactName ?? null,
 				pushName: input.contactName ?? null,
@@ -362,6 +383,7 @@ async function reserveInboundMetaMessage(input: {
 			id: crypto.randomUUID(),
 			deviceId: input.deviceId,
 			chatType: "private",
+			threadKey,
 			chatJid,
 			contactId: savedContact?.id ?? null,
 			contactNumber: input.from,
@@ -371,9 +393,10 @@ async function reserveInboundMetaMessage(input: {
 			unreadCount: 0,
 		})
 		.onConflictDoUpdate({
-			target: [inboxThread.deviceId, inboxThread.chatJid],
+			target: [inboxThread.deviceId, inboxThread.threadKey],
 			set: {
 				chatType: "private",
+				chatJid,
 				contactId: savedContact?.id ?? null,
 				contactNumber: input.from,
 				contactName: input.contactName ?? null,

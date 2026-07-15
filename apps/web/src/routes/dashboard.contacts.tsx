@@ -18,11 +18,22 @@ import {
 	DropdownMenuTrigger,
 } from "@whatsapp-flow/ui/components/dropdown-menu";
 import { Input } from "@whatsapp-flow/ui/components/input";
-import { MoreHorizontal, Plus, Search, Trash2, Users } from "lucide-react";
+import {
+	MoreHorizontal,
+	Plus,
+	RefreshCw,
+	Search,
+	Trash2,
+	Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { DataTable } from "@/components/data-table";
+import {
+	ResourceSyncControls,
+	useResourceSyncCompletion,
+} from "@/components/resource-sync-controls";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/contacts")({
@@ -34,6 +45,7 @@ export const Route = createFileRoute("/dashboard/contacts")({
 
 function ContactsPage() {
 	const trpc = useTRPC();
+	const trackSyncCompletion = useResourceSyncCompletion("contacts");
 	const { search: searchFromUrl } = Route.useSearch();
 	const [search, setSearch] = useState(searchFromUrl ?? "");
 	const [addOpen, setAddOpen] = useState(false);
@@ -47,6 +59,7 @@ function ContactsPage() {
 		trpc.device.list.queryOptions(),
 	);
 	const defaultDeviceId = devices[0]?.id;
+	const devicesById = new Map(devices.map((device) => [device.id, device]));
 
 	useEffect(() => {
 		if (searchFromUrl) setSearch(searchFromUrl);
@@ -74,23 +87,36 @@ function ContactsPage() {
 			onError: (e) => toast.error(e.message ?? "Failed to delete contact"),
 		}),
 	);
+	const syncOneMut = useMutation(
+		trpc.contact.syncOne.mutationOptions({
+			onSuccess: (result) => {
+				trackSyncCompletion(result);
+				toast.success("Contact sync queued");
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
 
 	const columns = [
 		{
 			key: "name",
 			header: "Name",
-			cell: (row: (typeof contacts)[0]) => (
-				<div className="flex flex-col">
-					<span className="font-medium text-xs">
-						{row.name ?? row.pushName ?? "—"}
-					</span>
-					{row.pushName && row.name && row.pushName !== row.name && (
-						<span className="text-[10px] text-muted-foreground">
-							{row.pushName}
-						</span>
-					)}
-				</div>
-			),
+			cell: (row: (typeof contacts)[0]) => {
+				const primary = row.phoneNumber ?? row.name ?? row.pushName ?? row.jid;
+				const secondary = [row.name, row.pushName]
+					.filter((value) => value && value !== primary)
+					.join(" · ");
+				return (
+					<div className="flex flex-col">
+						<span className="font-medium text-xs">{primary}</span>
+						{secondary && (
+							<span className="text-[10px] text-muted-foreground">
+								{secondary}
+							</span>
+						)}
+					</div>
+				);
+			},
 		},
 		{
 			key: "phoneNumber",
@@ -123,26 +149,40 @@ function ContactsPage() {
 		{
 			key: "actions",
 			header: "",
-			cell: (row: (typeof contacts)[0]) => (
-				<DropdownMenu>
-					<DropdownMenuTrigger
-						render={
-							<Button variant="ghost" size="icon-xs" className="size-6" />
-						}
-					>
-						<MoreHorizontal className="size-3.5" />
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end">
-						<DropdownMenuItem
-							className="text-destructive"
-							onClick={() => deleteMut.mutate({ id: row.id })}
+			cell: (row: (typeof contacts)[0]) => {
+				const device = devicesById.get(row.deviceId);
+				const canSync =
+					device?.provider !== "meta_cloud" && device?.status === "connected";
+				return (
+					<DropdownMenu>
+						<DropdownMenuTrigger
+							render={
+								<Button variant="ghost" size="icon-xs" className="size-6" />
+							}
 						>
-							<Trash2 className="size-3.5" />
-							Delete
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
-			),
+							<MoreHorizontal className="size-3.5" />
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem
+								disabled={!canSync || syncOneMut.isPending}
+								onClick={() =>
+									syncOneMut.mutate({ id: row.id, mode: "normal" })
+								}
+							>
+								<RefreshCw className="size-3.5" />
+								Refresh from WhatsApp
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								className="text-destructive"
+								onClick={() => deleteMut.mutate({ id: row.id })}
+							>
+								<Trash2 className="size-3.5" />
+								Delete
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				);
+			},
 		},
 	];
 
@@ -155,71 +195,77 @@ function ContactsPage() {
 						{contacts.length} contacts · synced from your WhatsApp devices
 					</p>
 				</div>
-				<Dialog open={addOpen} onOpenChange={setAddOpen}>
-					<DialogTrigger
-						render={<Button size="sm" className="h-7 gap-1.5 text-xs" />}
-					>
-						<Plus className="size-3.5" />
-						Add Contact
-					</DialogTrigger>
-					<DialogContent>
-						<DialogHeader>
-							<DialogTitle>Add Contact</DialogTitle>
-							<DialogDescription>
-								Manually add a WhatsApp contact by phone number.
-							</DialogDescription>
-						</DialogHeader>
-						<div className="flex flex-col gap-3">
-							<div className="flex flex-col gap-1">
-								<label className="font-medium text-xs" htmlFor="contact-phone">
-									Phone Number *
-								</label>
-								<Input
-									id="contact-phone"
-									placeholder="6281234567890"
-									value={newPhone}
-									onChange={(e) => setNewPhone(e.target.value)}
-								/>
+				<div className="flex items-center gap-2">
+					<ResourceSyncControls devices={devices} resource="contacts" />
+					<Dialog open={addOpen} onOpenChange={setAddOpen}>
+						<DialogTrigger
+							render={<Button size="sm" className="h-7 gap-1.5 text-xs" />}
+						>
+							<Plus className="size-3.5" />
+							Add Contact
+						</DialogTrigger>
+						<DialogContent>
+							<DialogHeader>
+								<DialogTitle>Add Contact</DialogTitle>
+								<DialogDescription>
+									Manually add a WhatsApp contact by phone number.
+								</DialogDescription>
+							</DialogHeader>
+							<div className="flex flex-col gap-3">
+								<div className="flex flex-col gap-1">
+									<label
+										className="font-medium text-xs"
+										htmlFor="contact-phone"
+									>
+										Phone Number *
+									</label>
+									<Input
+										id="contact-phone"
+										placeholder="6281234567890"
+										value={newPhone}
+										onChange={(e) => setNewPhone(e.target.value)}
+									/>
+								</div>
+								<div className="flex flex-col gap-1">
+									<label className="font-medium text-xs" htmlFor="contact-name">
+										Name
+									</label>
+									<Input
+										id="contact-name"
+										placeholder="John Doe"
+										value={newName}
+										onChange={(e) => setNewName(e.target.value)}
+									/>
+								</div>
 							</div>
-							<div className="flex flex-col gap-1">
-								<label className="font-medium text-xs" htmlFor="contact-name">
-									Name
-								</label>
-								<Input
-									id="contact-name"
-									placeholder="John Doe"
-									value={newName}
-									onChange={(e) => setNewName(e.target.value)}
-								/>
-							</div>
-						</div>
-						<DialogFooter>
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => setAddOpen(false)}
-							>
-								Cancel
-							</Button>
-							<Button
-								size="sm"
-								disabled={
-									!newPhone.trim() || !defaultDeviceId || addMut.isPending
-								}
-								onClick={() => {
-									if (!defaultDeviceId) return;
-									addMut.mutate({
-										deviceId: defaultDeviceId,
-										phoneNumber: newPhone.trim(),
-										name: newName.trim() || undefined,
-									});
-								}}
-							>
-								{addMut.isPending ? "Adding..." : "Add"}
-							</Button>
-						</DialogFooter>
-					</DialogContent>
-				</Dialog>
+							<DialogFooter>
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => setAddOpen(false)}
+								>
+									Cancel
+								</Button>
+								<Button
+									size="sm"
+									disabled={
+										!newPhone.trim() || !defaultDeviceId || addMut.isPending
+									}
+									onClick={() => {
+										if (!defaultDeviceId) return;
+										addMut.mutate({
+											deviceId: defaultDeviceId,
+											phoneNumber: newPhone.trim(),
+											name: newName.trim() || undefined,
+										});
+									}}
+								>
+									{addMut.isPending ? "Adding..." : "Add"}
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
+				</div>
 			</div>
 
 			<div className="relative max-w-xs">

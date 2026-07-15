@@ -423,8 +423,8 @@ function WebhooksPage() {
 								{form.id ? "Edit Webhook" : "Create Webhook"}
 							</DialogTitle>
 							<DialogDescription>
-								Configure an HTTPS endpoint and choose which devices, events,
-								and flows should deliver POST requests.
+								Configure an HTTP or HTTPS endpoint and choose which devices,
+								events, and flows should deliver POST requests.
 							</DialogDescription>
 						</DialogHeader>
 						<div className="flex flex-col gap-4">

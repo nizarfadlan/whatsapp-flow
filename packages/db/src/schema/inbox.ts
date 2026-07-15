@@ -32,6 +32,7 @@ export const inboxThread = pgTable(
 			.notNull()
 			.references(() => device.id, { onDelete: "cascade" }),
 		chatType: chatTypeEnum("chat_type").default("private").notNull(),
+		threadKey: text("thread_key").notNull(),
 		// chatJid = JID of the conversation: contactJid for private, groupJid for groups
 		chatJid: text("chat_jid"),
 		// FK links to contact/group records (optional, set async)
@@ -59,10 +60,11 @@ export const inboxThread = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		uniqueIndex("inbox_thread_device_chat_jid_unique_idx").on(
+		uniqueIndex("inbox_thread_device_thread_key_unique_idx").on(
 			table.deviceId,
-			table.chatJid,
+			table.threadKey,
 		),
+		index("inbox_thread_device_chat_jid_idx").on(table.deviceId, table.chatJid),
 		index("inbox_thread_device_contact_idx").on(
 			table.deviceId,
 			table.contactNumber,

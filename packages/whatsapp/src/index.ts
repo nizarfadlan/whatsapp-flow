@@ -1,6 +1,16 @@
 export { useDbAuthState } from "./auth-state";
 export { ConnectionManager, connectionManager } from "./connection-manager";
 export { sendDeviceMessage } from "./device-sender";
+export type { PrivateIdentityInput, ThreadIdentityInput } from "./identity";
+export {
+	derivePrivateIdentityKey,
+	deriveThreadKey,
+	isLidJid,
+	isPhoneJid,
+	normalizeContactNumber,
+	phoneNumberFromJid,
+	toPhoneJid,
+} from "./identity";
 export type { IncomingMessage } from "./message-handler";
 export { matchesKeywordTrigger } from "./message-handler";
 export type { OutgoingMessage } from "./message-sender";
@@ -26,4 +36,7 @@ export type {
 	ConnectionManagerEvents,
 	DeviceConnection,
 	DeviceStatus,
+	SyncedContact,
+	SyncedGroup,
+	SyncedNewsletter,
 } from "./types";

@@ -85,6 +85,12 @@ export interface MessageNodeData {
 	templateBodyParams?: string[];
 }
 
+export type WaitForReplyWarning = {
+	id: string;
+	afterMinutes: number;
+	message: string;
+};
+
 export interface InteractiveNodeData {
 	id: string;
 	nodeType: "send-button" | "send-list" | "send-quick-reply";
@@ -92,18 +98,15 @@ export interface InteractiveNodeData {
 	category: "interactive";
 	bodyText?: string;
 	footerText?: string;
+	buttonText?: string;
 	buttons?: { id: string; text: string }[];
 	sections?: {
 		title: string;
 		rows: { id: string; title: string; description?: string }[];
 	}[];
+	timeoutMinutes?: number;
+	replyWarnings?: WaitForReplyWarning[];
 }
-
-export type WaitForReplyWarning = {
-	id: string;
-	afterMinutes: number;
-	message: string;
-};
 
 export interface LogicNodeData {
 	id: string;
@@ -166,6 +169,45 @@ export type FlowNodeData =
 	| LogicNodeData
 	| ActionNodeData;
 
+export type InteractiveOptionHandle = {
+	id: string;
+	optionId: string;
+	label: string;
+	index: number;
+};
+
+export function isInteractiveBranchNode(
+	data: FlowNodeData,
+): data is InteractiveNodeData {
+	return (
+		data.nodeType === "send-button" ||
+		data.nodeType === "send-list" ||
+		data.nodeType === "send-quick-reply"
+	);
+}
+
+export function getInteractiveOptionHandles(
+	data: FlowNodeData,
+): InteractiveOptionHandle[] {
+	if (!isInteractiveBranchNode(data)) return [];
+	const options =
+		data.nodeType === "send-list"
+			? (data.sections ?? []).flatMap((section) =>
+					(section.rows ?? []).map((row) => ({ id: row.id, label: row.title })),
+				)
+			: (data.buttons ?? []).map((button) => ({
+					id: button.id,
+					label: button.text,
+				}));
+
+	return options.map((option, index) => ({
+		id: `option:${option.id}`,
+		optionId: option.id,
+		label: option.label.trim() || `Option ${index + 1}`,
+		index: index + 1,
+	}));
+}
+
 // ── Node Visual Components ───────────────────────────────────────
 
 export const categoryAccents: Record<
@@ -222,6 +264,7 @@ function BaseFlowNode({
 	const isTrigger = data.category === "trigger";
 	const isCondition = data.nodeType === "condition";
 	const isEnd = data.nodeType === "end";
+	const optionHandles = getInteractiveOptionHandles(data);
 
 	return (
 		<div
@@ -299,6 +342,31 @@ function BaseFlowNode({
 						false
 					</span>
 				</>
+			) : optionHandles.length > 0 ? (
+				optionHandles.map((option, index) => {
+					const top =
+						optionHandles.length === 1
+							? 52
+							: 30 + (index * 46) / Math.max(optionHandles.length - 1, 1);
+					return (
+						<div key={option.id}>
+							<Handle
+								id={option.id}
+								type="source"
+								position={Position.Right}
+								style={{ top: `${top}%` }}
+								className="flow-node-handle"
+							/>
+							<span
+								className="absolute -right-24 max-w-20 truncate rounded-md border bg-background px-1 text-[9px] text-muted-foreground shadow-xs"
+								style={{ top: `calc(${top}% - 8px)` }}
+								title={option.label}
+							>
+								{option.index}. {option.label}
+							</span>
+						</div>
+					);
+				})
 			) : (
 				!isEnd && (
 					<Handle
@@ -473,6 +541,18 @@ export function SendTemplateNode({ data, selected }: NodeProps) {
 	);
 }
 
+function getReplyWarningCount(data: { replyWarnings?: WaitForReplyWarning[] }) {
+	return data.replyWarnings?.filter((warning) => warning.message.trim()).length;
+}
+
+function getWaitSummary(data: {
+	timeoutMinutes?: number;
+	replyWarnings?: WaitForReplyWarning[];
+}) {
+	const warningCount = getReplyWarningCount(data);
+	return `${data.timeoutMinutes ?? 1440}m wait${warningCount ? ` · ${warningCount} warnings` : ""}`;
+}
+
 // Interactive nodes
 export function SendButtonNode({ data, selected }: NodeProps) {
 	const d = data as unknown as InteractiveNodeData;
@@ -488,6 +568,9 @@ export function SendButtonNode({ data, selected }: NodeProps) {
 					"{d.bodyText}"
 				</span>
 			)}
+			<span className="text-[10px] text-muted-foreground">
+				{getWaitSummary(d)}
+			</span>
 		</BaseFlowNode>
 	);
 }
@@ -504,6 +587,9 @@ export function SendListNode({ data, selected }: NodeProps) {
 			<span className="text-[10px] text-muted-foreground">
 				{d.sections?.length ?? 0} sections
 			</span>
+			<span className="text-[10px] text-muted-foreground">
+				{getWaitSummary(d)}
+			</span>
 		</BaseFlowNode>
 	);
 }
@@ -519,6 +605,9 @@ export function SendQuickReplyNode({ data, selected }: NodeProps) {
 		>
 			<span className="text-[10px] text-muted-foreground">
 				{d.buttons?.length ?? 0} buttons
+			</span>
+			<span className="text-[10px] text-muted-foreground">
+				{getWaitSummary(d)}
 			</span>
 		</BaseFlowNode>
 	);
@@ -571,9 +660,7 @@ export function SetVariableNode({ data, selected }: NodeProps) {
 
 export function WaitForReplyNode({ data, selected }: NodeProps) {
 	const d = data as unknown as LogicNodeData;
-	const warningCount = d.replyWarnings?.filter((warning) =>
-		warning.message.trim(),
-	).length;
+	const warningCount = getReplyWarningCount(d);
 	return (
 		<BaseFlowNode
 			data={d}
@@ -872,7 +959,14 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 		case "send-button":
 			return {
 				...base,
-				data: { ...base.data, bodyText: "", footerText: "", buttons: [] },
+				data: {
+					...base.data,
+					bodyText: "",
+					footerText: "",
+					buttons: [],
+					timeoutMinutes: 1440,
+					replyWarnings: [],
+				},
 			};
 		case "send-list":
 			return {
@@ -883,10 +977,21 @@ export function createNode(type: PaletteNodeTypeName, x = 300, y = 50): Node {
 					footerText: "",
 					buttonText: "Menu",
 					sections: [],
+					timeoutMinutes: 1440,
+					replyWarnings: [],
 				},
 			};
 		case "send-quick-reply":
-			return { ...base, data: { ...base.data, bodyText: "", buttons: [] } };
+			return {
+				...base,
+				data: {
+					...base.data,
+					bodyText: "",
+					buttons: [],
+					timeoutMinutes: 1440,
+					replyWarnings: [],
+				},
+			};
 		case "condition":
 			return {
 				...base,

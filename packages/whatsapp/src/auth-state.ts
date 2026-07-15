@@ -6,6 +6,7 @@ import {
 	type AuthenticationState,
 	BufferJSON,
 	initAuthCreds,
+	proto,
 	type SignalDataSet,
 	type SignalDataTypeMap,
 } from "baileys";
@@ -22,14 +23,32 @@ type KeyStore = NonNullable<StoredAuthState["keys"]>;
 
 const BAILEYS_AUTH_STATE_KEY = "auth_state";
 const authStateWriteQueues = new Map<string, Promise<void>>();
+const authStateGenerations = new Map<string, number>();
 
-function enqueueAuthStateWrite(deviceId: string, write: () => Promise<void>) {
+function nextAuthStateGeneration(deviceId: string) {
+	const generation = (authStateGenerations.get(deviceId) ?? 0) + 1;
+	authStateGenerations.set(deviceId, generation);
+	return generation;
+}
+
+function isCurrentAuthStateGeneration(deviceId: string, generation: number) {
+	return authStateGenerations.get(deviceId) === generation;
+}
+
+function enqueueAuthStateOperation<T>(
+	deviceId: string,
+	operation: () => Promise<T>,
+) {
 	const previous = authStateWriteQueues.get(deviceId) ?? Promise.resolve();
-	const next = previous.catch(() => undefined).then(write);
-	authStateWriteQueues.set(deviceId, next);
+	const next = previous.catch(() => undefined).then(operation);
+	const completion = next.then(
+		() => undefined,
+		() => undefined,
+	);
+	authStateWriteQueues.set(deviceId, completion);
 
 	return next.finally(() => {
-		if (authStateWriteQueues.get(deviceId) === next) {
+		if (authStateWriteQueues.get(deviceId) === completion) {
 			authStateWriteQueues.delete(deviceId);
 		}
 	});
@@ -128,47 +147,45 @@ function deserialize<T>(value: unknown): T {
 	return reviveBinaryValues(value) as T;
 }
 
-function isBinaryValue(value: unknown) {
-	return Buffer.isBuffer(value) || value instanceof Uint8Array;
+function decodeBase64TextBuffer(buffer: Buffer) {
+	const text = buffer.toString("utf8");
+	const decoded = base64StringToBuffer(text);
+	return decoded && [32, 33, 64].includes(decoded.length) ? decoded : buffer;
 }
 
-function normalizeKeyPair(keyPair: { public?: unknown; private?: unknown }) {
-	if (!isBinaryValue(keyPair.public) || !isBinaryValue(keyPair.private)) {
-		throw new Error("Stored Baileys auth state contains invalid key material");
-	}
+function toAuthBuffer(value: unknown) {
+	if (Buffer.isBuffer(value)) return decodeBase64TextBuffer(value);
+	if (value instanceof Uint8Array)
+		return decodeBase64TextBuffer(Buffer.from(value));
+	if (typeof value === "string") return base64StringToBuffer(value);
+	return null;
+}
 
-	const publicKey = Buffer.from(keyPair.public);
-	const privateKey = Buffer.from(keyPair.private);
-	if (privateKey.length !== 32) {
-		throw new Error("Stored Baileys auth state contains invalid private key");
-	}
-	if (publicKey.length === 33 && publicKey[0] === 5) {
-		keyPair.public = publicKey.subarray(1);
-	} else if (publicKey.length !== 32) {
-		throw new Error("Stored Baileys auth state contains invalid public key");
-	}
-	keyPair.private = privateKey;
+function normalizePublicKey(value: unknown) {
+	const publicKey = toAuthBuffer(value);
+	if (!publicKey) return value;
+	return publicKey.length === 33 && publicKey[0] === 5
+		? publicKey.subarray(1)
+		: publicKey;
+}
+
+function coerceKeyPairBuffers(keyPair?: {
+	public?: unknown;
+	private?: unknown;
+}) {
+	if (!keyPair) return;
+	keyPair.private = toAuthBuffer(keyPair.private) ?? keyPair.private;
+	keyPair.public = normalizePublicKey(keyPair.public);
 }
 
 function normalizeAuthCreds(creds: AuthenticationCreds) {
-	const keyPairs = [
-		creds.noiseKey,
-		creds.signedIdentityKey,
-		creds.signedPreKey?.keyPair,
-		creds.pairingEphemeralKeyPair,
-	].filter(Boolean) as { public?: unknown; private?: unknown }[];
+	coerceKeyPairBuffers(creds.noiseKey);
+	coerceKeyPairBuffers(creds.signedIdentityKey);
+	coerceKeyPairBuffers(creds.signedPreKey?.keyPair);
+	coerceKeyPairBuffers(creds.pairingEphemeralKeyPair);
 
-	for (const keyPair of keyPairs) {
-		normalizeKeyPair(keyPair);
-	}
-
-	if (creds.signedPreKey?.signature) {
-		const signature = Buffer.from(creds.signedPreKey.signature);
-		if (signature.length !== 64) {
-			throw new Error("Stored Baileys auth state contains invalid signature");
-		}
-		creds.signedPreKey.signature = signature;
-	}
+	creds.signedPreKey.signature =
+		toAuthBuffer(creds.signedPreKey.signature) ?? creds.signedPreKey.signature;
 }
 
 async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
@@ -198,8 +215,20 @@ async function readStoredAuthState(deviceId: string): Promise<StoredAuthState> {
 	return deserialize<StoredAuthState>(rows[0]?.sessionData ?? {});
 }
 
-async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
-	await enqueueAuthStateWrite(deviceId, async () => {
+async function writeStoredAuthState(
+	deviceId: string,
+	generation: number,
+	state: StoredAuthState,
+	isDisposed: () => boolean,
+) {
+	await enqueueAuthStateOperation(deviceId, async () => {
+		if (isDisposed() || !isCurrentAuthStateGeneration(deviceId, generation)) {
+			return;
+		}
+
+		const encryptedValue = encryptSecret(
+			JSON.stringify(state, BufferJSON.replacer),
+		);
 		await db
 			.insert(deviceProviderSecret)
 			.values({
@@ -207,17 +236,13 @@ async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
 				deviceId,
 				provider: "baileys",
 				key: BAILEYS_AUTH_STATE_KEY,
-				encryptedValue: encryptSecret(
-					JSON.stringify(state, BufferJSON.replacer),
-				),
+				encryptedValue,
 			})
 			.onConflictDoUpdate({
 				target: [deviceProviderSecret.deviceId, deviceProviderSecret.key],
 				set: {
 					provider: "baileys",
-					encryptedValue: encryptSecret(
-						JSON.stringify(state, BufferJSON.replacer),
-					),
+					encryptedValue,
 					updatedAt: new Date(),
 				},
 			});
@@ -228,70 +253,95 @@ async function writeStoredAuthState(deviceId: string, state: StoredAuthState) {
 	});
 }
 
-export async function clearDbAuthState(deviceId: string) {
-	await enqueueAuthStateWrite(deviceId, async () => {
-		await db
-			.delete(deviceProviderSecret)
-			.where(
-				and(
-					eq(deviceProviderSecret.deviceId, deviceId),
-					eq(deviceProviderSecret.key, BAILEYS_AUTH_STATE_KEY),
-				),
-			);
-		await db
-			.update(device)
-			.set({ sessionData: null, updatedAt: new Date() })
-			.where(eq(device.id, deviceId));
+async function clearStoredAuthState(deviceId: string) {
+	await db
+		.delete(deviceProviderSecret)
+		.where(
+			and(
+				eq(deviceProviderSecret.deviceId, deviceId),
+				eq(deviceProviderSecret.key, BAILEYS_AUTH_STATE_KEY),
+			),
+		);
+	await db
+		.update(device)
+		.set({ sessionData: null, updatedAt: new Date() })
+		.where(eq(device.id, deviceId));
+}
+
+export function clearDbAuthState(deviceId: string) {
+	return enqueueAuthStateOperation(deviceId, async () => {
+		const generation = nextAuthStateGeneration(deviceId);
+		await clearStoredAuthState(deviceId);
+		return generation;
 	});
 }
 
-export async function useDbAuthState(deviceId: string): Promise<{
+export type DbAuthState = {
 	state: AuthenticationState;
 	saveCreds: () => Promise<void>;
-}> {
-	const stored = await readStoredAuthState(deviceId);
-	let creds: AuthenticationCreds;
-	let keys: KeyStore;
-	try {
-		creds = stored.creds
-			? deserialize<AuthenticationCreds>(stored.creds)
-			: initAuthCreds();
-		normalizeAuthCreds(creds);
-		keys = deserialize<KeyStore>(stored.keys ?? {});
-	} catch (error) {
-		console.warn("Stored Baileys auth state is invalid; resetting session", {
-			deviceId,
-			error,
-		});
-		await clearDbAuthState(deviceId);
-		creds = initAuthCreds();
-		keys = {};
-	}
+	flush: () => Promise<void>;
+	dispose: () => void;
+};
+
+export async function useDbAuthState(deviceId: string): Promise<DbAuthState> {
+	const loaded = await enqueueAuthStateOperation(deviceId, async () => {
+		let generation = nextAuthStateGeneration(deviceId);
+		try {
+			const stored = await readStoredAuthState(deviceId);
+			const creds = stored.creds
+				? deserialize<AuthenticationCreds>(stored.creds)
+				: initAuthCreds();
+			normalizeAuthCreds(creds);
+			return {
+				generation,
+				creds,
+				keys: deserialize<KeyStore>(stored.keys ?? {}),
+			};
+		} catch {
+			console.warn("Stored Baileys auth state is invalid; resetting session", {
+				deviceId,
+			});
+			generation = nextAuthStateGeneration(deviceId);
+			await clearStoredAuthState(deviceId);
+			return { generation, creds: initAuthCreds(), keys: {} };
+		}
+	});
+	const { generation, creds, keys } = loaded;
 
 	let persistTimer: ReturnType<typeof setTimeout> | null = null;
+	let disposed = false;
 
 	const persist = async () => {
 		if (persistTimer) {
 			clearTimeout(persistTimer);
 			persistTimer = null;
 		}
-		await writeStoredAuthState(deviceId, {
-			creds: serialize(creds),
-			keys,
-		});
+		if (disposed) return;
+		await writeStoredAuthState(
+			deviceId,
+			generation,
+			{ creds: serialize(creds), keys },
+			() => disposed,
+		);
 	};
 
 	const schedulePersist = () => {
+		if (disposed) return;
 		if (persistTimer) clearTimeout(persistTimer);
 		persistTimer = setTimeout(() => {
 			persistTimer = null;
-			persist().catch((error) => {
-				console.warn("Failed to persist Baileys auth state", {
-					deviceId,
-					error,
-				});
+			persist().catch(() => {
+				console.warn("Failed to persist Baileys auth state", { deviceId });
 			});
 		}, 250);
+	};
+
+	const dispose = () => {
+		disposed = true;
+		if (persistTimer) {
+			clearTimeout(persistTimer);
+			persistTimer = null;
+		}
 	};
 
 	const keyStore = {
@@ -302,7 +352,13 @@ export async function useDbAuthState(deviceId: string): Promise<{
 			for (const id of ids) {
 				const value = typeKeys[id];
 				if (value) {
-					values[id] = deserialize<SignalDataTypeMap[T]>(value);
+					const deserialized = deserialize<SignalDataTypeMap[T]>(value);
+					values[id] =
+						type === "app-state-sync-key"
+							? (proto.Message.AppStateSyncKeyData.fromObject(
+									deserialized as Record<string, unknown>,
+								) as unknown as SignalDataTypeMap[T])
+							: deserialized;
 				}
 			}
 
@@ -341,5 +397,7 @@ export async function useDbAuthState(deviceId: string): Promise<{
 			keys: keyStore,
 		},
 		saveCreds: persist,
+		flush: persist,
+		dispose,
 	};
 }

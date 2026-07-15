@@ -11,6 +11,10 @@ import {
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
+import {
+	listDeviceResourceSyncRuns,
+	startDeviceResourceSync,
+} from "../engine/device-resource-sync";
 import { protectedProcedure, router } from "../index";
 
 const requiredTrimmedString = z.string().trim().min(1);
@@ -57,6 +61,21 @@ async function requireDeviceOwnership(
 	}
 
 	return found;
+}
+
+function requireConnectedBaileysDevice(found: typeof device.$inferSelect) {
+	if (found.provider !== "baileys") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Resource sync currently supports Baileys devices only",
+		});
+	}
+	if (connectionManager.getConnection(found.id)?.status !== "connected") {
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message: "Device must be connected before synchronization",
+		});
+	}
 }
 
 function normalizeGraphApiVersion(value: string) {
@@ -534,6 +553,46 @@ export const deviceRouter = router({
 		.query(async ({ ctx, input }) => {
 			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
 			return { qrCode: connectionManager.getQrCode(input.id) };
+		}),
+
+	startSync: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				resource: z.enum(["contacts", "groups", "newsletters", "all"]),
+				mode: z.enum(["normal", "repair"]).default("normal"),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			const found = await requireDeviceOwnership(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			requireConnectedBaileysDevice(found);
+			return startDeviceResourceSync({
+				deviceId: found.id,
+				requestedByUserId: ctx.session.user.id,
+				resource: input.resource,
+				mode: input.mode,
+				db: ctx.db,
+			});
+		}),
+
+	syncStatus: protectedProcedure
+		.input(
+			z.object({
+				id: z.string().min(1),
+				limit: z.number().min(1).max(100).default(30),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			return listDeviceResourceSyncRuns({
+				deviceId: input.id,
+				limit: input.limit,
+				db: ctx.db,
+			});
 		}),
 
 	status: protectedProcedure

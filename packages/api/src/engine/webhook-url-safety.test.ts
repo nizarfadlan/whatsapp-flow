@@ -4,8 +4,14 @@ import { assertSafeOutboundWebhookUrl } from "./webhook-url-safety";
 describe("assertSafeOutboundWebhookUrl", () => {
 	test("blocks unsafe protocols", async () => {
 		await expect(
-			assertSafeOutboundWebhookUrl("http://example.com/hook"),
-		).rejects.toThrow("Webhook URL must use HTTPS");
+			assertSafeOutboundWebhookUrl("file:///tmp/webhook"),
+		).rejects.toThrow("Webhook URL must use HTTP or HTTPS");
+	});
+
+	test("allows public HTTP IP URLs", async () => {
+		await expect(
+			assertSafeOutboundWebhookUrl("http://93.184.216.34/hook"),
+		).resolves.toBeUndefined();
 	});
 
 	test("blocks localhost", async () => {

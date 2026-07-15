@@ -28,6 +28,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@whatsapp-flow/ui/components/dialog";
+import { Input } from "@whatsapp-flow/ui/components/input";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import {
 	addEdge,
@@ -47,6 +48,7 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	GripVertical,
+	Pencil,
 	Play,
 	Redo2,
 	Save,
@@ -61,6 +63,8 @@ import {
 	createNode,
 	createTriggerNode,
 	type FlowNodeData,
+	getInteractiveOptionHandles,
+	isInteractiveBranchNode,
 	migrateLegacyNodes,
 	nodeTypes,
 	type PaletteNodeTypeName,
@@ -163,6 +167,45 @@ function ensureTriggerNode(nodes: Node[]) {
 	return [createTriggerNode(), ...migrated];
 }
 
+function getSourceHandleLabel(
+	nodes: Node[],
+	sourceId?: string | null,
+	handle?: string | null,
+) {
+	if (!handle) return undefined;
+	if (handle === "true" || handle === "false") return handle;
+	if (!handle.startsWith("option:") || !sourceId) return undefined;
+
+	const sourceNode = nodes.find((node) => node.id === sourceId);
+	const sourceData = sourceNode?.data as FlowNodeData | undefined;
+	if (!sourceData || !isInteractiveBranchNode(sourceData)) return undefined;
+	const option = getInteractiveOptionHandles(sourceData).find(
+		(item) => item.id === handle,
+	);
+	return option ? `${option.index}. ${option.label}` : undefined;
+}
+
+function reconcileInteractiveEdges(
+	edges: Edge[],
+	nodeId: string,
+	data: FlowNodeData,
+) {
+	if (!isInteractiveBranchNode(data)) return edges;
+	const validOptions = new Map(
+		getInteractiveOptionHandles(data).map((option) => [option.id, option]),
+	);
+
+	return edges.flatMap((edge) => {
+		if (edge.source !== nodeId || !edge.sourceHandle?.startsWith("option:")) {
+			return [edge];
+		}
+		const option = validOptions.get(edge.sourceHandle);
+		return option
+			? [{ ...edge, label: `${option.index}. ${option.label}` }]
+			: [];
+	});
+}
+
 function FlowEditor() {
 	const { flowId } = Route.useParams();
 	const trpc = useTRPC();
@@ -183,6 +226,8 @@ function FlowEditor() {
 	const initialized = useRef(false);
 	const [reactFlowInstance, setReactFlowInstance] =
 		useState<ReactFlowInstance | null>(null);
+	const [renameOpen, setRenameOpen] = useState(false);
+	const [renameValue, setRenameValue] = useState(flow.name);
 
 	const pushHistory = useEditorStore((s) => s.pushHistory);
 	const undo = useEditorStore((s) => s.undo);
@@ -202,6 +247,10 @@ function FlowEditor() {
 	}, [reset]);
 
 	useEffect(() => {
+		setRenameValue(flow.name);
+	}, [flow.name]);
+
+	useEffect(() => {
 		if (initialized.current) return;
 		if (nodes.length > 0 || edges.length > 0) {
 			pushHistory(nodes, edges);
@@ -212,15 +261,12 @@ function FlowEditor() {
 	const onConnect = useCallback(
 		(connection: Connection) => {
 			setEdges((eds) => {
-				const branchLabel =
-					connection.sourceHandle === "true" ||
-					connection.sourceHandle === "false"
-						? connection.sourceHandle
-						: undefined;
-				const next = addEdge(
-					{ ...connection, label: branchLabel, type: "smoothstep" },
-					eds,
+				const label = getSourceHandleLabel(
+					nodes,
+					connection.source,
+					connection.sourceHandle,
 				);
+				const next = addEdge({ ...connection, label, type: "smoothstep" }, eds);
 				pushHistory(nodes, next);
 				return next;
 			});
@@ -240,14 +286,29 @@ function FlowEditor() {
 	const updateNodeData = useCallback(
 		(id: string, data: Partial<FlowNodeData>) => {
 			setNodes((nds) => {
-				const next = nds.map((n) =>
-					n.id === id ? { ...n, data: { ...n.data, ...data } } : n,
-				);
-				pushHistory(next, edges);
-				return next;
+				let updatedData: FlowNodeData | null = null;
+				const nextNodes = nds.map((node) => {
+					if (node.id !== id) return node;
+					const nextData = {
+						...(node.data as unknown as FlowNodeData),
+						...data,
+					} as FlowNodeData;
+					updatedData = nextData;
+					return {
+						...node,
+						data: nextData as unknown as Record<string, unknown>,
+					};
+				});
+
+				const nextEdges = updatedData
+					? reconcileInteractiveEdges(edges, id, updatedData)
+					: edges;
+				if (nextEdges !== edges) setEdges(nextEdges);
+				pushHistory(nextNodes, nextEdges);
+				return nextNodes;
 			});
 		},
-		[setNodes, pushHistory, edges],
+		[setNodes, setEdges, pushHistory, edges],
 	);
 
 	const deleteNode = useCallback(
@@ -279,6 +340,22 @@ function FlowEditor() {
 			onError: () => toast.error("Failed to save"),
 		}),
 	);
+	const renameMut = useMutation(
+		trpc.flow.update.mutationOptions({
+			onSuccess: () => {
+				setRenameOpen(false);
+				toast.success("Flow renamed");
+				refetch();
+			},
+			onError: () => toast.error("Failed to rename flow"),
+		}),
+	);
+
+	const handleRename = () => {
+		const name = renameValue.trim();
+		if (!name || name === flow.name) return;
+		renameMut.mutate({ id: flowId, name });
+	};
 
 	const handleSave = () => {
 		const triggerPayload = getTriggerPayload(nodes);
@@ -397,14 +474,66 @@ function FlowEditor() {
 						<ArrowLeft className="size-3.5" />
 						Back
 					</Link>
-					<h1 className="font-semibold text-sm">
-						{flow.name}
-						{isDirty && (
-							<span className="ml-1 text-[10px] text-muted-foreground">
-								(unsaved)
-							</span>
-						)}
-					</h1>
+					<Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+						<div className="flex items-center gap-1">
+							<h1 className="font-semibold text-sm">
+								{flow.name}
+								{isDirty && (
+									<span className="ml-1 text-[10px] text-muted-foreground">
+										(unsaved)
+									</span>
+								)}
+							</h1>
+							<DialogTrigger
+								render={
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-xs"
+										title="Rename flow"
+									/>
+								}
+							>
+								<Pencil className="size-3" />
+							</DialogTrigger>
+						</div>
+						<DialogContent className="sm:max-w-sm">
+							<DialogHeader>
+								<DialogTitle>Rename flow</DialogTitle>
+								<DialogDescription>
+									Update the display name for this flow.
+								</DialogDescription>
+							</DialogHeader>
+							<Input
+								value={renameValue}
+								onChange={(event) => setRenameValue(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key === "Enter") handleRename();
+								}}
+								placeholder="Flow name"
+							/>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setRenameOpen(false)}
+								>
+									Cancel
+								</Button>
+								<Button
+									type="button"
+									onClick={handleRename}
+									disabled={
+										renameMut.isPending ||
+										!renameValue.trim() ||
+										renameValue.trim() === flow.name
+									}
+								>
+									{renameMut.isPending ? "Saving..." : "Rename"}
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
 					<Badge
 						variant={
 							flow.status === "active"

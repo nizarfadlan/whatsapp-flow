@@ -33,8 +33,8 @@ export async function assertSafeOutboundWebhookUrl(value: string) {
 		throw new Error("Webhook URL is invalid");
 	}
 
-	if (url.protocol !== "https:") {
-		throw new Error("Webhook URL must use HTTPS");
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error("Webhook URL must use HTTP or HTTPS");
 	}
 	if (url.username || url.password) {
 		throw new Error("Webhook URL cannot include credentials");

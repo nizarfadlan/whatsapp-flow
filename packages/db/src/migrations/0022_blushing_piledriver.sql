@@ -1,0 +1,1 @@
+ALTER TABLE "device_sync_run" ADD COLUMN "claim_attempt" integer;

@@ -1,12 +1,13 @@
 import { db as defaultDb } from "@whatsapp-flow/db";
 import { jobQueue } from "@whatsapp-flow/db/schema/job";
 import { env } from "@whatsapp-flow/env/server";
-import { eq, lte, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { logger } from "../observability/logger";
 import { incrementCounter, observeHistogram } from "../observability/metrics";
 import type { JobKind, JobPayloadByKind } from "./job-types";
 
 type QueueDatabase = typeof defaultDb;
+type EnqueueDatabase = Pick<QueueDatabase, "insert" | "select">;
 export type JobRecord = typeof jobQueue.$inferSelect;
 
 type EnqueueJobInput<K extends JobKind> = {
@@ -44,7 +45,7 @@ type StartJobWorkerOptions = {
 
 export async function enqueueJob<K extends JobKind>(
 	input: EnqueueJobInput<K>,
-	database: QueueDatabase = defaultDb,
+	database: EnqueueDatabase = defaultDb,
 ) {
 	const id = crypto.randomUUID();
 	const [inserted] = await database
@@ -94,6 +95,7 @@ export async function claimJobs(input: ClaimJobsInput) {
 			select id
 			from ${jobQueue}
 			where status in ('pending', 'failed')
+				and attempts < max_attempts
 				and run_at <= now()
 			order by priority desc, run_at asc, created_at asc
 			limit ${limit}
@@ -129,11 +131,33 @@ export async function claimJobs(input: ClaimJobsInput) {
 	return rowsFromResult<JobRecord>(result);
 }
 
+type JobCompletionResult = "completed" | "lost";
+type JobFailureResult = "failed" | "dead" | "lost";
+
+export async function renewJobLease(
+	jobId: string,
+	workerId: string,
+	leaseSeconds: number,
+	database: QueueDatabase = defaultDb,
+): Promise<boolean> {
+	const now = new Date();
+	const result = await database
+		.update(jobQueue)
+		.set({
+			leaseUntil: new Date(now.getTime() + leaseSeconds * 1_000),
+			updatedAt: now,
+		})
+		.where(runningJobOwnedBy(jobId, workerId))
+		.returning({ id: jobQueue.id });
+	return result.length > 0;
+}
+
 export async function completeJob(
 	jobId: string,
+	workerId: string,
 	database: QueueDatabase = defaultDb,
-) {
-	await database
+): Promise<JobCompletionResult> {
+	const result = await database
 		.update(jobQueue)
 		.set({
 			status: "succeeded",
@@ -144,25 +168,28 @@ export async function completeJob(
 			completedAt: new Date(),
 			updatedAt: new Date(),
 		})
-		.where(eq(jobQueue.id, jobId));
+		.where(runningJobOwnedBy(jobId, workerId))
+		.returning({ id: jobQueue.id });
+	return result.length > 0 ? "completed" : "lost";
 }
 
 export async function failJob(
 	jobId: string,
+	workerId: string,
 	error: unknown,
 	database: QueueDatabase = defaultDb,
-) {
+): Promise<JobFailureResult> {
 	const [job] = await database
 		.select()
 		.from(jobQueue)
-		.where(eq(jobQueue.id, jobId))
+		.where(runningJobOwnedBy(jobId, workerId))
 		.limit(1);
-	if (!job) return "failed";
+	if (!job) return "lost";
 
 	const retry = job.attempts < job.maxAttempts;
 	const status = retry ? "failed" : "dead";
 	const now = new Date();
-	await database
+	const result = await database
 		.update(jobQueue)
 		.set({
 			status,
@@ -174,8 +201,9 @@ export async function failJob(
 			completedAt: retry ? null : now,
 			updatedAt: now,
 		})
-		.where(eq(jobQueue.id, jobId));
-	return status;
+		.where(runningJobOwnedBy(jobId, workerId))
+		.returning({ id: jobQueue.id });
+	return result.length > 0 ? status : "lost";
 }
 
 export async function releaseExpiredLeases(
@@ -184,14 +212,17 @@ export async function releaseExpiredLeases(
 	const result = await database
 		.update(jobQueue)
 		.set({
-			status: "failed",
+			status: sql`case when ${jobQueue.attempts} >= ${jobQueue.maxAttempts} then 'dead'::job_status else 'failed'::job_status end`,
 			lockedBy: null,
 			lockedAt: null,
 			leaseUntil: null,
 			lastError: "Job lease expired before completion",
+			completedAt: sql`case when ${jobQueue.attempts} >= ${jobQueue.maxAttempts} then now() else null end`,
 			updatedAt: new Date(),
 		})
-		.where(lte(jobQueue.leaseUntil, new Date()))
+		.where(
+			and(eq(jobQueue.status, "running"), lte(jobQueue.leaseUntil, new Date())),
+		)
 		.returning({ id: jobQueue.id });
 	return result.map((row) => row.id);
 }
@@ -226,7 +257,13 @@ export function startJobWorker(options: StartJobWorkerOptions) {
 				db: database,
 			});
 			await Promise.all(
-				jobs.map((job) => runJob(job, options.handlers, database)),
+				jobs.map((job) =>
+					runJob(job, options.handlers, {
+						workerId,
+						leaseSeconds,
+						db: database,
+					}),
+				),
 			);
 		} finally {
 			schedule();
@@ -244,15 +281,27 @@ export function startJobWorker(options: StartJobWorkerOptions) {
 	};
 }
 
-async function runJob(
+type RunJobOptions = {
+	workerId: string;
+	leaseSeconds: number;
+	db: QueueDatabase;
+};
+
+export async function runJob(
 	job: JobRecord,
 	handlers: JobHandlers,
-	database: QueueDatabase,
+	options: RunJobOptions,
 ) {
 	const handler = handlers[job.kind as JobKind] as
 		| JobHandler<JobKind>
 		| undefined;
 	const startedAt = performance.now();
+	const stopHeartbeat = startLeaseHeartbeat({
+		jobId: job.id,
+		workerId: options.workerId,
+		leaseSeconds: options.leaseSeconds,
+		db: options.db,
+	});
 	try {
 		if (!handler) throw new Error(`No job handler registered for ${job.kind}`);
 		logger.info("job.claimed", {
@@ -261,7 +310,15 @@ async function runJob(
 			attempts: job.attempts,
 		});
 		await handler(job as JobRecord & { kind: JobKind; payload: never });
-		await completeJob(job.id, database);
+		const result = await completeJob(job.id, options.workerId, options.db);
+		if (result === "lost") {
+			logger.warn("job.completion_lost_ownership", {
+				jobId: job.id,
+				jobKind: job.kind,
+				durationMs: performance.now() - startedAt,
+			});
+			return;
+		}
 		incrementCounter("whatsapp_flow_jobs_completed_total", { kind: job.kind });
 		logger.info("job.completed", {
 			jobId: job.id,
@@ -269,7 +326,16 @@ async function runJob(
 			durationMs: performance.now() - startedAt,
 		});
 	} catch (error) {
-		const status = await failJob(job.id, error, database);
+		const status = await failJob(job.id, options.workerId, error, options.db);
+		if (status === "lost") {
+			logger.warn("job.failure_lost_ownership", {
+				jobId: job.id,
+				jobKind: job.kind,
+				durationMs: performance.now() - startedAt,
+				error,
+			});
+			return;
+		}
 		incrementCounter(
 			status === "dead"
 				? "whatsapp_flow_jobs_dead_total"
@@ -286,6 +352,7 @@ async function runJob(
 			},
 		);
 	} finally {
+		stopHeartbeat();
 		observeHistogram(
 			"whatsapp_flow_job_duration_ms",
 			{
@@ -294,6 +361,53 @@ async function runJob(
 			performance.now() - startedAt,
 		);
 	}
+}
+
+function runningJobOwnedBy(jobId: string, workerId: string) {
+	return and(
+		eq(jobQueue.id, jobId),
+		eq(jobQueue.status, "running"),
+		eq(jobQueue.lockedBy, workerId),
+	);
+}
+
+function heartbeatIntervalMs(leaseSeconds: number) {
+	return Math.max(100, Math.floor((leaseSeconds * 1_000) / 3));
+}
+
+type LeaseHeartbeatInput = {
+	jobId: string;
+	workerId: string;
+	leaseSeconds: number;
+	db: QueueDatabase;
+};
+
+function startLeaseHeartbeat(input: LeaseHeartbeatInput) {
+	const timer = setInterval(() => {
+		void renewJobLease(
+			input.jobId,
+			input.workerId,
+			input.leaseSeconds,
+			input.db,
+		)
+			.then((renewed) => {
+				if (!renewed) {
+					logger.warn("job.heartbeat_lost_ownership", {
+						jobId: input.jobId,
+						workerId: input.workerId,
+					});
+				}
+			})
+			.catch((error) => {
+				logger.warn("job.heartbeat_failed", {
+					jobId: input.jobId,
+					workerId: input.workerId,
+					error,
+				});
+			});
+	}, heartbeatIntervalMs(input.leaseSeconds));
+
+	return () => clearInterval(timer);
 }
 
 function nextRetryAt(attempts: number, now: Date) {

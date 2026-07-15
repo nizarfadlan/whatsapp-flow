@@ -1,6 +1,7 @@
 import { relations, sql } from "drizzle-orm";
 import {
 	index,
+	integer,
 	jsonb,
 	pgEnum,
 	pgTable,
@@ -185,7 +186,8 @@ export const flowExecutionLog = pgTable(
 		deviceId: text("device_id")
 			.notNull()
 			.references(() => device.id, { onDelete: "cascade" }),
-		contactNumber: text("contact_number").notNull(),
+		contactNumber: text("contact_number"),
+		contactKey: text("contact_key").notNull(),
 		triggerSource: text("trigger_source").default("message").notNull(),
 		status: executionStatusEnum("status").default("running").notNull(),
 		error: text("error"),
@@ -196,6 +198,10 @@ export const flowExecutionLog = pgTable(
 	(table) => [
 		index("flow_execution_log_flowId_idx").on(table.flowId),
 		index("flow_execution_log_deviceId_idx").on(table.deviceId),
+		index("flow_execution_log_device_contact_key_idx").on(
+			table.deviceId,
+			table.contactKey,
+		),
 		index("flow_execution_log_source_status_idx").on(
 			table.triggerSource,
 			table.status,
@@ -221,7 +227,8 @@ export const flowSession = pgTable(
 		deviceId: text("device_id")
 			.notNull()
 			.references(() => device.id, { onDelete: "cascade" }),
-		contactNumber: text("contact_number").notNull(),
+		contactNumber: text("contact_number"),
+		contactKey: text("contact_key").notNull(),
 		executionLogId: text("execution_log_id")
 			.notNull()
 			.references(() => flowExecutionLog.id, { onDelete: "cascade" }),
@@ -231,6 +238,11 @@ export const flowSession = pgTable(
 		variables: jsonb("variables").default("{}").notNull(),
 		nodeResults: jsonb("node_results").default("[]").notNull(),
 		expiresAt: timestamp("expires_at"),
+		claimJobId: text("claim_job_id"),
+		claimedAt: timestamp("claimed_at"),
+		recoveryCount: integer("recovery_count").default(0).notNull(),
+		lastRecoveryAt: timestamp("last_recovery_at"),
+		failureCode: text("failure_code"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")
 			.defaultNow()
@@ -239,9 +251,14 @@ export const flowSession = pgTable(
 		completedAt: timestamp("completed_at"),
 	},
 	(table) => [
-		uniqueIndex("flow_session_active_contact_unique_idx")
-			.on(table.deviceId, table.contactNumber)
+		uniqueIndex("flow_session_active_contact_key_unique_idx")
+			.on(table.deviceId, table.contactKey)
 			.where(sql`${table.status} in ('waiting', 'running')`),
+		index("flow_session_contact_key_status_idx").on(
+			table.deviceId,
+			table.contactKey,
+			table.status,
+		),
 		index("flow_session_contact_status_idx").on(
 			table.deviceId,
 			table.contactNumber,
@@ -250,6 +267,15 @@ export const flowSession = pgTable(
 		index("flow_session_flowId_idx").on(table.flowId),
 		index("flow_session_executionLogId_idx").on(table.executionLogId),
 		index("flow_session_expiresAt_idx").on(table.expiresAt),
+		index("flow_session_claim_job_idx").on(table.claimJobId),
+		index("flow_session_status_expiresAt_idx").on(
+			table.status,
+			table.expiresAt,
+		),
+		index("flow_session_status_claimedAt_idx").on(
+			table.status,
+			table.claimedAt,
+		),
 	],
 );
 
@@ -269,7 +295,8 @@ export const flowExecutionEvent = pgTable(
 		sessionId: text("session_id").references(() => flowSession.id, {
 			onDelete: "set null",
 		}),
-		contactNumber: text("contact_number").notNull(),
+		contactNumber: text("contact_number"),
+		contactKey: text("contact_key").notNull(),
 		type: text("type").notNull(),
 		nodeId: text("node_id"),
 		message: text("message"),
@@ -287,6 +314,11 @@ export const flowExecutionEvent = pgTable(
 		),
 		index("flow_execution_event_session_created_idx").on(
 			table.sessionId,
+			table.createdAt,
+		),
+		index("flow_execution_event_device_contact_key_created_idx").on(
+			table.deviceId,
+			table.contactKey,
 			table.createdAt,
 		),
 		index("flow_execution_event_device_contact_created_idx").on(

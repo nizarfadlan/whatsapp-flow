@@ -475,7 +475,42 @@ function stripWebhookSecretsForCopy(value: unknown) {
 	});
 }
 
-function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
+function isInteractiveNode(type: string | undefined) {
+	return (
+		type === "send-button" ||
+		type === "send-list" ||
+		type === "send-quick-reply"
+	);
+}
+
+function getInteractiveOptionHandles(node: FlowNode) {
+	if (!isInteractiveNode(node.type)) return [];
+	const data = node.data ?? {};
+	const options =
+		node.type === "send-list"
+			? (
+					(data.sections as
+						| { rows?: { id?: string; title?: string }[] }[]
+						| undefined) ?? []
+				).flatMap((section) =>
+					(section.rows ?? []).map((row) => ({
+						id: String(row.id ?? "").trim(),
+						text: String(row.title ?? "").trim(),
+					})),
+				)
+			: (
+					(data.buttons as { id?: string; text?: string }[] | undefined) ?? []
+				).map((button) => ({
+					id: String(button.id ?? "").trim(),
+					text: String(button.text ?? "").trim(),
+				}));
+
+	return options
+		.filter((option) => option.id && option.text)
+		.map((option) => `option:${option.id}`);
+}
+
+export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	if (nodes.length === 0) return "Flow has no nodes";
 
 	const triggers = nodes.filter((node) => node.type === "trigger");
@@ -536,6 +571,28 @@ function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 					return "Send Location node needs valid latitude and longitude";
 				}
 				break;
+			case "send-button":
+			case "send-quick-reply":
+			case "send-list": {
+				const optionHandles = new Set(getInteractiveOptionHandles(node));
+				if (optionHandles.size === 0) {
+					return `${node.type} node needs at least one option`;
+				}
+
+				const outgoing = edges.filter((edge) => edge.source === node.id);
+				for (const edge of outgoing) {
+					if (!edge.sourceHandle) {
+						return `${node.type} node branches must use option handles`;
+					}
+					if (!optionHandles.has(edge.sourceHandle)) {
+						return `${node.type} node has a stale option branch`;
+					}
+				}
+				if (outgoing.length === 0) {
+					return `${node.type} node needs at least one connected option branch`;
+				}
+				break;
+			}
 			case "condition":
 				if (!nonEmpty(data.field) || !nonEmpty(data.value)) {
 					return "Condition node needs field and value";

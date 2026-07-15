@@ -15,21 +15,27 @@ const { verifyMetaWebhookChallenge, verifyMetaWebhookSignature } = await import(
 describe("Meta webhook verification", () => {
 	test("returns the challenge for valid subscription verification", () => {
 		expect(
-			verifyMetaWebhookChallenge({
-				mode: "subscribe",
-				verifyToken: "verify-token",
-				challenge: "challenge-value",
-			}),
+			verifyMetaWebhookChallenge(
+				{
+					mode: "subscribe",
+					verifyToken: "verify-token",
+					challenge: "challenge-value",
+				},
+				"verify-token",
+			),
 		).toBe("challenge-value");
 	});
 
 	test("rejects invalid challenge tokens", () => {
 		expect(
-			verifyMetaWebhookChallenge({
-				mode: "subscribe",
-				verifyToken: "wrong",
-				challenge: "challenge-value",
-			}),
+			verifyMetaWebhookChallenge(
+				{
+					mode: "subscribe",
+					verifyToken: "wrong",
+					challenge: "challenge-value",
+				},
+				"verify-token",
+			),
 		).toBeNull();
 	});
 

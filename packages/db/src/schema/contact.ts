@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
@@ -25,6 +25,7 @@ export const contact = pgTable(
 			.notNull()
 			.references(() => device.id, { onDelete: "cascade" }),
 		jid: text("jid").notNull(),
+		identityKey: text("identity_key").notNull(),
 		phoneNumber: text("phone_number"),
 		name: text("name"),
 		pushName: text("push_name"),
@@ -42,6 +43,16 @@ export const contact = pgTable(
 			.notNull(),
 	},
 	(table) => [
+		uniqueIndex("contact_device_identity_key_unique_idx").on(
+			table.deviceId,
+			table.identityKey,
+		),
+		uniqueIndex("contact_device_phone_unique_idx")
+			.on(table.deviceId, table.phoneNumber)
+			.where(sql`${table.phoneNumber} is not null`),
+		uniqueIndex("contact_device_lid_unique_idx")
+			.on(table.deviceId, table.lid)
+			.where(sql`${table.lid} is not null`),
 		uniqueIndex("contact_device_jid_unique_idx").on(table.deviceId, table.jid),
 		index("contact_deviceId_idx").on(table.deviceId),
 		index("contact_device_phone_idx").on(table.deviceId, table.phoneNumber),

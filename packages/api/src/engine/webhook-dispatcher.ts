@@ -13,8 +13,10 @@ import {
 import {
 	type ConnectionManagerEvents,
 	connectionManager,
+	derivePrivateIdentityKey,
 } from "@whatsapp-flow/whatsapp";
-import { and, asc, eq, lte, or } from "drizzle-orm";
+import { and, asc, eq, lte, or, sql } from "drizzle-orm";
+import { logger } from "../observability/logger";
 import { enrichInboundMedia, type WebhookMedia } from "./inbound-media";
 import { enqueueJob } from "./job-queue";
 import { webhookDeliveryJobIdempotencyKey } from "./job-types";
@@ -26,11 +28,14 @@ import { fetchSafeOutboundWebhookUrl } from "./webhook-url-safety";
 
 const MAX_WEBHOOK_ATTEMPTS = 5;
 
+type WebhookPayload = Record<string, unknown>;
+type WebhookPayloadFactory = () => WebhookPayload | Promise<WebhookPayload>;
+
 type EnqueueWebhookInput = {
 	userId: string;
 	deviceId: string;
 	eventType: WebhookEventType;
-	payload: Record<string, unknown>;
+	payload: WebhookPayload | WebhookPayloadFactory;
 	flowId?: string | null;
 };
 
@@ -39,7 +44,10 @@ type ChatType = "private" | "group" | "channel" | "broadcast";
 type Identity = {
 	jid?: string;
 	number?: string;
+	phoneNumber?: string;
 	lid?: string;
+	username?: string;
+	identityKey?: string;
 	name?: string | null;
 	providerContactId?: string;
 	identifier?: string;
@@ -80,6 +88,7 @@ function endpointMatchesFlow(
 
 export async function buildMessageReceivedPayload(ev: DeviceMessageEvent) {
 	const chat = normalizeChat(ev);
+	const contact = await enrichIdentity(ev.deviceId, withIdentifier(ev.contact));
 	const sender = await enrichIdentity(ev.deviceId, normalizeSender(ev));
 	const group = chat.isGroup
 		? await normalizeGroup(ev, chat.jid, sender)
@@ -101,7 +110,7 @@ export async function buildMessageReceivedPayload(ev: DeviceMessageEvent) {
 		eventType: "message.received",
 		deviceId: ev.deviceId,
 		provider: ev.provider,
-		contact: ev.contact,
+		contact,
 		chat,
 		sender,
 		group,
@@ -147,7 +156,10 @@ function normalizeSender(ev: DeviceMessageEvent): Identity {
 	return withIdentifier({
 		jid: ev.contact.jid,
 		number: ev.contact.number,
+		phoneNumber: ev.contact.number,
 		lid: ev.contact.lid,
+		username: ev.contact.username,
+		identityKey: ev.contact.identityKey,
 		name: ev.contact.name,
 		providerContactId: ev.contact.providerContactId,
 	});
@@ -203,42 +215,79 @@ async function enrichIdentity(
 	deviceId: string,
 	identity: Identity,
 ): Promise<Identity> {
+	const number = identity.number ?? identity.phoneNumber;
+	const identityKey =
+		identity.identityKey ??
+		derivePrivateIdentityKey({ jid: identity.jid, number, lid: identity.lid });
 	const candidates = [
-		identity.jid ? eq(contactTable.jid, identity.jid) : undefined,
+		eq(contactTable.identityKey, identityKey),
+		number ? eq(contactTable.phoneNumber, number) : undefined,
 		identity.lid ? eq(contactTable.lid, identity.lid) : undefined,
-		identity.number ? eq(contactTable.phoneNumber, identity.number) : undefined,
 		identity.providerContactId
 			? eq(contactTable.providerContactId, identity.providerContactId)
 			: undefined,
+		identity.jid ? eq(contactTable.jid, identity.jid) : undefined,
 	].filter((condition): condition is NonNullable<typeof condition> =>
 		Boolean(condition),
 	);
 
-	if (candidates.length === 0) return withIdentifier(identity);
+	if (candidates.length > 0) {
+		const orderClauses = [
+			sql`when ${contactTable.identityKey} = ${identityKey} then 1`,
+			...(number
+				? [sql`when ${contactTable.phoneNumber} = ${number} then 2`]
+				: []),
+			...(identity.lid
+				? [sql`when ${contactTable.lid} = ${identity.lid} then 3`]
+				: []),
+			...(identity.providerContactId
+				? [
+						sql`when ${contactTable.providerContactId} = ${identity.providerContactId} then 4`,
+					]
+				: []),
+			...(identity.jid
+				? [sql`when ${contactTable.jid} = ${identity.jid} then 5`]
+				: []),
+		];
 
-	const [row] = await db
-		.select({
-			jid: contactTable.jid,
-			phoneNumber: contactTable.phoneNumber,
-			lid: contactTable.lid,
-			name: contactTable.name,
-			pushName: contactTable.pushName,
-			profileName: contactTable.profileName,
-			providerContactId: contactTable.providerContactId,
-		})
-		.from(contactTable)
-		.where(and(eq(contactTable.deviceId, deviceId), or(...candidates)))
-		.limit(1);
+		const [row] = await db
+			.select({
+				jid: contactTable.jid,
+				identityKey: contactTable.identityKey,
+				phoneNumber: contactTable.phoneNumber,
+				lid: contactTable.lid,
+				name: contactTable.name,
+				pushName: contactTable.pushName,
+				profileName: contactTable.profileName,
+				providerContactId: contactTable.providerContactId,
+			})
+			.from(contactTable)
+			.where(and(eq(contactTable.deviceId, deviceId), or(...candidates)))
+			.orderBy(sql`case ${sql.join(orderClauses, sql` `)} else 6 end`)
+			.limit(1);
 
-	if (!row) return withIdentifier({ ...identity, resolved: false });
+		if (row) {
+			return withIdentifier({
+				jid: identity.jid ?? row.jid,
+				number: number ?? row.phoneNumber ?? undefined,
+				phoneNumber: number ?? row.phoneNumber ?? undefined,
+				lid: identity.lid ?? row.lid ?? undefined,
+				username: identity.username,
+				identityKey: row.identityKey,
+				name: identity.name ?? row.name ?? row.pushName ?? row.profileName,
+				providerContactId:
+					identity.providerContactId ?? row.providerContactId ?? undefined,
+				resolved: true,
+			});
+		}
+	}
+
 	return withIdentifier({
-		jid: identity.jid ?? row.jid,
-		number: identity.number ?? row.phoneNumber ?? undefined,
-		lid: identity.lid ?? row.lid ?? undefined,
-		name: identity.name ?? row.name ?? row.pushName ?? row.profileName,
-		providerContactId:
-			identity.providerContactId ?? row.providerContactId ?? undefined,
-		resolved: true,
+		...identity,
+		number,
+		phoneNumber: number,
+		identityKey,
+		resolved: false,
 	});
 }
 
@@ -250,15 +299,22 @@ async function resolveMentions(deviceId: string, mentionedJids: string[]) {
 }
 
 function identityFromJid(jid: string): Identity {
-	if (jid.endsWith("@lid"))
-		return withIdentifier({ lid: jid, identifier: jid });
+	if (jid.endsWith("@lid")) {
+		return withIdentifier({
+			jid,
+			lid: jid,
+			identityKey: derivePrivateIdentityKey({ jid, lid: jid }),
+		});
+	}
+	const number =
+		jid.endsWith("@s.whatsapp.net") || !jid.includes("@")
+			? normalizeContactNumber(jid)
+			: undefined;
 	return withIdentifier({
 		jid,
-		number:
-			jid.endsWith("@s.whatsapp.net") || !jid.includes("@")
-				? normalizeContactNumber(jid)
-				: undefined,
-		identifier: jid,
+		number,
+		phoneNumber: number,
+		identityKey: derivePrivateIdentityKey({ jid, number }),
 	});
 }
 
@@ -267,11 +323,14 @@ function withIdentifier<T extends Identity>(
 ): T & { identifier: string } {
 	return {
 		...identity,
+		phoneNumber: identity.phoneNumber ?? identity.number,
 		identifier:
 			identity.identifier ??
-			identity.jid ??
-			identity.lid ??
+			identity.identityKey ??
 			identity.number ??
+			identity.phoneNumber ??
+			identity.lid ??
+			identity.jid ??
 			identity.providerContactId ??
 			"unknown",
 	};
@@ -309,6 +368,30 @@ function normalizeContactNumber(jid: string) {
 	return jid.split("@")[0]?.split(":")[0] ?? jid;
 }
 
+export async function buildWebhookDeliveryRows(
+	input: EnqueueWebhookInput,
+	endpoints: (typeof webhookEndpoint.$inferSelect)[],
+	idBase = crypto.randomUUID(),
+) {
+	const matchedEndpoints = endpoints.filter(
+		(endpoint) =>
+			endpointMatchesEvent(endpoint, input.eventType) &&
+			endpointMatchesDevice(endpoint, input.deviceId) &&
+			endpointMatchesFlow(endpoint, input.eventType, input.flowId),
+	);
+	if (matchedEndpoints.length === 0) return [];
+
+	const payload =
+		typeof input.payload === "function" ? await input.payload() : input.payload;
+	return matchedEndpoints.map((endpoint, index) => ({
+		id: `${idBase}-${index}`,
+		endpointId: endpoint.id,
+		eventType: input.eventType,
+		payload,
+		status: "pending" as const,
+	}));
+}
+
 export async function enqueueWebhook(input: EnqueueWebhookInput) {
 	try {
 		const endpoints = await db
@@ -323,21 +406,7 @@ export async function enqueueWebhook(input: EnqueueWebhookInput) {
 
 		if (endpoints.length === 0) return;
 
-		const deliveriesIdBase = crypto.randomUUID();
-		const deliveriesToInsert = endpoints
-			.filter(
-				(endpoint) =>
-					endpointMatchesEvent(endpoint, input.eventType) &&
-					endpointMatchesDevice(endpoint, input.deviceId) &&
-					endpointMatchesFlow(endpoint, input.eventType, input.flowId),
-			)
-			.map((endpoint, idx) => ({
-				id: `${deliveriesIdBase}-${idx}`,
-				endpointId: endpoint.id,
-				eventType: input.eventType,
-				payload: input.payload,
-				status: "pending" as const,
-			}));
+		const deliveriesToInsert = await buildWebhookDeliveryRows(input, endpoints);
 
 		if (deliveriesToInsert.length > 0) {
 			const deliveries = await db
@@ -350,7 +419,13 @@ export async function enqueueWebhook(input: EnqueueWebhookInput) {
 			);
 		}
 	} catch (error) {
-		console.error("[Webhook] Failed to enqueue webhook event:", error);
+		logger.error("webhook.enqueue.failed", {
+			error,
+			operation: "enqueue_webhook",
+			eventType: input.eventType,
+			deviceId: input.deviceId,
+			flowId: input.flowId,
+		});
 	}
 }
 
@@ -399,7 +474,10 @@ export function startWebhookDispatcher() {
 		try {
 			await enqueuePendingWebhookDeliveryJobs();
 		} catch (error) {
-			console.error("[Webhook worker] Polling error:", error);
+			logger.error("webhook.dispatcher.poll_failed", {
+				error,
+				operation: "enqueue_pending_deliveries",
+			});
 		} finally {
 			setTimeout(tick, 10_000);
 		}
@@ -419,14 +497,16 @@ export function startWebhookDispatcher() {
 					userId: d[0].userId,
 					deviceId: ev.deviceId,
 					eventType: "message.received",
-					payload: await buildMessageReceivedPayload(ev),
+					payload: () => buildMessageReceivedPayload(ev),
 				});
 			}
 		} catch (error) {
-			console.error(
-				"[Webhook] Failed to enqueue message.received event",
+			logger.error("webhook.listener.failed", {
 				error,
-			);
+				operation: "message_received_listener",
+				eventType: "message.received",
+				deviceId: ev.deviceId,
+			});
 		}
 	});
 
@@ -450,7 +530,14 @@ export function startWebhookDispatcher() {
 					},
 				});
 			}
-		} catch (_err) {}
+		} catch (error) {
+			logger.error("webhook.listener.failed", {
+				error,
+				operation: "device_status_listener",
+				eventType: "device.status_changed",
+				deviceId: ev.deviceId,
+			});
+		}
 	});
 
 	connectionManager.on("flow:execution-event", async (ev) => {
@@ -479,13 +566,21 @@ export function startWebhookDispatcher() {
 					executionLogId: ev.executionLogId,
 					sessionId: ev.sessionId,
 					contactNumber: ev.contactNumber,
+					contactKey: ev.contactKey,
 					nodeId: ev.nodeId,
 					message: ev.message,
 					data: ev.payload,
 					createdAt: ev.createdAt,
 				},
 			});
-		} catch (_err) {}
+		} catch (error) {
+			logger.error("webhook.listener.failed", {
+				error,
+				operation: "flow_execution_listener",
+				flowId: ev.flowId,
+				deviceId: ev.deviceId,
+			});
+		}
 	});
 }
 

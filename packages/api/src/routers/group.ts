@@ -1,7 +1,10 @@
+import { TRPCError } from "@trpc/server";
 import { chatGroup, groupParticipant } from "@whatsapp-flow/db/schema/contact";
 import { device } from "@whatsapp-flow/db/schema/device";
+import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, desc, eq, ilike, or } from "drizzle-orm";
 import { z } from "zod";
+import { startDeviceResourceSync } from "../engine/device-resource-sync";
 import { protectedProcedure, router } from "../index";
 
 export const groupRouter = router({
@@ -45,6 +48,45 @@ export const groupRouter = router({
 				.where(and(...conditions))
 				.orderBy(desc(chatGroup.updatedAt))
 				.limit(input.limit);
+		}),
+
+	syncOne: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const [owned] = await ctx.db
+				.select({
+					deviceId: chatGroup.deviceId,
+					jid: chatGroup.jid,
+					provider: device.provider,
+				})
+				.from(chatGroup)
+				.innerJoin(device, eq(chatGroup.deviceId, device.id))
+				.where(
+					and(
+						eq(chatGroup.id, input.id),
+						eq(device.userId, ctx.session.user.id),
+					),
+				)
+				.limit(1);
+			if (!owned) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
+			}
+			if (
+				owned.provider !== "baileys" ||
+				connectionManager.getConnection(owned.deviceId)?.status !== "connected"
+			) {
+				throw new TRPCError({
+					code: "PRECONDITION_FAILED",
+					message: "A connected Baileys device is required",
+				});
+			}
+			return startDeviceResourceSync({
+				deviceId: owned.deviceId,
+				requestedByUserId: ctx.session.user.id,
+				resource: "groups",
+				scopeKey: owned.jid,
+				db: ctx.db,
+			});
 		}),
 
 	participants: protectedProcedure

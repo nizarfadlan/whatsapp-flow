@@ -19,6 +19,7 @@ function buildLogSelect() {
 		deviceId: flowExecutionLog.deviceId,
 		deviceName: device.name,
 		contactNumber: flowExecutionLog.contactNumber,
+		contactKey: flowExecutionLog.contactKey,
 		triggerSource: flowExecutionLog.triggerSource,
 		status: flowExecutionLog.status,
 		error: flowExecutionLog.error,
@@ -61,14 +62,15 @@ export const flowLogRouter = router({
 					contact,
 					and(
 						eq(contact.deviceId, flowExecutionLog.deviceId),
-						eq(contact.phoneNumber, flowExecutionLog.contactNumber),
+						eq(contact.identityKey, flowExecutionLog.contactKey),
 					),
 				)
 				.leftJoin(
 					inboxThread,
 					and(
 						eq(inboxThread.deviceId, flowExecutionLog.deviceId),
-						eq(inboxThread.contactNumber, flowExecutionLog.contactNumber),
+						eq(inboxThread.contactId, contact.id),
+						eq(inboxThread.threadKey, flowExecutionLog.contactKey),
 					),
 				)
 				.leftJoin(
@@ -95,14 +97,15 @@ export const flowLogRouter = router({
 					contact,
 					and(
 						eq(contact.deviceId, flowExecutionLog.deviceId),
-						eq(contact.phoneNumber, flowExecutionLog.contactNumber),
+						eq(contact.identityKey, flowExecutionLog.contactKey),
 					),
 				)
 				.leftJoin(
 					inboxThread,
 					and(
 						eq(inboxThread.deviceId, flowExecutionLog.deviceId),
-						eq(inboxThread.contactNumber, flowExecutionLog.contactNumber),
+						eq(inboxThread.contactId, contact.id),
+						eq(inboxThread.threadKey, flowExecutionLog.contactKey),
 					),
 				)
 				.leftJoin(

@@ -150,11 +150,30 @@ export const flowSessionRouter = router({
 				});
 			}
 
+			const completedAt = new Date();
 			const [updated] = await ctx.db
 				.update(flowSession)
-				.set({ status: "expired", completedAt: new Date() })
-				.where(eq(flowSession.id, input.id))
+				.set({
+					status: "expired",
+					claimJobId: null,
+					claimedAt: null,
+					failureCode: "cancelled",
+					completedAt,
+				})
+				.where(
+					and(
+						eq(flowSession.id, input.id),
+						inArray(flowSession.status, [...activeStatuses]),
+					),
+				)
 				.returning();
+
+			if (!updated) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: "Session is no longer active",
+				});
+			}
 
 			if (updated) {
 				await ctx.db
@@ -162,7 +181,7 @@ export const flowSessionRouter = router({
 					.set({
 						status: "failed",
 						error: "Session cancelled",
-						completedAt: new Date(),
+						completedAt,
 					})
 					.where(eq(flowExecutionLog.id, updated.executionLogId));
 				await recordFlowExecutionEvent({
@@ -170,6 +189,7 @@ export const flowSessionRouter = router({
 					flowId: updated.flowId,
 					deviceId: updated.deviceId,
 					contactNumber: updated.contactNumber,
+					contactKey: updated.contactKey,
 					sessionId: updated.id,
 					type: "session.cancelled",
 					nodeId: updated.waitingNodeId,

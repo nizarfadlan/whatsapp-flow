@@ -982,7 +982,7 @@ function InteractiveButtonsConfig({
 			<div className="flex flex-col gap-1">
 				<div className="flex items-center justify-between">
 					<span className="text-[10px] text-muted-foreground">
-						Button ({(data.buttons ?? []).length}/3)
+						Buttons ({(data.buttons ?? []).length}/3)
 					</span>
 					{(data.buttons ?? []).length < 3 && (
 						<Button
@@ -1015,6 +1015,11 @@ function InteractiveButtonsConfig({
 					</div>
 				))}
 			</div>
+			<ReplyWaitSettings
+				data={data}
+				onUpdate={onUpdate}
+				description="Waits for the contact to choose one of these button options."
+			/>
 		</>
 	);
 }
@@ -1156,6 +1161,11 @@ function InteractiveListConfig({
 					</div>
 				))}
 			</div>
+			<ReplyWaitSettings
+				data={data}
+				onUpdate={onUpdate}
+				description="Waits for the contact to choose one of these list rows."
+			/>
 		</>
 	);
 }
@@ -1225,6 +1235,11 @@ function InteractiveQuickReplyConfig({
 					</div>
 				))}
 			</div>
+			<ReplyWaitSettings
+				data={data}
+				onUpdate={onUpdate}
+				description="Waits for the contact to choose one of these quick reply options."
+			/>
 		</>
 	);
 }
@@ -1353,12 +1368,17 @@ function createWarningId() {
 	return globalThis.crypto?.randomUUID?.() ?? `warning-${Date.now()}`;
 }
 
-function WaitForReplyConfig({
+function ReplyWaitSettings({
 	data,
 	onUpdate,
+	description,
 }: {
-	data: LogicNodeData;
+	data: {
+		timeoutMinutes?: number;
+		replyWarnings?: WaitForReplyWarning[];
+	};
 	onUpdate: (d: Partial<FlowNodeData>) => void;
+	description: string;
 }) {
 	const timeoutMinutes = data.timeoutMinutes ?? 1440;
 	const warnings = data.replyWarnings ?? [];
@@ -1371,14 +1391,6 @@ function WaitForReplyConfig({
 
 	return (
 		<>
-			<Field label="Variable Name">
-				<Input
-					className="h-7 text-xs"
-					placeholder="reply"
-					value={data.variableName ?? "reply"}
-					onChange={(e) => onUpdate({ variableName: e.target.value })}
-				/>
-			</Field>
 			<Field label="Timeout (minutes)">
 				<Input
 					className="h-7 text-xs"
@@ -1392,9 +1404,7 @@ function WaitForReplyConfig({
 						})
 					}
 				/>
-				<p className="text-[10px] text-muted-foreground">
-					Pauses only for the same WhatsApp contact on the same device.
-				</p>
+				<p className="text-[10px] text-muted-foreground">{description}</p>
 			</Field>
 			<Field label="Warnings before timeout">
 				<div className="flex flex-col gap-2">
@@ -1489,6 +1499,32 @@ function WaitForReplyConfig({
 					Warnings only send if the user has not replied yet.
 				</p>
 			</Field>
+		</>
+	);
+}
+
+function WaitForReplyConfig({
+	data,
+	onUpdate,
+}: {
+	data: LogicNodeData;
+	onUpdate: (d: Partial<FlowNodeData>) => void;
+}) {
+	return (
+		<>
+			<Field label="Variable Name">
+				<Input
+					className="h-7 text-xs"
+					placeholder="reply"
+					value={data.variableName ?? "reply"}
+					onChange={(e) => onUpdate({ variableName: e.target.value })}
+				/>
+			</Field>
+			<ReplyWaitSettings
+				data={data}
+				onUpdate={onUpdate}
+				description="Pauses only for the same WhatsApp contact on the same device."
+			/>
 		</>
 	);
 }

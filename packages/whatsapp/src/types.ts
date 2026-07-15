@@ -19,6 +19,14 @@ export interface ConnectionManagerEvents {
 		deviceId: string;
 		status: DeviceStatus;
 		phoneNumber?: string;
+		statusReason?: string;
+		lastError?: string;
+	};
+	"device:history-sync-status": {
+		deviceId: string;
+		syncType: import("baileys").proto.HistorySync.HistorySyncType;
+		status: "complete" | "paused";
+		explicit: boolean;
 	};
 	"device:qr": { deviceId: string; qr: string };
 	"device:message": {
@@ -28,6 +36,8 @@ export interface ConnectionManagerEvents {
 			jid: string;
 			number?: string;
 			lid?: string;
+			username?: string;
+			identityKey?: string;
 			name?: string;
 			providerContactId?: string;
 		};
@@ -40,6 +50,8 @@ export interface ConnectionManagerEvents {
 			jid?: string;
 			number?: string;
 			lid?: string;
+			username?: string;
+			identityKey?: string;
 			name?: string;
 			providerContactId?: string;
 		};
@@ -62,9 +74,11 @@ export interface ConnectionManagerEvents {
 			jid: string;
 			phoneNumber?: string;
 			lid?: string;
+			identityKey?: string;
 			name?: string;
 			pushName?: string;
 			isWaContact?: boolean;
+			avatarUrl?: string;
 			raw?: unknown;
 		}[];
 	};
@@ -83,6 +97,7 @@ export interface ConnectionManagerEvents {
 	};
 	"device:groups": {
 		deviceId: string;
+		reconcileParticipants?: boolean;
 		groups: {
 			jid: string;
 			subject: string;
@@ -107,7 +122,8 @@ export interface ConnectionManagerEvents {
 		flowId: string;
 		deviceId: string;
 		executionLogId: string;
-		contactNumber: string;
+		contactNumber: string | null;
+		contactKey: string;
 		status: "waiting" | "running" | "completed" | "expired" | "failed";
 	};
 	"flow:execution-event": {
@@ -116,7 +132,8 @@ export interface ConnectionManagerEvents {
 		flowId: string;
 		deviceId: string;
 		sessionId: string | null;
-		contactNumber: string;
+		contactNumber: string | null;
+		contactKey: string;
 		type: string;
 		nodeId: string | null;
 		message: string | null;
@@ -124,3 +141,10 @@ export interface ConnectionManagerEvents {
 		createdAt: string;
 	};
 }
+
+export type SyncedContact =
+	ConnectionManagerEvents["device:contacts"]["contacts"][number];
+export type SyncedGroup =
+	ConnectionManagerEvents["device:groups"]["groups"][number];
+export type SyncedNewsletter =
+	ConnectionManagerEvents["device:channels"]["channels"][number];

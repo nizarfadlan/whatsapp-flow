@@ -1,10 +1,22 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Badge } from "@whatsapp-flow/ui/components/badge";
+import { Button } from "@whatsapp-flow/ui/components/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@whatsapp-flow/ui/components/dropdown-menu";
 import { Input } from "@whatsapp-flow/ui/components/input";
-import { Search, UsersRound } from "lucide-react";
+import { MoreHorizontal, RefreshCw, Search, UsersRound } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table";
+import {
+	ResourceSyncControls,
+	useResourceSyncCompletion,
+} from "@/components/resource-sync-controls";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/groups")({
@@ -13,10 +25,23 @@ export const Route = createFileRoute("/dashboard/groups")({
 
 function GroupsPage() {
 	const trpc = useTRPC();
+	const trackSyncCompletion = useResourceSyncCompletion("groups");
 	const [search, setSearch] = useState("");
-
 	const { data: groups = [] } = useSuspenseQuery(
 		trpc.group.list.queryOptions({ search: search || undefined, limit: 100 }),
+	);
+	const { data: devices = [] } = useSuspenseQuery(
+		trpc.device.list.queryOptions(),
+	);
+	const devicesById = new Map(devices.map((device) => [device.id, device]));
+	const syncOneMut = useMutation(
+		trpc.group.syncOne.mutationOptions({
+			onSuccess: (result) => {
+				trackSyncCompletion(result);
+				toast.success("Group sync queued");
+			},
+			onError: (error) => toast.error(error.message),
+		}),
 	);
 
 	const columns = [
@@ -71,17 +96,47 @@ function GroupsPage() {
 				</Badge>
 			),
 		},
+		{
+			key: "actions",
+			header: "",
+			cell: (row: (typeof groups)[0]) => {
+				const device = devicesById.get(row.deviceId);
+				const canSync =
+					device?.provider !== "meta_cloud" && device?.status === "connected";
+				return (
+					<DropdownMenu>
+						<DropdownMenuTrigger
+							render={
+								<Button variant="ghost" size="icon-xs" className="size-6" />
+							}
+						>
+							<MoreHorizontal className="size-3.5" />
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem
+								disabled={!canSync || syncOneMut.isPending}
+								onClick={() => syncOneMut.mutate({ id: row.id })}
+							>
+								<RefreshCw className="size-3.5" />
+								Refresh from WhatsApp
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				);
+			},
+		},
 	];
 
 	return (
 		<div className="flex flex-col gap-4 p-4">
-			<div className="flex items-center justify-between">
+			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div>
 					<h1 className="font-semibold text-base">Groups</h1>
 					<p className="text-muted-foreground text-xs">
 						{groups.length} groups · synced from your WhatsApp devices
 					</p>
 				</div>
+				<ResourceSyncControls devices={devices} resource="groups" />
 			</div>
 
 			<div className="relative max-w-xs">
