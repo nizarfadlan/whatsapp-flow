@@ -169,6 +169,8 @@ Minimum server configuration:
 BETTER_AUTH_SECRET=replace-with-a-random-secret
 BETTER_AUTH_URL=http://localhost:3000
 CORS_ORIGIN=http://localhost:3001
+# Set false only for trusted plain-HTTP deployments on one host/IP; omit or set true for HTTPS.
+BETTER_AUTH_USE_SECURE_COOKIES=false
 DATABASE_URL=postgresql://user:password@localhost:5432/whatsapp_flow
 ADMIN_EMAILS=admin@example.com
 SETTINGS_ENCRYPTION_KEY=replace-with-base64-32-byte-key

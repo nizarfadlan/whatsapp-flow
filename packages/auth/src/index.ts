@@ -12,6 +12,8 @@ import {
 export async function createAuth() {
 	const db = createDb();
 	const genericOAuthConfigs = await loadGenericOAuthProviderConfigs();
+	const useSecureCookies =
+		env.BETTER_AUTH_USE_SECURE_COOKIES ?? env.NODE_ENV === "production";
 
 	return betterAuth({
 		database: drizzleAdapter(db, {
@@ -37,9 +39,10 @@ export async function createAuth() {
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
 		advanced: {
+			useSecureCookies,
 			defaultCookieAttributes: {
-				sameSite: env.NODE_ENV === "production" ? "none" : "lax",
-				secure: env.NODE_ENV === "production",
+				sameSite: useSecureCookies ? "none" : "lax",
+				secure: useSecureCookies,
 				httpOnly: true,
 			},
 		},

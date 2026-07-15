@@ -8,6 +8,13 @@ export const env = createEnv({
 		BETTER_AUTH_SECRET: z.string().min(32),
 		BETTER_AUTH_URL: z.url(),
 		CORS_ORIGIN: z.url(),
+		BETTER_AUTH_USE_SECURE_COOKIES: z.preprocess((value) => {
+			if (value === undefined || value === null || value === "") {
+				return undefined;
+			}
+			if (value === "false" || value === false) return false;
+			return true;
+		}, z.boolean().optional()),
 		SETTINGS_ENCRYPTION_KEY: z.string().optional(),
 		ADMIN_EMAILS: z.string().optional(),
 		PUBLIC_BASE_URL: z.url().optional(),
