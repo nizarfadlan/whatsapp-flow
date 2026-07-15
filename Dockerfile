@@ -29,7 +29,7 @@ COPY packages/env/package.json ./packages/env/package.json
 COPY packages/storage/package.json ./packages/storage/package.json
 COPY packages/ui/package.json ./packages/ui/package.json
 COPY packages/whatsapp/package.json ./packages/whatsapp/package.json
-RUN bun install --frozen-lockfile --production
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 FROM deps AS builder
 ARG VITE_SERVER_URL=http://localhost:3000
