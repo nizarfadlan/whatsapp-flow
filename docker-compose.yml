@@ -38,17 +38,17 @@ services:
       - .env.docker
     environment:
       NODE_ENV: production
-      PORT: 3000
+      PORT: ${SERVER_PORT:-3000}
       LOCAL_UPLOAD_DIR: /app/uploads
     ports:
-      - "3000:3000"
+      - "${SERVER_PORT:-3000}:${SERVER_PORT:-3000}"
     volumes:
       - uploads_data:/app/uploads
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "bun -e \"fetch('http://127.0.0.1:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+          "bun -e \"fetch('http://127.0.0.1:${SERVER_PORT:-3000}/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
         ]
       interval: 10s
       timeout: 5s
@@ -65,9 +65,9 @@ services:
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
-      PORT: 3001
+      PORT: ${WEB_PORT:-3001}
     ports:
-      - "3001:3001"
+      - "${WEB_PORT:-3001}:${WEB_PORT:-3001}"
     depends_on:
       server:
         condition: service_healthy
@@ -75,7 +75,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "node -e \"fetch('http://127.0.0.1:3001/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+          "node -e \"fetch('http://127.0.0.1:${WEB_PORT:-3001}/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
         ]
       interval: 10s
       timeout: 5s
