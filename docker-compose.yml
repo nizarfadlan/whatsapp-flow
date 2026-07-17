@@ -40,6 +40,8 @@ services:
       NODE_ENV: production
       PORT: ${SERVER_PORT:-3000}
       LOCAL_UPLOAD_DIR: /app/uploads
+    extra_hosts:
+      - "keycloak.qti.co.id:10.10.10.155"
     ports:
       - "${SERVER_PORT:-3000}:${SERVER_PORT:-3000}"
     volumes:
@@ -66,6 +68,8 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: ${WEB_PORT:-3001}
+    extra_hosts:
+      - "keycloak.qti.co.id:10.10.10.155"
     ports:
       - "${WEB_PORT:-3001}:${WEB_PORT:-3001}"
     depends_on:
