@@ -190,7 +190,7 @@ export async function enrichInboundMedia(input: {
 }
 
 function inboxMediaUrl(inboxMessageId: string) {
-	return `${(env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL).replace(/\/$/, "")}/api/inbox/media/${encodeURIComponent(inboxMessageId)}`;
+	return `${(env.PUBLIC_BASE_URL ?? env.AUTH_URL).replace(/\/$/, "")}/api/inbox/media/${encodeURIComponent(inboxMessageId)}`;
 }
 
 function failedResult(

@@ -21,7 +21,7 @@ mock.module("@whatsapp-flow/env/server", () => ({
 		INBOUND_MEDIA_MAX_BYTES: 10,
 		INBOUND_MEDIA_DOWNLOAD_TIMEOUT_MS: 20,
 		INBOUND_MEDIA_DOWNLOAD_CONCURRENCY: 1,
-		BETTER_AUTH_URL: "https://app.example.com",
+		AUTH_URL: "https://app.example.com",
 		META_GRAPH_API_VERSION: "v23.0",
 	},
 }));

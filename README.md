@@ -166,11 +166,11 @@ Minimum server configuration:
 
 ```bash
 # apps/server/.env
-BETTER_AUTH_SECRET=replace-with-a-random-secret
-BETTER_AUTH_URL=http://localhost:3000
+AUTH_SECRET=replace-with-a-random-secret
+AUTH_URL=http://localhost:3000
 CORS_ORIGIN=http://localhost:3001
 # Set false only for trusted plain-HTTP deployments on one host/IP; omit or set true for HTTPS.
-BETTER_AUTH_USE_SECURE_COOKIES=false
+AUTH_USE_SECURE_COOKIES=false
 DATABASE_URL=postgresql://user:password@localhost:5432/whatsapp_flow
 ADMIN_EMAILS=admin@example.com
 SETTINGS_ENCRYPTION_KEY=replace-with-base64-32-byte-key
@@ -577,9 +577,9 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
 ## Production Checklist
 
 - Set `NODE_ENV=production`.
-- Set `BETTER_AUTH_URL` and `PUBLIC_BASE_URL` to the deployed API origin.
+- Set `AUTH_URL` and `PUBLIC_BASE_URL` to the deployed API origin.
 - Set `CORS_ORIGIN` to the deployed dashboard origin.
-- Use a strong `BETTER_AUTH_SECRET`.
+- Use a strong `AUTH_SECRET`.
 - Set `SETTINGS_ENCRYPTION_KEY` to a base64 value that decodes to 32 bytes.
 - Set `METRICS_TOKEN` before exposing `GET /metrics`.
 - Configure SMTP if invite emails should be sent automatically.

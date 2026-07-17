@@ -12,8 +12,8 @@ mock.module("@whatsapp-flow/env/server", () => ({
 	env: {
 		LOCAL_UPLOAD_DIR: undefined,
 		PUBLIC_BASE_URL: "https://app.example.com",
-		BETTER_AUTH_URL: "https://app.example.com",
-		BETTER_AUTH_SECRET: "a test secret that is safely long enough",
+		AUTH_URL: "https://app.example.com",
+		AUTH_SECRET: "a test secret that is safely long enough",
 	},
 }));
 

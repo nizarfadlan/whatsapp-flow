@@ -35,6 +35,9 @@ function RouteComponent() {
 			? null
 			: new URLSearchParams(window.location.search).get("invite");
 	const [showSignIn, setShowSignIn] = useState(!inviteToken);
+	const globalSignupEnabled = publicSettings?.auth.globalSignupEnabled ?? true;
+	const registrationAvailable = globalSignupEnabled || Boolean(inviteToken);
+	const showSignUp = !showSignIn && registrationAvailable;
 	const branding = publicSettings?.branding;
 	const appName = branding?.appName ?? "WhatsApp Flow";
 	const logoUrl = branding?.logoUrl;
@@ -82,21 +85,24 @@ function RouteComponent() {
 				<Card className="mx-auto w-full max-w-md border-primary/15 bg-card/90 shadow-sm">
 					<CardHeader className="text-center">
 						<CardTitle>
-							{showSignIn ? "Welcome back" : "Create workspace account"}
+							{showSignUp ? "Create workspace account" : "Welcome back"}
 						</CardTitle>
 						<CardDescription>
-							{showSignIn
-								? "Sign in to continue to your dashboard."
-								: "Create an account to start building WhatsApp flows."}
+							{showSignUp
+								? "Create an account to start building WhatsApp flows."
+								: "Sign in to continue to your dashboard."}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						{showSignIn ? (
-							<SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
-						) : (
+						{showSignUp ? (
 							<SignUpForm
 								inviteToken={inviteToken ?? undefined}
 								onSwitchToSignIn={() => setShowSignIn(true)}
+							/>
+						) : (
+							<SignInForm
+								showSignup={globalSignupEnabled}
+								onSwitchToSignUp={() => setShowSignIn(false)}
 							/>
 						)}
 					</CardContent>

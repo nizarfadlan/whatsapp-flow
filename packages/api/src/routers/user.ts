@@ -76,7 +76,7 @@ function hashInviteToken(token: string) {
 }
 
 function createInviteLink(token: string) {
-	const baseUrl = env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL;
+	const baseUrl = env.PUBLIC_BASE_URL ?? env.AUTH_URL;
 	return `${baseUrl.replace(/\/$/, "")}/login?invite=${encodeURIComponent(token)}`;
 }
 

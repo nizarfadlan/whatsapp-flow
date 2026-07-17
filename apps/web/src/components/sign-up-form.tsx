@@ -44,6 +44,9 @@ export default function SignUpForm({
 					email: value.email.trim(),
 					password: value.password,
 					name: value.name.trim(),
+					inviteToken,
+				} as Parameters<typeof authClient.signUp.email>[0] & {
+					inviteToken?: string;
 				},
 				{
 					onSuccess: async () => {

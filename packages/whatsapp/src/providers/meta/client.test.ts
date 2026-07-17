@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
-process.env.BETTER_AUTH_SECRET ??= "x".repeat(32);
-process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
+process.env.AUTH_SECRET ??= "x".repeat(32);
+process.env.AUTH_URL ??= "http://localhost:3000";
 process.env.CORS_ORIGIN ??= "http://localhost:3001";
 process.env.META_GRAPH_API_VERSION = "v23.0";
 process.env.META_WEBHOOK_VERIFY_TOKEN ??= "verify-token";

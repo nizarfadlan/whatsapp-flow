@@ -1,0 +1,1 @@
+ALTER TABLE "app_settings" ADD COLUMN "global_signup_enabled" boolean DEFAULT true NOT NULL;

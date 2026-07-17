@@ -43,6 +43,9 @@ const DEFAULT_BRANDING = {
 	primaryColor: null,
 	supportEmail: null,
 };
+const DEFAULT_SIGNUP_SETTINGS = {
+	globalSignupEnabled: true,
+};
 const OIDC_DISPLAY_NAME = "OIDC Connection";
 const THE_SVG_CDN =
 	"https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons";
@@ -398,6 +401,16 @@ async function getBranding(db: ReturnType<typeof createDb>) {
 	};
 }
 
+async function getSignupSettings(db: ReturnType<typeof createDb>) {
+	const [row] = await db
+		.select({ globalSignupEnabled: appSettings.globalSignupEnabled })
+		.from(appSettings)
+		.where(eq(appSettings.id, APP_SETTINGS_ID))
+		.limit(1);
+
+	return row ?? DEFAULT_SIGNUP_SETTINGS;
+}
+
 async function getSmtpRow(db: ReturnType<typeof createDb>) {
 	const [row] = await db
 		.select()
@@ -646,8 +659,9 @@ async function createEnterpriseAudit(db: ReturnType<typeof createDb>) {
 
 export const settingsRouter = router({
 	public: publicProcedure.query(async ({ ctx }) => {
-		const [branding, providerRows] = await Promise.all([
+		const [branding, signupSettings, providerRows] = await Promise.all([
 			getBranding(ctx.db),
+			getSignupSettings(ctx.db),
 			ctx.db
 				.select({
 					providerId: authProviderSetting.providerId,
@@ -683,12 +697,55 @@ export const settingsRouter = router({
 			branding,
 			auth: {
 				emailPasswordEnabled: true,
+				globalSignupEnabled: signupSettings.globalSignupEnabled,
 				providers,
 			},
 		};
 	}),
 
 	getBranding: adminProcedure.query(async ({ ctx }) => getBranding(ctx.db)),
+
+	getSignupSettings: adminProcedure.query(async ({ ctx }) =>
+		getSignupSettings(ctx.db),
+	),
+
+	updateSignupSettings: adminProcedure
+		.input(z.object({ globalSignupEnabled: z.boolean() }))
+		.mutation(async ({ ctx, input }) => {
+			const before = await getSignupSettings(ctx.db);
+			const [row] = await ctx.db
+				.insert(appSettings)
+				.values({
+					id: APP_SETTINGS_ID,
+					globalSignupEnabled: input.globalSignupEnabled,
+				})
+				.onConflictDoUpdate({
+					target: appSettings.id,
+					set: {
+						globalSignupEnabled: input.globalSignupEnabled,
+						updatedAt: new Date(),
+					},
+				})
+				.returning({ globalSignupEnabled: appSettings.globalSignupEnabled });
+
+			if (!row) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Signup settings were not saved",
+				});
+			}
+
+			await writeAuditLog(ctx, {
+				action: "settings.global_signup_updated",
+				targetType: "settings",
+				targetId: APP_SETTINGS_ID,
+				targetDisplay: "Account registration",
+				before,
+				after: row,
+			});
+
+			return row;
+		}),
 
 	getEnterpriseAudit: adminProcedure.query(async ({ ctx }) =>
 		createEnterpriseAudit(ctx.db),

@@ -541,6 +541,9 @@ function SettingsPage() {
 	const [deleteProviderId, setDeleteProviderId] = useState<string | null>(null);
 
 	const brandingQuery = useQuery(trpc.settings.getBranding.queryOptions());
+	const signupSettingsQuery = useQuery(
+		trpc.settings.getSignupSettings.queryOptions(),
+	);
 	const smtpQuery = useQuery(trpc.settings.getSmtpSettings.queryOptions());
 	const providersQuery = useQuery(
 		trpc.settings.listAuthProviders.queryOptions(),
@@ -637,6 +640,18 @@ function SettingsPage() {
 			onSuccess: () => {
 				toast.success("Branding settings saved");
 				brandingQuery.refetch();
+				invalidatePublicSettings();
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+
+	const updateSignupSettings = useMutation(
+		trpc.settings.updateSignupSettings.mutationOptions({
+			onSuccess: () => {
+				toast.success("Account registration settings saved");
+				signupSettingsQuery.refetch();
+				auditQuery.refetch();
 				invalidatePublicSettings();
 			},
 			onError: (error) => toast.error(error.message),
@@ -746,12 +761,14 @@ function SettingsPage() {
 
 	if (
 		brandingQuery.error ||
+		signupSettingsQuery.error ||
 		smtpQuery.error ||
 		providersQuery.error ||
 		auditQuery.error
 	) {
 		const message =
 			brandingQuery.error?.message ??
+			signupSettingsQuery.error?.message ??
 			smtpQuery.error?.message ??
 			providersQuery.error?.message ??
 			auditQuery.error?.message;
@@ -1281,6 +1298,40 @@ function SettingsPage() {
 					</div>
 				</CardContent>
 			</Card>
+
+			<Card>
+				<CardHeader>
+					<CardTitle className="flex items-center gap-2">
+						<ShieldAlert className="size-5" />
+						Account registration
+					</CardTitle>
+					<CardDescription>
+						Control whether people can create accounts without an invitation.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+						<div className="space-y-1">
+							<Label htmlFor="globalSignupEnabled">Allow global signup</Label>
+							<p className="text-muted-foreground text-xs">
+								When disabled, email, OAuth, and OIDC registration require a
+								valid invitation. Existing users can still sign in.
+							</p>
+						</div>
+						<Switch
+							id="globalSignupEnabled"
+							checked={signupSettingsQuery.data?.globalSignupEnabled ?? true}
+							disabled={
+								signupSettingsQuery.isPending || updateSignupSettings.isPending
+							}
+							onCheckedChange={(globalSignupEnabled) =>
+								updateSignupSettings.mutate({ globalSignupEnabled })
+							}
+						/>
+					</div>
+				</CardContent>
+			</Card>
+
 			<Card>
 				<CardHeader>
 					<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

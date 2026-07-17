@@ -31,8 +31,10 @@ function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
 
 export default function SignInForm({
 	onSwitchToSignUp,
+	showSignup,
 }: {
 	onSwitchToSignUp: () => void;
+	showSignup: boolean;
 }) {
 	const navigate = useNavigate({
 		from: "/",
@@ -219,11 +221,13 @@ export default function SignInForm({
 				</form.Subscribe>
 			</form>
 
-			<div className="mt-4 text-center">
-				<Button variant="link" onClick={onSwitchToSignUp}>
-					Need an account? Sign Up
-				</Button>
-			</div>
+			{showSignup && (
+				<div className="mt-4 text-center">
+					<Button variant="link" onClick={onSwitchToSignUp}>
+						Need an account? Sign Up
+					</Button>
+				</div>
+			)}
 		</div>
 	);
 }

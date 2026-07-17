@@ -137,7 +137,7 @@ export async function resolveSmtpConfig(
 }
 
 export function renderInviteEmail(input: InviteEmailInput) {
-	const appUrl = env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL;
+	const appUrl = env.PUBLIC_BASE_URL ?? env.AUTH_URL;
 	const appName = "WhatsApp Flow";
 	const expires = input.expiresAt.toLocaleString("en-US", {
 		dateStyle: "medium",
@@ -203,7 +203,7 @@ ${appUrl}`;
 }
 
 function renderSmtpTestEmail() {
-	const appUrl = env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL;
+	const appUrl = env.PUBLIC_BASE_URL ?? env.AUTH_URL;
 	const subject = "SMTP test email";
 	const text = `This is a test email from WhatsApp Flow.
 

@@ -252,7 +252,7 @@ app.post("/api/uploads/local/:key{.+}", async (c) => {
 	);
 	const grant = c.req.query("grant");
 	if (!grant || !contentType) return c.text("Invalid upload grant", 400);
-	const payload = verifyLocalUploadGrant(grant, env.BETTER_AUTH_SECRET, {
+	const payload = verifyLocalUploadGrant(grant, env.AUTH_SECRET, {
 		key,
 		userId: authResult.session.user.id,
 		mimeType: contentType,

@@ -85,7 +85,7 @@ function normalizeGraphApiVersion(value: string) {
 function createEmbeddedSignupState(userId: string) {
 	const expiresAt = String(Date.now() + 10 * 60 * 1000);
 	const payload = `meta.${userId}.${expiresAt}`;
-	const signature = createHmac("sha256", env.BETTER_AUTH_SECRET)
+	const signature = createHmac("sha256", env.AUTH_SECRET)
 		.update(payload)
 		.digest("hex");
 	return `${payload}.${signature}`;
@@ -108,7 +108,7 @@ function requireValidEmbeddedSignupState(state: string, userId: string) {
 	}
 
 	const payload = `${prefix}.${stateUserId}.${expiresAt}`;
-	const expected = createHmac("sha256", env.BETTER_AUTH_SECRET)
+	const expected = createHmac("sha256", env.AUTH_SECRET)
 		.update(payload)
 		.digest("hex");
 	if (!safeEqual(signature, expected)) {
@@ -131,7 +131,7 @@ function requireAllowedEmbeddedRedirectUri(value?: string) {
 		});
 	}
 
-	const allowedOrigins = [env.CORS_ORIGIN, env.BETTER_AUTH_URL].map(
+	const allowedOrigins = [env.CORS_ORIGIN, env.AUTH_URL].map(
 		(origin) => new URL(origin).origin,
 	);
 	if (!allowedOrigins.includes(redirectOrigin)) {

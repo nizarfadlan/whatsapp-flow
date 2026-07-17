@@ -25,7 +25,7 @@ function localDir() {
 }
 
 function publicBaseUrl() {
-	return (env.PUBLIC_BASE_URL ?? env.BETTER_AUTH_URL).replace(/\/$/, "");
+	return (env.PUBLIC_BASE_URL ?? env.AUTH_URL).replace(/\/$/, "");
 }
 
 async function writeAll(
@@ -149,7 +149,7 @@ export class LocalStorageDriver implements StorageDriver, LocalReadableStorage {
 				maxBytes: options.maxBytes,
 				expiresAt: Date.now() + expiresInSeconds * 1_000,
 			},
-			env.BETTER_AUTH_SECRET,
+			env.AUTH_SECRET,
 		);
 		return {
 			key: safeKey,
