@@ -18,6 +18,7 @@ import { Route as DashboardUsersRouteImport } from './routes/dashboard.users'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
 import { Route as DashboardRolesRouteImport } from './routes/dashboard.roles'
 import { Route as DashboardNewslettersRouteImport } from './routes/dashboard.newsletters'
+import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
 import { Route as DashboardGroupsRouteImport } from './routes/dashboard.groups'
 import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
@@ -30,6 +31,7 @@ import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.
 import { Route as DashboardFlowsFlowIdRouteImport } from './routes/dashboard.flows.$flowId'
 import { Route as DashboardDevicesIdRouteImport } from './routes/dashboard.devices.$id'
 import { Route as DashboardFlowsFlowIdSessionsRouteImport } from './routes/dashboard.flows.$flowId.sessions'
+import { Route as DashboardFlowsFlowIdLogsRouteImport } from './routes/dashboard.flows.$flowId.logs'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -74,6 +76,11 @@ const DashboardRolesRoute = DashboardRolesRouteImport.update({
 const DashboardNewslettersRoute = DashboardNewslettersRouteImport.update({
   id: '/newsletters',
   path: '/newsletters',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardLogsRoute = DashboardLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardInboxRoute = DashboardInboxRouteImport.update({
@@ -137,6 +144,12 @@ const DashboardFlowsFlowIdSessionsRoute =
     path: '/sessions',
     getParentRoute: () => DashboardFlowsFlowIdRoute,
   } as any)
+const DashboardFlowsFlowIdLogsRoute =
+  DashboardFlowsFlowIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => DashboardFlowsFlowIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -149,6 +162,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
   '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
   '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -159,6 +173,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows/': typeof DashboardFlowsIndexRoute
+  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
   '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesByTo {
@@ -170,6 +185,7 @@ export interface FileRoutesByTo {
   '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
   '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
   '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -180,6 +196,7 @@ export interface FileRoutesByTo {
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows': typeof DashboardFlowsIndexRoute
+  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
   '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesById {
@@ -194,6 +211,7 @@ export interface FileRoutesById {
   '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
   '/dashboard/groups': typeof DashboardGroupsRoute
   '/dashboard/inbox': typeof DashboardInboxRoute
+  '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/newsletters': typeof DashboardNewslettersRoute
   '/dashboard/roles': typeof DashboardRolesRoute
   '/dashboard/settings': typeof DashboardSettingsRoute
@@ -204,6 +222,7 @@ export interface FileRoutesById {
   '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
   '/dashboard/flows/new': typeof DashboardFlowsNewRoute
   '/dashboard/flows/': typeof DashboardFlowsIndexRoute
+  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
   '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
 }
 export interface FileRouteTypes {
@@ -219,6 +238,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows'
     | '/dashboard/groups'
     | '/dashboard/inbox'
+    | '/dashboard/logs'
     | '/dashboard/newsletters'
     | '/dashboard/roles'
     | '/dashboard/settings'
@@ -229,6 +249,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
     | '/dashboard/flows/'
+    | '/dashboard/flows/$flowId/logs'
     | '/dashboard/flows/$flowId/sessions'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -240,6 +261,7 @@ export interface FileRouteTypes {
     | '/dashboard/devices'
     | '/dashboard/groups'
     | '/dashboard/inbox'
+    | '/dashboard/logs'
     | '/dashboard/newsletters'
     | '/dashboard/roles'
     | '/dashboard/settings'
@@ -250,6 +272,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
     | '/dashboard/flows'
+    | '/dashboard/flows/$flowId/logs'
     | '/dashboard/flows/$flowId/sessions'
   id:
     | '__root__'
@@ -263,6 +286,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows'
     | '/dashboard/groups'
     | '/dashboard/inbox'
+    | '/dashboard/logs'
     | '/dashboard/newsletters'
     | '/dashboard/roles'
     | '/dashboard/settings'
@@ -273,6 +297,7 @@ export interface FileRouteTypes {
     | '/dashboard/flows/$flowId'
     | '/dashboard/flows/new'
     | '/dashboard/flows/'
+    | '/dashboard/flows/$flowId/logs'
     | '/dashboard/flows/$flowId/sessions'
   fileRoutesById: FileRoutesById
 }
@@ -345,6 +370,13 @@ declare module '@tanstack/react-router' {
       path: '/newsletters'
       fullPath: '/dashboard/newsletters'
       preLoaderRoute: typeof DashboardNewslettersRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/logs': {
+      id: '/dashboard/logs'
+      path: '/logs'
+      fullPath: '/dashboard/logs'
+      preLoaderRoute: typeof DashboardLogsRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/inbox': {
@@ -431,6 +463,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardFlowsFlowIdSessionsRouteImport
       parentRoute: typeof DashboardFlowsFlowIdRoute
     }
+    '/dashboard/flows/$flowId/logs': {
+      id: '/dashboard/flows/$flowId/logs'
+      path: '/logs'
+      fullPath: '/dashboard/flows/$flowId/logs'
+      preLoaderRoute: typeof DashboardFlowsFlowIdLogsRouteImport
+      parentRoute: typeof DashboardFlowsFlowIdRoute
+    }
   }
 }
 
@@ -446,10 +485,12 @@ const DashboardDevicesRouteWithChildren =
   DashboardDevicesRoute._addFileChildren(DashboardDevicesRouteChildren)
 
 interface DashboardFlowsFlowIdRouteChildren {
+  DashboardFlowsFlowIdLogsRoute: typeof DashboardFlowsFlowIdLogsRoute
   DashboardFlowsFlowIdSessionsRoute: typeof DashboardFlowsFlowIdSessionsRoute
 }
 
 const DashboardFlowsFlowIdRouteChildren: DashboardFlowsFlowIdRouteChildren = {
+  DashboardFlowsFlowIdLogsRoute: DashboardFlowsFlowIdLogsRoute,
   DashboardFlowsFlowIdSessionsRoute: DashboardFlowsFlowIdSessionsRoute,
 }
 
@@ -480,6 +521,7 @@ interface DashboardRouteChildren {
   DashboardFlowsRoute: typeof DashboardFlowsRouteWithChildren
   DashboardGroupsRoute: typeof DashboardGroupsRoute
   DashboardInboxRoute: typeof DashboardInboxRoute
+  DashboardLogsRoute: typeof DashboardLogsRoute
   DashboardNewslettersRoute: typeof DashboardNewslettersRoute
   DashboardRolesRoute: typeof DashboardRolesRoute
   DashboardSettingsRoute: typeof DashboardSettingsRoute
@@ -496,6 +538,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardFlowsRoute: DashboardFlowsRouteWithChildren,
   DashboardGroupsRoute: DashboardGroupsRoute,
   DashboardInboxRoute: DashboardInboxRoute,
+  DashboardLogsRoute: DashboardLogsRoute,
   DashboardNewslettersRoute: DashboardNewslettersRoute,
   DashboardRolesRoute: DashboardRolesRoute,
   DashboardSettingsRoute: DashboardSettingsRoute,

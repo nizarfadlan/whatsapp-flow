@@ -41,6 +41,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 *.log*
+!src/routes/dashboard.logs.tsx
+!src/routes/dashboard.flows.$flowId.logs.tsx
 
 # TypeScript
 *.tsbuildinfo
