@@ -16,6 +16,7 @@ import {
 	startDeviceResourceSync,
 } from "../engine/device-resource-sync";
 import { protectedProcedure, router } from "../index";
+import { logger } from "../observability/logger";
 
 const requiredTrimmedString = z.string().trim().min(1);
 const optionalTrimmedString = z.preprocess((value) => {
@@ -503,11 +504,29 @@ export const deviceRouter = router({
 		)
 		.mutation(async ({ ctx, input }) => {
 			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
-			const code = await connectionManager.requestPairingCode(
-				input.id,
-				input.phoneNumber,
-			);
-			return { code };
+			try {
+				const code = await connectionManager.requestPairingCode(
+					input.id,
+					input.phoneNumber,
+				);
+				return { code };
+			} catch (error) {
+				const output =
+					error && typeof error === "object"
+						? (error as { output?: { statusCode?: unknown } }).output
+						: undefined;
+				logger.error("device.pairing_code.failed", {
+					deviceId: input.id,
+					errorName: error instanceof Error ? error.name : "UnknownError",
+					errorMessage:
+						error instanceof Error ? error.message : "Unknown error",
+					statusCode:
+						typeof output?.statusCode === "number"
+							? output.statusCode
+							: undefined,
+				});
+				throw error;
+			}
 		}),
 
 	disconnect: protectedProcedure

@@ -23,7 +23,12 @@ export function useDeviceStatusSSE() {
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
-		const es = new EventSource("/api/events");
+		const es = new EventSource(
+			`${import.meta.env.VITE_SERVER_URL}/api/events`,
+			{
+				withCredentials: true,
+			},
+		);
 
 		es.addEventListener("message", (event) => {
 			const data = JSON.parse(event.data) as DeviceStatusEvent;

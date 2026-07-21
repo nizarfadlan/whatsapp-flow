@@ -422,11 +422,20 @@ export class ConnectionManager extends EventEmitter {
 			throw new Error("Phone number is required");
 		}
 
-		if (connection.socket.authState.creds.registered) {
+		const socket = connection.socket;
+		if (socket.authState.creds.registered) {
 			throw new Error("Device is already registered");
 		}
 
-		return connection.socket.requestPairingCode(normalized);
+		await socket.waitForSocketOpen();
+		if (this.connections.get(deviceId)?.socket !== socket) {
+			throw new Error("Connection was replaced before requesting pairing code");
+		}
+		if (socket.authState.creds.registered) {
+			throw new Error("Device is already registered");
+		}
+
+		return socket.requestPairingCode(normalized);
 	}
 
 	private async flushAndDisposeAuthState(
