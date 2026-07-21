@@ -1,4 +1,4 @@
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -18,6 +18,10 @@ import {
 	DialogTrigger,
 } from "@whatsapp-flow/ui/components/dialog";
 import { Input } from "@whatsapp-flow/ui/components/input";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@whatsapp-flow/ui/components/native-select";
 import { cn } from "@whatsapp-flow/ui/lib/utils";
 import {
 	addEdge,
@@ -42,6 +46,8 @@ import {
 	Redo2,
 	Save,
 	ScrollText,
+	Share2,
+	Trash2,
 	Undo2,
 	Users,
 } from "lucide-react";
@@ -133,7 +139,7 @@ function getTriggerPayload(nodes: Node[]) {
 		case "webhook":
 			return {
 				triggerType: "webhook" as const,
-				triggerConfig: { webhookToken: data.webhookToken ?? "" },
+				triggerConfig: {},
 			};
 		case "schedule":
 			return {
@@ -207,12 +213,216 @@ function reconcileInteractiveEdges(
 	});
 }
 
+function ShareFlowDialog({
+	flowId,
+	tenantId,
+	ownerId,
+}: {
+	flowId: string;
+	tenantId: string;
+	ownerId: string;
+}) {
+	const trpc = useTRPC();
+	const [open, setOpen] = useState(false);
+	const [memberId, setMemberId] = useState("");
+	const [capability, setCapability] = useState<"viewer" | "editor">("viewer");
+	const membersQuery = useQuery({
+		...trpc.tenant.listMembers.queryOptions({ tenantId }),
+		enabled: open,
+	});
+	const grantsQuery = useQuery({
+		...trpc.tenant.listFlowGrants.queryOptions({ flowId }),
+		enabled: open,
+	});
+	const refetchSharing = () => {
+		void grantsQuery.refetch();
+		void membersQuery.refetch();
+	};
+	const grantAccess = useMutation(
+		trpc.tenant.grantFlowAccess.mutationOptions({
+			onSuccess: () => {
+				setMemberId("");
+				toast.success("Flow access updated");
+				refetchSharing();
+			},
+			onError: () => toast.error("Unable to update flow access"),
+		}),
+	);
+	const revokeAccess = useMutation(
+		trpc.tenant.revokeFlowAccess.mutationOptions({
+			onSuccess: () => {
+				toast.success("Flow access revoked");
+				refetchSharing();
+			},
+			onError: () => toast.error("Unable to revoke flow access"),
+		}),
+	);
+	const grants = grantsQuery.data ?? [];
+	const grantedUserIds = new Set(grants.map((grant) => grant.userId));
+	const eligibleMembers = (membersQuery.data ?? []).filter(
+		(member) => member.id !== ownerId && !grantedUserIds.has(member.id),
+	);
+	const isLoading = membersQuery.isLoading || grantsQuery.isLoading;
+
+	return (
+		<Dialog
+			open={open}
+			onOpenChange={(nextOpen) => {
+				setOpen(nextOpen);
+				if (!nextOpen) setMemberId("");
+			}}
+		>
+			<DialogTrigger
+				render={
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 text-xs"
+					/>
+				}
+			>
+				<Share2 className="size-3.5" />
+				Share
+			</DialogTrigger>
+			<DialogContent className="sm:max-w-xl">
+				<DialogHeader>
+					<DialogTitle>Share flow</DialogTitle>
+					<DialogDescription>
+						Give active members of this workspace view-only or editing access.
+					</DialogDescription>
+				</DialogHeader>
+				{isLoading ? (
+					<p className="py-6 text-center text-muted-foreground text-sm">
+						Loading sharing settings...
+					</p>
+				) : membersQuery.error || grantsQuery.error ? (
+					<div className="space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+						<p className="text-destructive text-sm">
+							Unable to load sharing settings. Try again.
+						</p>
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							onClick={refetchSharing}
+						>
+							Retry
+						</Button>
+					</div>
+				) : (
+					<div className="space-y-5">
+						<div className="grid gap-2 sm:grid-cols-[1fr_9rem_auto]">
+							<NativeSelect
+								value={memberId}
+								onChange={(event) => setMemberId(event.target.value)}
+							>
+								<NativeSelectOption value="">
+									Select a member
+								</NativeSelectOption>
+								{eligibleMembers.map((member) => (
+									<NativeSelectOption key={member.id} value={member.id}>
+										{member.name || member.email}
+									</NativeSelectOption>
+								))}
+							</NativeSelect>
+							<NativeSelect
+								value={capability}
+								onChange={(event) =>
+									setCapability(event.target.value as "viewer" | "editor")
+								}
+							>
+								<NativeSelectOption value="viewer">Viewer</NativeSelectOption>
+								<NativeSelectOption value="editor">Editor</NativeSelectOption>
+							</NativeSelect>
+							<Button
+								type="button"
+								disabled={!memberId || grantAccess.isPending}
+								onClick={() =>
+									grantAccess.mutate({ flowId, userId: memberId, capability })
+								}
+							>
+								{grantAccess.isPending ? "Sharing..." : "Share"}
+							</Button>
+						</div>
+						{grants.length === 0 ? (
+							<p className="text-muted-foreground text-sm">
+								Only you can access this flow.
+							</p>
+						) : (
+							<div className="divide-y rounded-md border">
+								{grants.map((grant) => (
+									<div
+										key={grant.userId}
+										className="flex flex-wrap items-center gap-3 p-3"
+									>
+										<div className="min-w-0 flex-1">
+											<p className="truncate font-medium text-sm">
+												{grant.name || grant.email}
+											</p>
+											<p className="truncate text-muted-foreground text-xs">
+												{grant.email}
+											</p>
+										</div>
+										<NativeSelect
+											value={grant.capability}
+											disabled={grantAccess.isPending || revokeAccess.isPending}
+											onChange={(event) =>
+												grantAccess.mutate({
+													flowId,
+													userId: grant.userId,
+													capability: event.target.value as "viewer" | "editor",
+												})
+											}
+										>
+											<NativeSelectOption value="viewer">
+												Viewer
+											</NativeSelectOption>
+											<NativeSelectOption value="editor">
+												Editor
+											</NativeSelectOption>
+										</NativeSelect>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled={grantAccess.isPending || revokeAccess.isPending}
+											onClick={() =>
+												revokeAccess.mutate({ flowId, userId: grant.userId })
+											}
+											title={`Revoke access for ${grant.name || grant.email}`}
+										>
+											<Trash2 className="size-3.5" />
+											<span className="sr-only">Revoke access</span>
+										</Button>
+									</div>
+								))}
+							</div>
+						)}
+					</div>
+				)}
+				<DialogFooter>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setOpen(false)}
+					>
+						Done
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 function FlowEditor() {
 	const { flowId } = Route.useParams();
 	const trpc = useTRPC();
 	const { data: flow, refetch } = useSuspenseQuery(
 		trpc.flow.getById.queryOptions({ id: flowId }),
 	);
+	const isOwner = flow.accessCapability === "owner";
+	const canEdit = isOwner || flow.accessCapability === "editor";
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(
 		ensureTriggerNode((flow.nodes as Node[]) ?? []),
@@ -310,6 +520,7 @@ function FlowEditor() {
 
 	const onConnect = useCallback(
 		(connection: Connection) => {
+			if (!canEdit) return;
 			setEdges((eds) => {
 				const label = getSourceHandleLabel(
 					nodes,
@@ -321,7 +532,7 @@ function FlowEditor() {
 				return next;
 			});
 		},
-		[setEdges, pushHistory, nodes],
+		[canEdit, setEdges, pushHistory, nodes],
 	);
 
 	const onNodeClick = useCallback(
@@ -381,6 +592,7 @@ function FlowEditor() {
 
 	const updateNodeData = useCallback(
 		(id: string, data: Partial<FlowNodeData>) => {
+			if (!canEdit) return;
 			setNodes((nds) => {
 				let updatedData: FlowNodeData | null = null;
 				const nextNodes = nds.map((node) => {
@@ -404,12 +616,12 @@ function FlowEditor() {
 				return nextNodes;
 			});
 		},
-		[setNodes, setEdges, pushHistory, edges],
+		[canEdit, setNodes, setEdges, pushHistory, edges],
 	);
 
 	const deleteNode = useCallback(
 		(id: string) => {
-			if (id === "trigger") return;
+			if (!canEdit || id === "trigger") return;
 			setNodes((nds) => {
 				const nextNodes = nds.filter((n) => n.id !== id);
 				setEdges((eds) => {
@@ -423,7 +635,7 @@ function FlowEditor() {
 				return nextNodes;
 			});
 		},
-		[setNodes, setEdges, pushHistory, selectedNodeId, selectNode],
+		[canEdit, setNodes, setEdges, pushHistory, selectedNodeId, selectNode],
 	);
 
 	const focusDiagnostic = useCallback(
@@ -507,6 +719,7 @@ function FlowEditor() {
 	};
 
 	const handleAddNode = (type: PaletteNodeTypeName) => {
+		if (!canEdit) return;
 		const yOffset = Math.random() * 200 + 50;
 		setNodes((nds) => {
 			const next = [...nds, createNode(type, 320, yOffset)];
@@ -531,6 +744,7 @@ function FlowEditor() {
 	const handleCanvasDrop = useCallback(
 		(e: React.DragEvent) => {
 			e.preventDefault();
+			if (!canEdit) return;
 			const type = e.dataTransfer.getData(
 				"application/whatsapp-flow-node",
 			) as PaletteNodeTypeName;
@@ -551,7 +765,7 @@ function FlowEditor() {
 				return next;
 			});
 		},
-		[reactFlowInstance, setNodes, pushHistory, edges, nodes],
+		[canEdit, reactFlowInstance, setNodes, pushHistory, edges, nodes],
 	);
 
 	const handleUndo = useCallback(() => {
@@ -625,7 +839,12 @@ function FlowEditor() {
 										type="button"
 										variant="ghost"
 										size="icon-xs"
-										title="Rename flow"
+										title={
+											isOwner
+												? "Rename flow"
+												: "Only the owner can rename this flow"
+										}
+										disabled={!isOwner}
 									/>
 								}
 							>
@@ -681,6 +900,18 @@ function FlowEditor() {
 					>
 						{flow.status}
 					</Badge>
+					<Badge
+						variant={isOwner ? "secondary" : "outline"}
+						className="h-4 px-1.5 text-[9px]"
+					>
+						{isOwner ? "Owned" : `Shared · ${flow.accessCapability}`}
+					</Badge>
+					{!isOwner && flow.owner && (
+						<span className="max-w-52 truncate text-muted-foreground text-xs">
+							Shared by {flow.owner.name} · {flow.owner.email}
+						</span>
+					)}
+
 					<Link
 						to="/dashboard/flows/$flowId/sessions"
 						params={{ flowId }}
@@ -699,10 +930,18 @@ function FlowEditor() {
 					</Link>
 				</div>
 				<div className="flex items-center gap-2">
+					{isOwner && (
+						<ShareFlowDialog
+							flowId={flowId}
+							tenantId={flow.tenantId}
+							ownerId={flow.userId}
+						/>
+					)}
+
 					<Button
 						variant="ghost"
 						size="icon-sm"
-						disabled={!canUndo}
+						disabled={!canEdit || !canUndo}
 						onClick={handleUndo}
 						title="Undo (Ctrl+Z)"
 					>
@@ -711,7 +950,7 @@ function FlowEditor() {
 					<Button
 						variant="ghost"
 						size="icon-sm"
-						disabled={!canRedo}
+						disabled={!canEdit || !canRedo}
 						onClick={handleRedo}
 						title="Redo (Ctrl+Shift+Z)"
 					>
@@ -720,13 +959,13 @@ function FlowEditor() {
 					<DeployDialog
 						flowId={flowId}
 						flowName={flow.name}
-						disabled={nodes.length === 0}
+						disabled={!canEdit || nodes.length === 0}
 					/>
 					<Button
 						size="sm"
 						className="h-7 text-xs"
 						onClick={handleSave}
-						disabled={saveMut.isPending}
+						disabled={!canEdit || saveMut.isPending}
 					>
 						<Save className="size-3.5" />
 						{saveMut.isPending ? "Saving..." : "Save"}
@@ -756,7 +995,8 @@ function FlowEditor() {
 											type="button"
 											variant="ghost"
 											className="group/palette h-9 justify-start gap-2 rounded-lg border border-border/70 bg-background/70 px-2.5 text-xs shadow-xs hover:bg-muted"
-											draggable
+											draggable={canEdit}
+											disabled={!canEdit}
 											onDragStart={(e) => handlePaletteDragStart(e, item.type)}
 											onClick={() => handleAddNode(item.type)}
 										>
@@ -783,6 +1023,8 @@ function FlowEditor() {
 						<ReactFlow
 							className="size-full"
 							nodes={displayNodes}
+							nodesDraggable={canEdit}
+							nodesConnectable={canEdit}
 							edges={displayEdges}
 							onNodesChange={onNodesChange}
 							onEdgesChange={onEdgesChange}
@@ -874,6 +1116,7 @@ function FlowEditor() {
 						<NodeConfigPanel
 							node={selectedNode}
 							flowId={flowId}
+							canRotateWebhookToken={flow.accessCapability === "owner"}
 							allNodes={nodes}
 							edges={edges}
 							onUpdate={updateNodeData}
@@ -899,7 +1142,9 @@ function DeployDialog({
 	const [open, setOpen] = useState(false);
 	const [deviceId, setDeviceId] = useState("");
 
-	const { data: devices } = useSuspenseQuery(trpc.device.list.queryOptions());
+	const { data: devices } = useSuspenseQuery(
+		trpc.device.listForDeploy.queryOptions({ flowId }),
+	);
 
 	const deployMut = useMutation(
 		trpc.flow.deploy.mutationOptions({
@@ -952,7 +1197,7 @@ function DeployDialog({
 									<span className="flex flex-col items-start gap-0.5">
 										<span className="font-medium">{d.name}</span>
 										<span className="text-[10px] text-muted-foreground">
-											{d.phoneNumber ?? "No phone"} · {d.status}
+											{d.provider} · {d.status}
 										</span>
 									</span>
 								</Button>

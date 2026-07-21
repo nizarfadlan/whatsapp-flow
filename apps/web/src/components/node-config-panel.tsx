@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import {
 	Command,
@@ -48,6 +48,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useTRPC } from "@/utils/trpc";
 import { ContactCombobox } from "./contact-combobox";
 import type {
@@ -66,6 +67,7 @@ import { MediaUpload } from "./media-upload";
 interface NodeConfigPanelProps {
 	node: Node | null;
 	flowId: string;
+	canRotateWebhookToken: boolean;
 	/** All flow nodes, used to extract variable names for autocomplete. */
 	allNodes?: Node[];
 	edges?: Edge[];
@@ -200,18 +202,35 @@ function TriggerKeywordConfig({
 }
 
 function TriggerWebhookConfig({
-	data,
 	flowId,
-	onUpdate,
+	canRotateWebhookToken,
 }: {
-	data: TriggerNodeData;
 	flowId: string;
-	onUpdate: (d: Partial<FlowNodeData>) => void;
+	canRotateWebhookToken: boolean;
 }) {
-	const token = data.webhookToken ?? "";
-	const endpoint = `/api/flows/${flowId}/webhook?token=${token || "WEBHOOK_TOKEN"}`;
-	const regenerateToken = () => onUpdate({ webhookToken: crypto.randomUUID() });
-	const copyEndpoint = () => navigator.clipboard.writeText(endpoint);
+	const trpc = useTRPC();
+	const [transientToken, setTransientToken] = useState<string | null>(null);
+	const rotateWebhookToken = useMutation(
+		trpc.flow.rotateWebhookToken.mutationOptions({
+			onSuccess: ({ token }) => {
+				setTransientToken(token);
+				toast.success(
+					"Webhook token rotated. Copy it now; it will not be shown again.",
+				);
+			},
+			onError: () => toast.error("Failed to rotate webhook token"),
+		}),
+	);
+	const endpoint = `/api/flows/${flowId}/webhook?token=${transientToken ?? "WEBHOOK_TOKEN"}`;
+	const copyEndpoint = async () => {
+		await navigator.clipboard.writeText(endpoint);
+		toast.success("Webhook endpoint copied");
+	};
+	const copyToken = async () => {
+		if (!transientToken) return;
+		await navigator.clipboard.writeText(transientToken);
+		toast.success("Webhook token copied");
+	};
 
 	return (
 		<div className="flex flex-col gap-2">
@@ -230,17 +249,40 @@ function TriggerWebhookConfig({
 			</Field>
 			<Field label="Secret Token">
 				<div className="flex gap-1">
-					<Input className="h-7 text-xs" readOnly value={token} />
-					<Button
-						className="h-7 px-2"
-						size="sm"
-						variant="outline"
-						onClick={regenerateToken}
-					>
-						<RefreshCw className="size-3" />
-					</Button>
+					<Input
+						className="h-7 text-xs"
+						readOnly
+						value={transientToken ?? ""}
+						placeholder="Generate a token to reveal it once"
+					/>
+					{transientToken && (
+						<Button
+							className="h-7 px-2"
+							size="sm"
+							variant="outline"
+							onClick={copyToken}
+						>
+							<Copy className="size-3" />
+						</Button>
+					)}
+					{canRotateWebhookToken && (
+						<Button
+							className="h-7 px-2"
+							size="sm"
+							variant="outline"
+							onClick={() => rotateWebhookToken.mutate({ id: flowId })}
+							disabled={rotateWebhookToken.isPending}
+						>
+							<RefreshCw className="size-3" />
+						</Button>
+					)}
 				</div>
 			</Field>
+			{!canRotateWebhookToken && (
+				<p className="text-[10px] text-muted-foreground">
+					Only the flow owner can rotate the webhook token.
+				</p>
+			)}
 			<p className="text-[10px] text-muted-foreground">
 				Send POST JSON with contactNumber and optional text/message fields.
 			</p>
@@ -2068,10 +2110,12 @@ function WebhookCallConfig({
 function TriggerConfigForm({
 	data,
 	flowId,
+	canRotateWebhookToken,
 	onUpdate,
 }: {
 	data: TriggerNodeData;
 	flowId: string;
+	canRotateWebhookToken: boolean;
 	onUpdate: (d: Partial<FlowNodeData>) => void;
 }) {
 	const kind = data.triggerKind ?? "keyword";
@@ -2102,7 +2146,10 @@ function TriggerConfigForm({
 				<TriggerKeywordConfig data={data} onUpdate={onUpdate} />
 			)}
 			{kind === "webhook" && (
-				<TriggerWebhookConfig data={data} flowId={flowId} onUpdate={onUpdate} />
+				<TriggerWebhookConfig
+					flowId={flowId}
+					canRotateWebhookToken={canRotateWebhookToken}
+				/>
 			)}
 			{kind === "schedule" && (
 				<TriggerScheduleConfig data={data} onUpdate={onUpdate} />
@@ -2242,6 +2289,7 @@ function ActionConfigForm({
 export function NodeConfigPanel({
 	node,
 	flowId,
+	canRotateWebhookToken,
 	allNodes,
 	edges,
 	onUpdate,
@@ -2269,6 +2317,7 @@ export function NodeConfigPanel({
 				<TriggerConfigForm
 					data={data as TriggerNodeData}
 					flowId={flowId}
+					canRotateWebhookToken={canRotateWebhookToken}
 					onUpdate={handleUpdate}
 				/>
 			);

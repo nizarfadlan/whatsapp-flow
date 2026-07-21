@@ -104,6 +104,7 @@ function RouteComponent() {
 							/>
 						) : (
 							<SignInForm
+								inviteToken={inviteToken ?? undefined}
 								showSignup={registrationAvailable}
 								onSwitchToSignUp={() => setShowSignIn(false)}
 							/>

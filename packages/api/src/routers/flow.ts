@@ -1,9 +1,23 @@
+import { createHash, randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
+import { user } from "@whatsapp-flow/db/schema/auth";
 import { tag } from "@whatsapp-flow/db/schema/contact";
-import { device, flow } from "@whatsapp-flow/db/schema/device";
+import {
+	device,
+	flow,
+	flowAccessGrant,
+	flowTriggerSecret,
+} from "@whatsapp-flow/db/schema/device";
+import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import {
+	requireDeviceDeployAccess,
+	requireFlowAccess,
+	requireFlowOwner,
+	requireTenantMembership,
+} from "../authorization/tenant-access";
 import { validateCronExpression } from "../engine/cron";
 import {
 	deleteFlowNodeSecret,
@@ -82,8 +96,12 @@ async function requireTriggerTagOwnership(
 	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
 	triggerConfig: unknown,
 	userId: string,
+	existingTriggerConfig?: unknown,
 ) {
-	const tagIds = getTriggerTagIds(triggerConfig);
+	const existingTagIds = new Set(getTriggerTagIds(existingTriggerConfig));
+	const tagIds = getTriggerTagIds(triggerConfig).filter(
+		(tagId) => !existingTagIds.has(tagId),
+	);
 	if (tagIds.length === 0) return;
 	const rows = await db
 		.select({ id: tag.id })
@@ -116,7 +134,7 @@ function getTriggerPayload(nodes: FlowNode[]) {
 		case "webhook":
 			return {
 				triggerType: "webhook" as const,
-				triggerConfig: { webhookToken: String(data.webhookToken ?? "") },
+				triggerConfig: {},
 			};
 		case "schedule":
 			return {
@@ -393,6 +411,39 @@ function stripWebhookAuthSecretValue(node: FlowNode) {
 	};
 }
 
+function stripTriggerWebhookToken(node: FlowNode) {
+	if (node.type !== "trigger" || !node.data) return node;
+	const { webhookToken: _webhookToken, ...data } = node.data;
+	return { ...node, data };
+}
+
+export function sanitizeTriggerConfigForStorage(
+	triggerType: string | undefined,
+	triggerConfig: unknown,
+) {
+	if (
+		triggerType !== "webhook" ||
+		!triggerConfig ||
+		typeof triggerConfig !== "object" ||
+		Array.isArray(triggerConfig)
+	) {
+		return triggerConfig;
+	}
+	const { webhookToken: _webhookToken, ...config } = triggerConfig as Record<
+		string,
+		unknown
+	>;
+	return config;
+}
+
+function generateWebhookToken() {
+	return randomBytes(32).toString("base64url");
+}
+
+function hashWebhookToken(token: string) {
+	return createHash("sha256").update(token).digest("hex");
+}
+
 function isWebhookCallNode(node: FlowNode) {
 	return node.type === "webhook-call" || node.data?.nodeType === "webhook-call";
 }
@@ -511,7 +562,9 @@ async function sanitizeFlowNodesForStorage(
 				),
 			);
 		} else {
-			sanitized.push(stripWebhookAuthSecretValue(node));
+			sanitized.push(
+				stripTriggerWebhookToken(stripWebhookAuthSecretValue(node)),
+			);
 		}
 	}
 	await deleteFlowNodeSecretsForMissingNodes(
@@ -534,11 +587,35 @@ function sanitizeFlowForClient<T extends { nodes: unknown; edges?: unknown }>(
 	};
 }
 
-function stripWebhookSecretsForCopy(value: unknown) {
+function sanitizeFlowNodesForCopy(value: unknown) {
 	if (!Array.isArray(value)) return value;
 	return value.map((node) => {
 		if (!node || typeof node !== "object") return node;
 		const flowNode = node as FlowNode;
+		if (flowNode.type === "trigger") {
+			const {
+				webhookToken: _webhookToken,
+				cronExpression: _cronExpression,
+				contactNumber: _contactNumber,
+				keyword: _keyword,
+				keywords: _keywords,
+				chatScope: _chatScope,
+				groupTagIds: _groupTagIds,
+				senderTagIds: _senderTagIds,
+				...data
+			} = flowNode.data ?? {};
+			return {
+				...flowNode,
+				data: {
+					...data,
+					triggerKind: "keyword",
+					keyword: "",
+					chatScope: "any",
+					groupTagIds: [],
+					senderTagIds: [],
+				},
+			};
+		}
 		if (!isWebhookCallNode(flowNode))
 			return stripWebhookAuthSecretValue(flowNode);
 		const auth = sanitizeWebhookAuthForClient(flowNode.data?.webhookAuth);
@@ -786,9 +863,6 @@ export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	) {
 		return "Keyword trigger needs at least one keyword";
 	}
-	if (triggerKind === "webhook" && !nonEmpty(triggerData.webhookToken)) {
-		return "Webhook trigger needs a secret token";
-	}
 	if (triggerKind === "schedule") {
 		if (!nonEmpty(triggerData.cronExpression)) {
 			return "Schedule trigger needs a cron expression";
@@ -877,47 +951,9 @@ export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	return null;
 }
 
-async function requireFlowOwnership(
-	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
-	flowId: string,
-	userId: string,
-) {
-	const rows = await db
-		.select()
-		.from(flow)
-		.where(and(eq(flow.id, flowId), eq(flow.userId, userId)))
-		.limit(1);
-
-	const found = rows[0];
-	if (!found) {
-		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
-	}
-
-	return found;
-}
-
-async function requireDeviceOwnership(
-	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
-	deviceId: string,
-	userId: string,
-) {
-	const rows = await db
-		.select({ id: device.id, provider: device.provider, status: device.status })
-		.from(device)
-		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
-		.limit(1);
-
-	const found = rows[0];
-	if (!found) {
-		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
-	}
-
-	return found;
-}
-
 export const flowRouter = router({
 	list: protectedProcedure.query(async ({ ctx }) => {
-		return ctx.db
+		const flows = await ctx.db
 			.select({
 				id: flow.id,
 				name: flow.name,
@@ -926,24 +962,66 @@ export const flowRouter = router({
 				triggerType: flow.triggerType,
 				deviceId: flow.deviceId,
 				deviceName: device.name,
+				ownerName: user.name,
+				ownerEmail: user.email,
+				accessCapability: sql<
+					"owner" | "editor" | "viewer"
+				>`case when ${flow.userId} = ${ctx.session.user.id} then 'owner' else ${flowAccessGrant.capability} end`,
 				createdAt: flow.createdAt,
 				updatedAt: flow.updatedAt,
 			})
 			.from(flow)
+			.innerJoin(user, eq(user.id, flow.userId))
+			.innerJoin(
+				tenantMember,
+				and(
+					eq(tenantMember.tenantId, flow.tenantId),
+					eq(tenantMember.userId, ctx.session.user.id),
+				),
+			)
+			.leftJoin(
+				flowAccessGrant,
+				and(
+					eq(flowAccessGrant.flowId, flow.id),
+					eq(flowAccessGrant.tenantId, flow.tenantId),
+					eq(flowAccessGrant.userId, ctx.session.user.id),
+				),
+			)
 			.leftJoin(device, eq(flow.deviceId, device.id))
-			.where(eq(flow.userId, ctx.session.user.id))
+			.where(
+				or(
+					eq(flow.userId, ctx.session.user.id),
+					eq(flowAccessGrant.userId, ctx.session.user.id),
+				),
+			)
 			.orderBy(desc(flow.updatedAt));
+
+		return flows.map(({ ownerName, ownerEmail, ...flow }) => ({
+			...flow,
+			owner: { name: ownerName, email: ownerEmail },
+		}));
 	}),
 
 	getById: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
+			const access = await requireFlowAccess(
 				ctx.db,
 				input.id,
 				ctx.session.user.id,
+				"viewer",
 			);
-			return sanitizeFlowForClient(found);
+			const [owner] = await ctx.db
+				.select({ name: user.name, email: user.email })
+				.from(user)
+				.where(eq(user.id, access.flow.userId))
+				.limit(1);
+
+			return {
+				...sanitizeFlowForClient(access.flow),
+				accessCapability: access.capability,
+				owner: owner ?? null,
+			};
 		}),
 
 	validateGraph: protectedProcedure
@@ -955,7 +1033,7 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			await requireFlowOwnership(ctx.db, input.id, ctx.session.user.id);
+			await requireFlowAccess(ctx.db, input.id, ctx.session.user.id, "editor");
 			const nodes = Array.isArray(input.nodes)
 				? (input.nodes as FlowNode[])
 				: [];
@@ -969,6 +1047,7 @@ export const flowRouter = router({
 		.input(
 			z.object({
 				name: z.string().min(1),
+				tenantId: z.string().min(1).optional(),
 				description: z.string().optional(),
 				triggerType: z
 					.enum(["keyword", "any_message", "webhook", "schedule"])
@@ -977,6 +1056,8 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			const tenantId = input.tenantId ?? ctx.session.user.id;
+			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
 			await requireTriggerTagOwnership(
 				ctx.db,
 				input.triggerConfig,
@@ -988,6 +1069,7 @@ export const flowRouter = router({
 				.values({
 					id,
 					userId: ctx.session.user.id,
+					tenantId,
 					name: input.name,
 					description: input.description ?? null,
 					triggerType: (input.triggerType ?? "keyword") as
@@ -995,7 +1077,11 @@ export const flowRouter = router({
 						| "any_message"
 						| "webhook"
 						| "schedule",
-					triggerConfig: input.triggerConfig ?? null,
+					triggerConfig:
+						sanitizeTriggerConfigForStorage(
+							input.triggerType,
+							input.triggerConfig,
+						) ?? null,
 				})
 				.returning({
 					id: flow.id,
@@ -1004,6 +1090,41 @@ export const flowRouter = router({
 				});
 
 			return rows[0];
+		}),
+
+	rotateWebhookToken: protectedProcedure
+		.input(z.object({ id: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const found = await requireFlowOwner(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
+			if (found.triggerType !== "webhook") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Flow does not use a webhook trigger",
+				});
+			}
+
+			const token = generateWebhookToken();
+			await ctx.db
+				.insert(flowTriggerSecret)
+				.values({
+					flowId: found.id,
+					tokenHash: hashWebhookToken(token),
+					rotatedByUserId: ctx.session.user.id,
+				})
+				.onConflictDoUpdate({
+					target: flowTriggerSecret.flowId,
+					set: {
+						tokenHash: hashWebhookToken(token),
+						rotatedByUserId: ctx.session.user.id,
+						updatedAt: new Date(),
+					},
+				});
+
+			return { token };
 		}),
 
 	update: protectedProcedure
@@ -1022,17 +1143,30 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
+			const access = await requireFlowAccess(
 				ctx.db,
 				input.id,
 				ctx.session.user.id,
+				"editor",
 			);
-			if (input.deviceId) {
-				await requireDeviceOwnership(
-					ctx.db,
-					input.deviceId,
-					ctx.session.user.id,
-				);
+			const found = access.flow;
+			if (input.deviceId !== undefined) {
+				if (access.capability !== "owner") {
+					throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
+				}
+				if (input.deviceId) {
+					const targetDevice = await requireDeviceDeployAccess(
+						ctx.db,
+						input.deviceId,
+						ctx.session.user.id,
+					);
+					if (targetDevice.tenantId !== found.tenantId) {
+						throw new TRPCError({
+							code: "NOT_FOUND",
+							message: "Device not found",
+						});
+					}
+				}
 			}
 			const persistUpdates = async (db: typeof ctx.db) => {
 				const { id, ...updates } = input;
@@ -1057,6 +1191,7 @@ export const flowRouter = router({
 							db,
 							triggerPayload.triggerConfig,
 							ctx.session.user.id,
+							found.triggerConfig,
 						);
 						updates.triggerType = triggerPayload.triggerType;
 						updates.triggerConfig = triggerPayload.triggerConfig;
@@ -1091,7 +1226,7 @@ export const flowRouter = router({
 	delete: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireFlowOwnership(ctx.db, input.id, ctx.session.user.id);
+			await requireFlowOwner(ctx.db, input.id, ctx.session.user.id);
 			await ctx.db.delete(flow).where(eq(flow.id, input.id));
 			return { success: true };
 		}),
@@ -1104,7 +1239,7 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
+			const found = await requireFlowOwner(
 				ctx.db,
 				input.id,
 				ctx.session.user.id,
@@ -1132,11 +1267,17 @@ export const flowRouter = router({
 					});
 				}
 
-				const targetDevice = await requireDeviceOwnership(
+				const targetDevice = await requireDeviceDeployAccess(
 					ctx.db,
 					found.deviceId,
 					ctx.session.user.id,
 				);
+				if (targetDevice.tenantId !== found.tenantId) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Device not found",
+					});
+				}
 				const deviceStatus =
 					targetDevice.provider === "baileys"
 						? (connectionManager.getConnection(found.deviceId)?.status ??
@@ -1166,11 +1307,13 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
+			const access = await requireFlowAccess(
 				ctx.db,
 				input.id,
 				ctx.session.user.id,
+				"editor",
 			);
+			const found = access.flow;
 
 			const nodes = Array.isArray(found.nodes)
 				? (found.nodes as FlowNode[])
@@ -1183,11 +1326,14 @@ export const flowRouter = router({
 				throw new TRPCError({ code: "BAD_REQUEST", message: validationError });
 			}
 
-			const targetDevice = await requireDeviceOwnership(
+			const targetDevice = await requireDeviceDeployAccess(
 				ctx.db,
 				input.deviceId,
 				ctx.session.user.id,
 			);
+			if (targetDevice.tenantId !== found.tenantId) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
+			}
 
 			const deviceStatus =
 				targetDevice.provider === "baileys"
@@ -1208,12 +1354,6 @@ export const flowRouter = router({
 					message: "Flow needs a trigger node",
 				});
 			}
-			await requireTriggerTagOwnership(
-				ctx.db,
-				triggerPayload.triggerConfig,
-				ctx.session.user.id,
-			);
-
 			await ctx.db
 				.update(flow)
 				.set({
@@ -1230,11 +1370,13 @@ export const flowRouter = router({
 	duplicate: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const original = await requireFlowOwnership(
+			const access = await requireFlowAccess(
 				ctx.db,
 				input.id,
 				ctx.session.user.id,
+				"editor",
 			);
+			const original = access.flow;
 
 			const newId = crypto.randomUUID();
 			const rows = await ctx.db
@@ -1242,12 +1384,13 @@ export const flowRouter = router({
 				.values({
 					id: newId,
 					userId: ctx.session.user.id,
+					tenantId: original.tenantId,
+					deviceId: null,
 					name: `${original.name} (Copy)`,
 					description: original.description,
-					nodes: stripWebhookSecretsForCopy(original.nodes),
+					nodes: sanitizeFlowNodesForCopy(original.nodes),
 					edges: original.edges,
-					triggerType: original.triggerType,
-					triggerConfig: original.triggerConfig,
+					triggerConfig: null,
 					status: "draft",
 				})
 				.returning({

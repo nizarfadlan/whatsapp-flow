@@ -8,4 +8,5 @@ export * from "./job";
 export * from "./rbac";
 export * from "./settings";
 export * from "./sync";
+export * from "./tenant";
 export * from "./webhook";

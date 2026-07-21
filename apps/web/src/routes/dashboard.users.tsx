@@ -45,6 +45,7 @@ import {
 	Copy,
 	MoreHorizontal,
 	ShieldCheck,
+	Trash2,
 	UserCog,
 	UserPlus,
 	UsersRound,
@@ -52,6 +53,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
 export const Route = createFileRoute("/dashboard/users")({
@@ -80,6 +82,15 @@ type AdminUser = {
 	sessionCount: number;
 	accountCount: number;
 	isCurrentUser: boolean;
+};
+
+type TenantMember = {
+	id: string;
+	name: string;
+	email: string;
+	image?: string | null;
+	role: "owner" | "member";
+	createdAt: Date | string;
 };
 
 function getInitials(name?: string | null, email?: string | null) {
@@ -129,6 +140,8 @@ function actionDescription(action: UserAction | null) {
 
 function UsersPage() {
 	const trpc = useTRPC();
+	const { data: session } = authClient.useSession();
+	const tenantId = session?.user.id;
 	const [query, setQuery] = useState("");
 	const [role, setRole] = useState<RoleFilter>("all");
 	const [status, setStatus] = useState<StatusFilter>("all");
@@ -137,6 +150,11 @@ function UsersPage() {
 	const [inviteEmail, setInviteEmail] = useState("");
 	const [inviteRoleId, setInviteRoleId] = useState("");
 	const [inviteLink, setInviteLink] = useState<string | null>(null);
+	const [tenantInviteEmail, setTenantInviteEmail] = useState("");
+	const [tenantInviteLink, setTenantInviteLink] = useState<string | null>(null);
+	const [memberToRemove, setMemberToRemove] = useState<TenantMember | null>(
+		null,
+	);
 	const listInput = useMemo(
 		() => ({
 			query: query.trim() || undefined,
@@ -158,6 +176,14 @@ function UsersPage() {
 	const invitesQuery = useQuery({
 		...trpc.user.listInvites.queryOptions(),
 		enabled: canInvite,
+	});
+	const tenantMembersQuery = useQuery({
+		...trpc.tenant.listMembers.queryOptions({ tenantId: tenantId ?? "" }),
+		enabled: Boolean(tenantId),
+	});
+	const tenantInvitesQuery = useQuery({
+		...trpc.tenant.listInvites.queryOptions({ tenantId: tenantId ?? "" }),
+		enabled: Boolean(tenantId),
 	});
 	const createInvite = useMutation(
 		trpc.user.createInvite.mutationOptions({
@@ -183,6 +209,57 @@ function UsersPage() {
 				void invitesQuery.refetch();
 			},
 			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const createTenantInvite = useMutation(
+		trpc.tenant.createInvite.mutationOptions({
+			onSuccess: (result) => {
+				setTenantInviteLink(result.inviteLink);
+				setTenantInviteEmail("");
+				void tenantInvitesQuery.refetch();
+				if (result.emailSent) {
+					toast.success("Tenant invite created and email sent");
+				} else {
+					toast.warning(
+						result.emailError ?? "Tenant invite created; email was not sent",
+					);
+				}
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const revokeTenantInvite = useMutation(
+		trpc.tenant.revokeInvite.mutationOptions({
+			onSuccess: () => {
+				toast.success("Tenant invite revoked");
+				void tenantInvitesQuery.refetch();
+			},
+			onError: (error) => {
+				if (error.data?.code === "NOT_FOUND") {
+					toast.info("This tenant invite has already been revoked.");
+					void tenantInvitesQuery.refetch();
+					return;
+				}
+				toast.error(error.message);
+			},
+		}),
+	);
+	const removeTenantMember = useMutation(
+		trpc.tenant.removeMember.mutationOptions({
+			onSuccess: () => {
+				toast.success("Tenant member removed");
+				setMemberToRemove(null);
+				void tenantMembersQuery.refetch();
+			},
+			onError: (error) => {
+				if (error.data?.code === "NOT_FOUND") {
+					toast.info("This user is no longer a tenant member.");
+					setMemberToRemove(null);
+					void tenantMembersQuery.refetch();
+					return;
+				}
+				toast.error(error.message);
+			},
 		}),
 	);
 	const updateRole = useMutation(
@@ -236,6 +313,13 @@ function UsersPage() {
 	const users = usersQuery.data?.users ?? [];
 	const inviteRoles = rolesQuery.data ?? [];
 	const invites = invitesQuery.data ?? [];
+	const tenantMembers = tenantMembersQuery.data ?? [];
+	const pendingTenantInvites = (tenantInvitesQuery.data ?? []).filter(
+		(invite) => invite.status === "pending",
+	);
+	const isTenantOwner = Boolean(tenantId && tenantMembersQuery.data);
+	const tenantInviteDisabled =
+		createTenantInvite.isPending || !tenantInviteEmail.trim() || !tenantId;
 	const actionPending =
 		updateRole.isPending ||
 		revokeSessions.isPending ||
@@ -268,6 +352,20 @@ function UsersPage() {
 		if (!inviteLink) return;
 		await navigator.clipboard.writeText(inviteLink);
 		toast.success("Invite link copied");
+	};
+
+	const createTenantInviteLink = () => {
+		if (tenantInviteDisabled || !tenantId) return;
+		createTenantInvite.mutate({
+			tenantId,
+			email: tenantInviteEmail.trim(),
+		});
+	};
+
+	const copyTenantInviteLink = async () => {
+		if (!tenantInviteLink) return;
+		await navigator.clipboard.writeText(tenantInviteLink);
+		toast.success("Tenant invite link copied");
 	};
 
 	const openAction = (action: UserAction) => {
@@ -435,6 +533,176 @@ function UsersPage() {
 										))}
 									</TableBody>
 								</Table>
+							</div>
+						)}
+					</CardContent>
+				</Card>
+			)}
+
+			{isTenantOwner && (
+				<Card>
+					<CardHeader>
+						<CardTitle className="flex items-center gap-2">
+							<UsersRound className="size-5" />
+							Tenant members
+						</CardTitle>
+						<CardDescription>
+							Invite collaborators and manage membership for your personal
+							workspace. Only tenant owners can make these changes.
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						<div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+							<Input
+								type="email"
+								placeholder="teammate@example.com"
+								value={tenantInviteEmail}
+								onChange={(event) => setTenantInviteEmail(event.target.value)}
+							/>
+							<Button
+								type="button"
+								disabled={tenantInviteDisabled}
+								onClick={createTenantInviteLink}
+							>
+								{createTenantInvite.isPending ? "Creating..." : "Invite member"}
+							</Button>
+						</div>
+
+						{tenantInviteLink && (
+							<div className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+								<p className="break-all font-mono text-xs">
+									{tenantInviteLink}
+								</p>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={copyTenantInviteLink}
+								>
+									<Copy className="size-4" />
+									Copy
+								</Button>
+							</div>
+						)}
+
+						<div className="rounded-lg border">
+							<Table>
+								<TableHeader>
+									<TableRow>
+										<TableHead>Member</TableHead>
+										<TableHead>Role</TableHead>
+										<TableHead>Joined</TableHead>
+										<TableHead className="text-right">Actions</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{tenantMembers.map((member) => (
+										<TableRow key={member.id}>
+											<TableCell>
+												<div className="flex items-center gap-3">
+													<Avatar className="size-9 border bg-background">
+														<AvatarFallback>
+															{getInitials(member.name, member.email)}
+														</AvatarFallback>
+													</Avatar>
+													<div className="min-w-0">
+														<p className="truncate font-medium">
+															{member.name || "Unnamed user"}
+															{member.id === session?.user.id && (
+																<span className="ml-2 text-muted-foreground text-xs">
+																	You
+																</span>
+															)}
+														</p>
+														<p className="truncate text-muted-foreground text-xs">
+															{member.email}
+														</p>
+													</div>
+												</div>
+											</TableCell>
+											<TableCell>
+												<Badge
+													variant={
+														member.role === "owner" ? "default" : "secondary"
+													}
+												>
+													{member.role}
+												</Badge>
+											</TableCell>
+											<TableCell className="text-muted-foreground text-sm">
+												{new Date(member.createdAt).toLocaleDateString()}
+											</TableCell>
+											<TableCell className="text-right">
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													disabled={
+														member.id === session?.user.id ||
+														removeTenantMember.isPending
+													}
+													onClick={() => setMemberToRemove(member)}
+												>
+													<Trash2 className="size-4" />
+													Remove
+												</Button>
+											</TableCell>
+										</TableRow>
+									))}
+								</TableBody>
+							</Table>
+						</div>
+
+						{pendingTenantInvites.length > 0 && (
+							<div className="space-y-2">
+								<p className="font-medium text-sm">Pending invitations</p>
+								<div className="rounded-lg border">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead>Email</TableHead>
+												<TableHead>Sent</TableHead>
+												<TableHead>Expires</TableHead>
+												<TableHead className="text-right">Actions</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{pendingTenantInvites.map((invite) => (
+												<TableRow key={invite.id}>
+													<TableCell>{invite.email}</TableCell>
+													<TableCell>
+														{invite.emailSentAt ? (
+															<Badge variant="secondary">Sent</Badge>
+														) : invite.emailError ? (
+															<Badge variant="destructive">Failed</Badge>
+														) : (
+															<Badge variant="outline">Not sent</Badge>
+														)}
+													</TableCell>
+													<TableCell className="text-muted-foreground text-sm">
+														{new Date(invite.expiresAt).toLocaleDateString()}
+													</TableCell>
+													<TableCell className="text-right">
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={revokeTenantInvite.isPending}
+															onClick={() => {
+																if (!tenantId) return;
+																revokeTenantInvite.mutate({
+																	tenantId,
+																	inviteId: invite.id,
+																});
+															}}
+														>
+															Revoke
+														</Button>
+													</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+								</div>
 							</div>
 						)}
 					</CardContent>
@@ -695,6 +963,45 @@ function UsersPage() {
 					</ul>
 				</CardContent>
 			</Card>
+
+			<AlertDialog
+				open={Boolean(memberToRemove)}
+				onOpenChange={(open) => {
+					if (!open && !removeTenantMember.isPending) {
+						setMemberToRemove(null);
+					}
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Remove tenant member?</AlertDialogTitle>
+						<AlertDialogDescription>
+							{memberToRemove
+								? `${memberToRemove.name || memberToRemove.email} will lose access to this tenant's shared resources.`
+								: "This member will lose access to this tenant's shared resources."}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={removeTenantMember.isPending}>
+							Cancel
+						</AlertDialogCancel>
+						<AlertDialogAction
+							disabled={
+								removeTenantMember.isPending || !memberToRemove || !tenantId
+							}
+							onClick={() => {
+								if (!memberToRemove || !tenantId) return;
+								removeTenantMember.mutate({
+									tenantId,
+									userId: memberToRemove.id,
+								});
+							}}
+						>
+							{removeTenantMember.isPending ? "Removing..." : "Remove"}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 
 			<AlertDialog
 				open={Boolean(pendingAction)}

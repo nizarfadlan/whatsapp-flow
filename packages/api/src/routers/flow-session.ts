@@ -1,6 +1,5 @@
 import { TRPCError } from "@trpc/server";
 import {
-	flow,
 	flowExecutionEvent,
 	flowExecutionLog,
 	flowSession,
@@ -8,6 +7,10 @@ import {
 import { connectionManager } from "@whatsapp-flow/whatsapp";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
+import {
+	requireFlowAccess,
+	requireFlowOwner,
+} from "../authorization/tenant-access";
 import {
 	emitFlowSessionUpdated,
 	recordFlowExecutionEvent,
@@ -41,19 +44,14 @@ export const flowSessionRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const owned = await ctx.db
-				.select({ id: flow.id })
-				.from(flow)
-				.where(
-					and(eq(flow.id, input.flowId), eq(flow.userId, ctx.session.user.id)),
-				)
-				.limit(1);
+			const access = await requireFlowAccess(
+				ctx.db,
+				input.flowId,
+				ctx.session.user.id,
+				"viewer",
+			);
 
-			if (!owned[0]) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
-			}
-
-			const conditions = [eq(flowSession.flowId, input.flowId)];
+			const conditions = [eq(flowSession.flowId, access.flow.id)];
 			if (input.status === "active") {
 				conditions.push(inArray(flowSession.status, [...activeStatuses]));
 			}
@@ -74,14 +72,26 @@ export const flowSessionRouter = router({
 	get: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
+			const target = await ctx.db
+				.select({ flowId: flowSession.flowId })
+				.from(flowSession)
+				.where(eq(flowSession.id, input.id))
+				.limit(1);
+			if (!target[0]) return null;
+
+			const access = await requireFlowAccess(
+				ctx.db,
+				target[0].flowId,
+				ctx.session.user.id,
+				"viewer",
+			);
 			const rows = await ctx.db
 				.select({ session: flowSession })
 				.from(flowSession)
-				.innerJoin(flow, eq(flowSession.flowId, flow.id))
 				.where(
 					and(
 						eq(flowSession.id, input.id),
-						eq(flow.userId, ctx.session.user.id),
+						eq(flowSession.flowId, access.flow.id),
 					),
 				)
 				.limit(1);
@@ -93,14 +103,31 @@ export const flowSessionRouter = router({
 	timeline: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
+			const target = await ctx.db
+				.select({ flowId: flowSession.flowId })
+				.from(flowSession)
+				.where(eq(flowSession.id, input.id))
+				.limit(1);
+			if (!target[0]) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Session not found",
+				});
+			}
+
+			const access = await requireFlowAccess(
+				ctx.db,
+				target[0].flowId,
+				ctx.session.user.id,
+				"viewer",
+			);
 			const rows = await ctx.db
 				.select({ session: flowSession })
 				.from(flowSession)
-				.innerJoin(flow, eq(flowSession.flowId, flow.id))
 				.where(
 					and(
 						eq(flowSession.id, input.id),
-						eq(flow.userId, ctx.session.user.id),
+						eq(flowSession.flowId, access.flow.id),
 					),
 				)
 				.limit(1);
@@ -116,21 +143,42 @@ export const flowSessionRouter = router({
 			return ctx.db
 				.select()
 				.from(flowExecutionEvent)
-				.where(eq(flowExecutionEvent.executionLogId, session.executionLogId))
+				.where(
+					and(
+						eq(flowExecutionEvent.executionLogId, session.executionLogId),
+						eq(flowExecutionEvent.flowId, access.flow.id),
+					),
+				)
 				.orderBy(asc(flowExecutionEvent.createdAt));
 		}),
 
 	cancel: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
+			const target = await ctx.db
+				.select({ flowId: flowSession.flowId })
+				.from(flowSession)
+				.where(eq(flowSession.id, input.id))
+				.limit(1);
+			if (!target[0]) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Session not found",
+				});
+			}
+
+			const authorizedFlow = await requireFlowOwner(
+				ctx.db,
+				target[0].flowId,
+				ctx.session.user.id,
+			);
 			const rows = await ctx.db
 				.select({ session: flowSession })
 				.from(flowSession)
-				.innerJoin(flow, eq(flowSession.flowId, flow.id))
 				.where(
 					and(
 						eq(flowSession.id, input.id),
-						eq(flow.userId, ctx.session.user.id),
+						eq(flowSession.flowId, authorizedFlow.id),
 					),
 				)
 				.limit(1);
@@ -163,6 +211,7 @@ export const flowSessionRouter = router({
 				.where(
 					and(
 						eq(flowSession.id, input.id),
+						eq(flowSession.flowId, authorizedFlow.id),
 						inArray(flowSession.status, [...activeStatuses]),
 					),
 				)

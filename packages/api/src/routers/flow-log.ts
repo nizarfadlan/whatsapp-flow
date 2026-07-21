@@ -9,6 +9,7 @@ import {
 import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { requireFlowAccess } from "../authorization/tenant-access";
 import { protectedProcedure, router } from "../index";
 
 function buildLogSelect() {
@@ -47,9 +48,17 @@ export const flowLogRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const conditions = [eq(flow.userId, ctx.session.user.id)];
-			if (input.flowId)
-				conditions.push(eq(flowExecutionLog.flowId, input.flowId));
+			const accessibleFlow = input.flowId
+				? await requireFlowAccess(
+						ctx.db,
+						input.flowId,
+						ctx.session.user.id,
+						"viewer",
+					)
+				: null;
+			const conditions = accessibleFlow
+				? [eq(flowExecutionLog.flowId, accessibleFlow.flow.id)]
+				: [eq(flow.userId, ctx.session.user.id)];
 			if (input.deviceId)
 				conditions.push(eq(flowExecutionLog.deviceId, input.deviceId));
 
@@ -85,6 +94,19 @@ export const flowLogRouter = router({
 	getById: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
+			const target = await ctx.db
+				.select({ flowId: flowExecutionLog.flowId })
+				.from(flowExecutionLog)
+				.where(eq(flowExecutionLog.id, input.id))
+				.limit(1);
+			if (!target[0]) return null;
+
+			const access = await requireFlowAccess(
+				ctx.db,
+				target[0].flowId,
+				ctx.session.user.id,
+				"viewer",
+			);
 			const rows = await ctx.db
 				.select({
 					...buildLogSelect(),
@@ -115,7 +137,7 @@ export const flowLogRouter = router({
 				.where(
 					and(
 						eq(flowExecutionLog.id, input.id),
-						eq(flow.userId, ctx.session.user.id),
+						eq(flowExecutionLog.flowId, access.flow.id),
 					),
 				)
 				.limit(1);
@@ -126,24 +148,40 @@ export const flowLogRouter = router({
 	timeline: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const owned = await ctx.db
+			const target = await ctx.db
+				.select({ flowId: flowExecutionLog.flowId })
+				.from(flowExecutionLog)
+				.where(eq(flowExecutionLog.id, input.id))
+				.limit(1);
+			if (!target[0]) return [];
+
+			const access = await requireFlowAccess(
+				ctx.db,
+				target[0].flowId,
+				ctx.session.user.id,
+				"viewer",
+			);
+			const authorizedLog = await ctx.db
 				.select({ id: flowExecutionLog.id })
 				.from(flowExecutionLog)
-				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
 				.where(
 					and(
 						eq(flowExecutionLog.id, input.id),
-						eq(flow.userId, ctx.session.user.id),
+						eq(flowExecutionLog.flowId, access.flow.id),
 					),
 				)
 				.limit(1);
-
-			if (!owned[0]) return [];
+			if (!authorizedLog[0]) return [];
 
 			return ctx.db
 				.select()
 				.from(flowExecutionEvent)
-				.where(eq(flowExecutionEvent.executionLogId, input.id))
+				.where(
+					and(
+						eq(flowExecutionEvent.executionLogId, authorizedLog[0].id),
+						eq(flowExecutionEvent.flowId, access.flow.id),
+					),
+				)
 				.orderBy(asc(flowExecutionEvent.createdAt));
 		}),
 });

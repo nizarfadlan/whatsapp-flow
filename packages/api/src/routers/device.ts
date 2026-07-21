@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { device } from "@whatsapp-flow/db/schema/device";
+import { device, deviceAccessGrant } from "@whatsapp-flow/db/schema/device";
+import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
 import { env } from "@whatsapp-flow/env/server";
 import {
 	configureMetaDevice,
@@ -8,9 +9,13 @@ import {
 	connectionManager,
 	getMetaConfigSummary,
 } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
+import {
+	requireFlowAccess,
+	requireTenantMembership,
+} from "../authorization/tenant-access";
 import {
 	listDeviceResourceSyncRuns,
 	startDeviceResourceSync,
@@ -51,12 +56,19 @@ async function requireDeviceOwnership(
 	userId: string,
 ) {
 	const rows = await db
-		.select()
+		.select({ device })
 		.from(device)
+		.innerJoin(
+			tenantMember,
+			and(
+				eq(tenantMember.tenantId, device.tenantId),
+				eq(tenantMember.userId, userId),
+			),
+		)
 		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
 		.limit(1);
 
-	const found = rows[0];
+	const found = rows[0]?.device;
 	if (!found) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 	}
@@ -184,6 +196,9 @@ export const deviceRouter = router({
 				id: device.id,
 				name: device.name,
 				provider: device.provider,
+				tenantId: device.tenantId,
+				ownerUserId: device.userId,
+				isOwner: sql<boolean>`${device.userId} = ${ctx.session.user.id}`,
 				externalId: device.externalId,
 				phoneNumber: device.phoneNumber,
 				businessAccountId: device.businessAccountId,
@@ -197,24 +212,81 @@ export const deviceRouter = router({
 				updatedAt: device.updatedAt,
 			})
 			.from(device)
+			.innerJoin(
+				tenantMember,
+				and(
+					eq(tenantMember.tenantId, device.tenantId),
+					eq(tenantMember.userId, ctx.session.user.id),
+				),
+			)
 			.where(eq(device.userId, ctx.session.user.id))
 			.orderBy(desc(device.updatedAt));
 	}),
+
+	listForDeploy: protectedProcedure
+		.input(z.object({ flowId: z.string().min(1) }))
+		.query(async ({ ctx, input }) => {
+			const { flow: targetFlow } = await requireFlowAccess(
+				ctx.db,
+				input.flowId,
+				ctx.session.user.id,
+				"editor",
+			);
+
+			return ctx.db
+				.select({
+					id: device.id,
+					name: device.name,
+					provider: device.provider,
+					status: device.status,
+				})
+				.from(device)
+				.innerJoin(
+					tenantMember,
+					and(
+						eq(tenantMember.tenantId, device.tenantId),
+						eq(tenantMember.userId, ctx.session.user.id),
+					),
+				)
+				.leftJoin(
+					deviceAccessGrant,
+					and(
+						eq(deviceAccessGrant.deviceId, device.id),
+						eq(deviceAccessGrant.tenantId, device.tenantId),
+						eq(deviceAccessGrant.userId, ctx.session.user.id),
+						eq(deviceAccessGrant.capability, "deploy"),
+					),
+				)
+				.where(
+					and(
+						eq(device.tenantId, targetFlow.tenantId),
+						or(
+							eq(device.userId, ctx.session.user.id),
+							eq(deviceAccessGrant.userId, ctx.session.user.id),
+						),
+					),
+				)
+				.orderBy(desc(device.updatedAt));
+		}),
 
 	create: protectedProcedure
 		.input(
 			z.object({
 				name: z.string().min(1),
+				tenantId: z.string().min(1).optional(),
 				provider: z.enum(["baileys", "meta_cloud"]).default("baileys"),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			const tenantId = input.tenantId ?? ctx.session.user.id;
+			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
 			const id = crypto.randomUUID();
 			const rows = await ctx.db
 				.insert(device)
 				.values({
 					id,
 					userId: ctx.session.user.id,
+					tenantId,
 					name: input.name,
 					provider: input.provider,
 				})
@@ -248,15 +320,19 @@ export const deviceRouter = router({
 		.input(
 			metaConfigInput.extend({
 				name: requiredTrimmedString,
+				tenantId: z.string().min(1).optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
 			requireInitialMetaCredentials(input);
+			const tenantId = input.tenantId ?? ctx.session.user.id;
+			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
 
 			const id = crypto.randomUUID();
 			await ctx.db.insert(device).values({
 				id,
 				userId: ctx.session.user.id,
+				tenantId,
 				name: input.name,
 				provider: "meta_cloud",
 			});
@@ -307,15 +383,22 @@ export const deviceRouter = router({
 	})),
 
 	createMetaEmbedded: protectedProcedure
-		.input(metaEmbeddedSignupInput)
+		.input(
+			metaEmbeddedSignupInput.extend({
+				tenantId: z.string().min(1).optional(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			requireValidEmbeddedSignupState(input.state, ctx.session.user.id);
 			requireAllowedEmbeddedRedirectUri(input.redirectUri);
+			const tenantId = input.tenantId ?? ctx.session.user.id;
+			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
 
 			const id = crypto.randomUUID();
 			await ctx.db.insert(device).values({
 				id,
 				userId: ctx.session.user.id,
+				tenantId,
 				name: input.name,
 				provider: "meta_cloud",
 			});

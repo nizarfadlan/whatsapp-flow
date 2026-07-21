@@ -44,7 +44,7 @@ COPY --from=deps --chown=bun:bun /app/packages/db/node_modules ./packages/db/nod
 COPY --chown=bun:bun . .
 RUN mkdir -p /app/.turbo && chown bun:bun /app/.turbo
 USER bun
-CMD ["bun", "run", "db:migrate"]
+CMD ["bun", "--cwd", "packages/db", "run", "db:migrate"]
 
 FROM base AS server
 ENV NODE_ENV=production

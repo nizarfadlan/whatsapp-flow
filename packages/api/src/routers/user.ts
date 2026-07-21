@@ -122,14 +122,10 @@ export const userRouter = router({
 		.query(async ({ ctx, input }) => {
 			const [invite] = await ctx.db
 				.select({
-					id: userInvitation.id,
-					email: userInvitation.email,
 					status: userInvitation.status,
 					expiresAt: userInvitation.expiresAt,
-					roleName: role.name,
 				})
 				.from(userInvitation)
-				.innerJoin(role, eq(userInvitation.roleId, role.id))
 				.where(eq(userInvitation.tokenHash, hashInviteToken(input.token)))
 				.limit(1);
 
@@ -143,11 +139,7 @@ export const userRouter = router({
 				});
 			}
 
-			return {
-				email: invite.email,
-				roleName: invite.roleName,
-				expiresAt: invite.expiresAt,
-			};
+			return { valid: true };
 		}),
 
 	acceptInvite: protectedProcedure

@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
 import { Label } from "@whatsapp-flow/ui/components/label";
-import { useEffect } from "react";
 import { toast } from "sonner";
 import z from "zod";
 
@@ -25,11 +24,23 @@ export default function SignUpForm({
 		from: "/",
 	});
 	const { isPending } = authClient.useSession();
-	const inviteQuery = useQuery({
+	const userInviteQuery = useQuery({
 		...trpc.user.getInvite.queryOptions({ token: inviteToken ?? "" }),
 		enabled: Boolean(inviteToken),
 	});
-	const acceptInvite = useMutation(trpc.user.acceptInvite.mutationOptions());
+	const tenantInviteQuery = useQuery({
+		...trpc.tenant.getInvite.queryOptions({ token: inviteToken ?? "" }),
+		enabled: Boolean(inviteToken),
+	});
+	const acceptUserInvite = useMutation(
+		trpc.user.acceptInvite.mutationOptions(),
+	);
+	const acceptTenantInvite = useMutation(
+		trpc.tenant.acceptInvite.mutationOptions(),
+	);
+	const hasValidInvite = Boolean(
+		tenantInviteQuery.data?.valid ?? userInviteQuery.data?.valid,
+	);
 
 	const form = useForm({
 		defaultValues: {
@@ -51,7 +62,11 @@ export default function SignUpForm({
 				{
 					onSuccess: async () => {
 						if (inviteToken) {
-							await acceptInvite.mutateAsync({ token: inviteToken });
+							if (tenantInviteQuery.data) {
+								await acceptTenantInvite.mutateAsync({ token: inviteToken });
+							} else {
+								await acceptUserInvite.mutateAsync({ token: inviteToken });
+							}
 						}
 						navigate({
 							to: "/dashboard",
@@ -83,13 +98,7 @@ export default function SignUpForm({
 		},
 	});
 
-	useEffect(() => {
-		if (inviteQuery.data?.email) {
-			form.setFieldValue("email", inviteQuery.data.email);
-		}
-	}, [form, inviteQuery.data?.email]);
-
-	const inviteReady = !inviteToken || Boolean(inviteQuery.data);
+	const inviteReady = !inviteToken || hasValidInvite;
 
 	if (isPending) {
 		return <Loader />;
@@ -107,20 +116,17 @@ export default function SignUpForm({
 			>
 				{inviteToken && (
 					<div className="rounded-lg border bg-muted/50 p-3 text-sm">
-						{inviteQuery.isPending ? (
+						{userInviteQuery.isPending || tenantInviteQuery.isPending ? (
 							<p className="text-muted-foreground">Loading invite...</p>
-						) : inviteQuery.data ? (
+						) : hasValidInvite ? (
 							<div className="space-y-1">
 								<p className="font-medium">You are accepting an invite.</p>
 								<p className="text-muted-foreground">
-									{inviteQuery.data.email} will join as{" "}
-									{inviteQuery.data.roleName}.
+									Sign up with the email address that received the invite.
 								</p>
 							</div>
 						) : (
-							<p className="text-destructive">
-								{inviteQuery.error?.message ?? "Invite is not valid."}
-							</p>
+							<p className="text-destructive">Invite is not valid.</p>
 						)}
 					</div>
 				)}
@@ -158,7 +164,6 @@ export default function SignUpForm({
 									name={field.name}
 									type="email"
 									autoComplete="email"
-									readOnly={Boolean(inviteToken)}
 									value={field.state.value}
 									onBlur={field.handleBlur}
 									onChange={(e) => field.handleChange(e.target.value)}

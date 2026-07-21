@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { trpcServer } from "@hono/trpc-server";
 import { createContext } from "@whatsapp-flow/api/context";
 import { processDeviceResourceSyncJob } from "@whatsapp-flow/api/engine/device-resource-sync";
@@ -36,7 +36,11 @@ import { auth } from "@whatsapp-flow/auth";
 import { createDb } from "@whatsapp-flow/db";
 import { user } from "@whatsapp-flow/db/schema/auth";
 import { channel, chatGroup } from "@whatsapp-flow/db/schema/contact";
-import { device, flow } from "@whatsapp-flow/db/schema/device";
+import {
+	device,
+	flow,
+	flowTriggerSecret,
+} from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { env } from "@whatsapp-flow/env/server";
 import {
@@ -316,16 +320,11 @@ app.post("/api/whatsapp/meta/webhook", async (c) => {
 app.post("/api/flows/:flowId/webhook", async (c) => {
 	const flowId = c.req.param("flowId");
 	const token = c.req.query("token") ?? c.req.header("x-webhook-token") ?? "";
-	const body = await c.req.json().catch(() => null);
-	const contactNumber = normalizeWebhookContact(body);
-	if (!contactNumber) {
-		return c.json({ error: "contactNumber is required" }, 400);
-	}
-
 	const db = createDb();
-	const [flowRow] = await db
-		.select()
+	const [webhookFlow] = await db
+		.select({ flow, tokenHash: flowTriggerSecret.tokenHash })
 		.from(flow)
+		.innerJoin(flowTriggerSecret, eq(flowTriggerSecret.flowId, flow.id))
 		.where(
 			and(
 				eq(flow.id, flowId),
@@ -335,14 +334,17 @@ app.post("/api/flows/:flowId/webhook", async (c) => {
 		)
 		.limit(1);
 
-	if (!flowRow) {
-		return c.json({ error: "Webhook flow not found" }, 404);
+	if (!webhookFlow || !isValidWebhookToken(webhookFlow.tokenHash, token)) {
+		return c.json({ error: "Unauthorized" }, 401);
 	}
 
-	if (!isValidWebhookToken(flowRow.triggerConfig, token)) {
-		return c.json({ error: "Invalid webhook token" }, 401);
+	const body = await c.req.json().catch(() => null);
+	const contactNumber = normalizeWebhookContact(body);
+	if (!contactNumber) {
+		return c.json({ error: "contactNumber is required" }, 400);
 	}
 
+	const flowRow = webhookFlow.flow;
 	void executeFlow(flowRow, contactNumber, stringifyWebhookText(body), {
 		triggerSource: "webhook",
 	})
@@ -909,12 +911,9 @@ function safeEqual(value: string, expected: string) {
 	return timingSafeEqual(valueBuffer, expectedBuffer);
 }
 
-function isValidWebhookToken(triggerConfig: unknown, token: string) {
-	if (!triggerConfig || typeof triggerConfig !== "object") return false;
-	if (!("webhookToken" in triggerConfig)) return false;
-	const expected = triggerConfig.webhookToken;
-	if (typeof expected !== "string" || expected.length === 0) return false;
-	return safeEqual(token, expected);
+function isValidWebhookToken(tokenHash: string, token: string) {
+	if (!tokenHash || !token) return false;
+	return safeEqual(createHash("sha256").update(token).digest("hex"), tokenHash);
 }
 
 async function startBackgroundServices() {
