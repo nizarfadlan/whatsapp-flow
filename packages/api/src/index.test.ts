@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TRPCError } from "@trpc/server";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { makeCurrentUser, makeSession } from "./test/helpers";
 
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
@@ -10,12 +11,34 @@ process.env.ADMIN_EMAILS = "bootstrap@example.com";
 process.env.META_WEBHOOK_VERIFY_TOKEN ??= "verify-token";
 process.env.NODE_ENV = "test";
 
-const { adminProcedure, protectedProcedure, router } = await import("./index");
+const { adminProcedure, protectedProcedure, publicProcedure, router } =
+	await import("./index");
 
 const testRouter = router({
 	protected: protectedProcedure.query(({ ctx }) => ctx.currentUser),
 	admin: adminProcedure.query(({ ctx }) => ctx.currentUser),
 });
+
+const errorRouter = router({
+	internal: publicProcedure.query(() => {
+		const error = Object.assign(new Error("select * from private_table"), {
+			code: "42P01",
+		});
+		throw error;
+	}),
+	forbidden: publicProcedure.query(() => {
+		throw new TRPCError({ code: "FORBIDDEN", message: "Permission required" });
+	}),
+});
+
+function callErrorRouter(path: string) {
+	return fetchRequestHandler({
+		endpoint: "/trpc",
+		req: new Request(`http://localhost/trpc/${path}`),
+		router: errorRouter,
+		createContext: () => ({}) as never,
+	});
+}
 
 function createDbForCurrentUser(
 	currentUser: unknown,
@@ -67,6 +90,42 @@ async function expectProcedureError(
 	}
 	throw new Error(`Expected ${code}`);
 }
+
+describe("tRPC error formatting", () => {
+	test("hides unexpected database errors from clients", async () => {
+		const response = await callErrorRouter("internal");
+		const body = await response.json();
+		const serialized = JSON.stringify(body);
+
+		expect(response.status).toBe(500);
+		expect(body).toMatchObject({
+			error: {
+				message: "Internal server error",
+				data: {
+					code: "INTERNAL_SERVER_ERROR",
+					httpStatus: 500,
+					path: "internal",
+				},
+			},
+		});
+		expect(serialized).not.toContain("private_table");
+		expect(serialized).not.toContain("42P01");
+		expect(body.error.data).not.toHaveProperty("stack");
+	});
+
+	test("preserves expected tRPC errors", async () => {
+		const response = await callErrorRouter("forbidden");
+		const body = await response.json();
+
+		expect(response.status).toBe(403);
+		expect(body).toMatchObject({
+			error: {
+				message: "Permission required",
+				data: { code: "FORBIDDEN", httpStatus: 403, path: "forbidden" },
+			},
+		});
+	});
+});
 
 describe("protectedProcedure", () => {
 	test("rejects unauthenticated users", async () => {

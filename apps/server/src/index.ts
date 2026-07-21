@@ -128,6 +128,24 @@ app.use(
 		createContext: (_opts, context) => {
 			return createContext({ context });
 		},
+		onError({ error, path, type }) {
+			if (error.code !== "INTERNAL_SERVER_ERROR") return;
+
+			const cause = error.cause instanceof Error ? error.cause : undefined;
+			const causeCode = cause && "code" in cause ? cause.code : undefined;
+
+			apiLogger.error("trpc.request.failed", {
+				path,
+				type,
+				code: error.code,
+				errorName: cause?.name ?? "UnknownError",
+				errorMessage: cause?.message ?? "Unknown error",
+				causeCode:
+					typeof causeCode === "string" || typeof causeCode === "number"
+						? causeCode
+						: undefined,
+			});
+		},
 	}),
 );
 

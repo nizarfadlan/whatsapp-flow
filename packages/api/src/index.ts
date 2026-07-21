@@ -5,7 +5,18 @@ import { eq } from "drizzle-orm";
 import type { Context } from "./context";
 import { hasPermission, type PermissionKey } from "./rbac";
 
-export const t = initTRPC.context<Context>().create();
+export const t = initTRPC.context<Context>().create({
+	errorFormatter({ shape, error }) {
+		if (error.code !== "INTERNAL_SERVER_ERROR") return shape;
+
+		const { stack: _stack, ...data } = shape.data;
+		return {
+			...shape,
+			message: "Internal server error",
+			data,
+		};
+	},
+});
 
 export const router = t.router;
 
