@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import {
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -10,6 +11,7 @@ import {
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
+import { tenant, tenantMember } from "./tenant";
 import { webhookEndpoint } from "./webhook";
 
 export const deviceStatusEnum = pgEnum("device_status", [
@@ -31,6 +33,9 @@ export const device = pgTable(
 		userId: text("user_id")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
+		tenantId: text("tenant_id")
+			.notNull()
+			.references(() => tenant.id, { onDelete: "restrict" }),
 		name: text("name").notNull(),
 		provider: deviceProviderEnum("provider").default("baileys").notNull(),
 		externalId: text("external_id"),
@@ -53,6 +58,8 @@ export const device = pgTable(
 	},
 	(table) => [
 		index("device_userId_idx").on(table.userId),
+		index("device_tenantId_idx").on(table.tenantId),
+		uniqueIndex("device_id_tenant_unique_idx").on(table.id, table.tenantId),
 		index("device_provider_external_idx").on(table.provider, table.externalId),
 		index("device_user_provider_idx").on(table.userId, table.provider),
 		uniqueIndex("device_provider_external_unique_idx")
@@ -86,6 +93,57 @@ export const deviceProviderSecret = pgTable(
 	],
 );
 
+export const deviceAccessCapabilityEnum = pgEnum("device_access_capability", [
+	"deploy",
+]);
+
+export const deviceAccessGrant = pgTable(
+	"device_access_grant",
+	{
+		id: text("id").primaryKey(),
+		deviceId: text("device_id")
+			.notNull()
+			.references(() => device.id, { onDelete: "cascade" }),
+		tenantId: text("tenant_id")
+			.notNull()
+			.references(() => tenant.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		capability: deviceAccessCapabilityEnum("capability")
+			.default("deploy")
+			.notNull(),
+		grantedByUserId: text("granted_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("device_access_grant_device_user_unique_idx").on(
+			table.deviceId,
+			table.userId,
+		),
+		index("device_access_grant_user_tenant_idx").on(
+			table.userId,
+			table.tenantId,
+		),
+		foreignKey({
+			name: "device_access_grant_device_tenant_fk",
+			columns: [table.deviceId, table.tenantId],
+			foreignColumns: [device.id, device.tenantId],
+		}).onDelete("cascade"),
+		foreignKey({
+			name: "device_access_grant_member_fk",
+			columns: [table.tenantId, table.userId],
+			foreignColumns: [tenantMember.tenantId, tenantMember.userId],
+		}).onDelete("cascade"),
+	],
+);
+
 export const triggerTypeEnum = pgEnum("trigger_type", [
 	"keyword",
 	"any_message",
@@ -106,6 +164,9 @@ export const flow = pgTable(
 		userId: text("user_id")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
+		tenantId: text("tenant_id")
+			.notNull()
+			.references(() => tenant.id, { onDelete: "restrict" }),
 		deviceId: text("device_id").references(() => device.id, {
 			onDelete: "set null",
 		}),
@@ -124,6 +185,8 @@ export const flow = pgTable(
 	},
 	(table) => [
 		index("flow_userId_idx").on(table.userId),
+		index("flow_tenant_updatedAt_idx").on(table.tenantId, table.updatedAt),
+		uniqueIndex("flow_id_tenant_unique_idx").on(table.id, table.tenantId),
 		index("flow_deviceId_idx").on(table.deviceId),
 	],
 );
@@ -155,10 +218,76 @@ export const flowNodeSecret = pgTable(
 	],
 );
 
+export const flowAccessCapabilityEnum = pgEnum("flow_access_capability", [
+	"viewer",
+	"editor",
+]);
+
+export const flowAccessGrant = pgTable(
+	"flow_access_grant",
+	{
+		id: text("id").primaryKey(),
+		flowId: text("flow_id")
+			.notNull()
+			.references(() => flow.id, { onDelete: "cascade" }),
+		tenantId: text("tenant_id")
+			.notNull()
+			.references(() => tenant.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		capability: flowAccessCapabilityEnum("capability").notNull(),
+		grantedByUserId: text("granted_by_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at")
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("flow_access_grant_flow_user_unique_idx").on(
+			table.flowId,
+			table.userId,
+		),
+		index("flow_access_grant_user_tenant_idx").on(table.userId, table.tenantId),
+		foreignKey({
+			name: "flow_access_grant_flow_tenant_fk",
+			columns: [table.flowId, table.tenantId],
+			foreignColumns: [flow.id, flow.tenantId],
+		}).onDelete("cascade"),
+		foreignKey({
+			name: "flow_access_grant_member_fk",
+			columns: [table.tenantId, table.userId],
+			foreignColumns: [tenantMember.tenantId, tenantMember.userId],
+		}).onDelete("cascade"),
+	],
+);
+
+export const flowTriggerSecret = pgTable("flow_trigger_secret", {
+	flowId: text("flow_id")
+		.primaryKey()
+		.references(() => flow.id, { onDelete: "cascade" }),
+	tokenHash: text("token_hash").notNull(),
+	rotatedByUserId: text("rotated_by_user_id").references(() => user.id, {
+		onDelete: "set null",
+	}),
+	createdAt: timestamp("created_at").defaultNow().notNull(),
+	updatedAt: timestamp("updated_at")
+		.defaultNow()
+		.$onUpdate(() => new Date())
+		.notNull(),
+});
+
 export const flowRelations = relations(flow, ({ one, many }) => ({
 	user: one(user, {
 		fields: [flow.userId],
 		references: [user.id],
+	}),
+	tenant: one(tenant, {
+		fields: [flow.tenantId],
+		references: [tenant.id],
 	}),
 	device: one(device, {
 		fields: [flow.deviceId],
@@ -167,6 +296,7 @@ export const flowRelations = relations(flow, ({ one, many }) => ({
 	logs: many(flowExecutionLog),
 	sessions: many(flowSession),
 	secrets: many(flowNodeSecret),
+	accessGrants: many(flowAccessGrant),
 }));
 
 export const executionStatusEnum = pgEnum("execution_status", [
@@ -396,9 +526,14 @@ export const deviceRelations = relations(device, ({ one, many }) => ({
 		fields: [device.userId],
 		references: [user.id],
 	}),
+	tenant: one(tenant, {
+		fields: [device.tenantId],
+		references: [tenant.id],
+	}),
 	flows: many(flow),
 	sessions: many(flowSession),
 	providerSecrets: many(deviceProviderSecret),
+	accessGrants: many(deviceAccessGrant),
 }));
 
 export const deviceProviderSecretRelations = relations(
@@ -407,6 +542,50 @@ export const deviceProviderSecretRelations = relations(
 		device: one(device, {
 			fields: [deviceProviderSecret.deviceId],
 			references: [device.id],
+		}),
+	}),
+);
+
+export const deviceAccessGrantRelations = relations(
+	deviceAccessGrant,
+	({ one }) => ({
+		device: one(device, {
+			fields: [deviceAccessGrant.deviceId],
+			references: [device.id],
+		}),
+		tenant: one(tenant, {
+			fields: [deviceAccessGrant.tenantId],
+			references: [tenant.id],
+		}),
+		user: one(user, {
+			fields: [deviceAccessGrant.userId],
+			references: [user.id],
+		}),
+		grantedBy: one(user, {
+			fields: [deviceAccessGrant.grantedByUserId],
+			references: [user.id],
+		}),
+	}),
+);
+
+export const flowAccessGrantRelations = relations(
+	flowAccessGrant,
+	({ one }) => ({
+		flow: one(flow, {
+			fields: [flowAccessGrant.flowId],
+			references: [flow.id],
+		}),
+		tenant: one(tenant, {
+			fields: [flowAccessGrant.tenantId],
+			references: [tenant.id],
+		}),
+		user: one(user, {
+			fields: [flowAccessGrant.userId],
+			references: [user.id],
+		}),
+		grantedBy: one(user, {
+			fields: [flowAccessGrant.grantedByUserId],
+			references: [user.id],
 		}),
 	}),
 );

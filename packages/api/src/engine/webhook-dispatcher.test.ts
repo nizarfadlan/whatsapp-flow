@@ -44,6 +44,7 @@ function webhookEndpoint(
 ): WebhookEndpoint {
 	return {
 		id: "endpoint_1",
+		tenantId: "tenant_1",
 		subscribedEvents: ["*"],
 		deviceIds: [],
 		flowIds: [],
@@ -62,6 +63,7 @@ describe("lazy webhook payload evaluation", () => {
 		const rows = await buildWebhookDeliveryRows(
 			{
 				userId: "user_1",
+				tenantId: "tenant_1",
 				deviceId: "device_1",
 				eventType: "message.received",
 				payload: payloadFactory,
@@ -80,6 +82,7 @@ describe("lazy webhook payload evaluation", () => {
 		const rows = await buildWebhookDeliveryRows(
 			{
 				userId: "user_1",
+				tenantId: "tenant_1",
 				deviceId: "device_1",
 				eventType: "message.received",
 				payload: payloadFactory,
@@ -105,6 +108,41 @@ describe("lazy webhook payload evaluation", () => {
 				endpointId: "endpoint_2",
 				eventType: "message.received",
 				payload: { message: "hello" },
+				status: "pending",
+			},
+		]);
+	});
+
+	test("does not deliver a tenant event to the same user's other tenant", async () => {
+		const rows = await buildWebhookDeliveryRows(
+			{
+				userId: "user_1",
+				tenantId: "tenant_a",
+				deviceId: "device_1",
+				eventType: "message.received",
+				payload: { message: "tenant-scoped" },
+			},
+			[
+				webhookEndpoint({
+					id: "endpoint_tenant_a",
+					tenantId: "tenant_a",
+					userId: "user_1",
+				}),
+				webhookEndpoint({
+					id: "endpoint_tenant_b",
+					tenantId: "tenant_b",
+					userId: "user_1",
+				}),
+			],
+			"delivery",
+		);
+
+		expect(rows).toEqual([
+			{
+				id: "delivery-0",
+				endpointId: "endpoint_tenant_a",
+				eventType: "message.received",
+				payload: { message: "tenant-scoped" },
 				status: "pending",
 			},
 		]);

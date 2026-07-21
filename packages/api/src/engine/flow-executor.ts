@@ -7,6 +7,7 @@ import {
 	contact as contactTable,
 } from "@whatsapp-flow/db/schema/contact";
 import {
+	device,
 	flow,
 	flowExecutionEvent,
 	flowExecutionLog,
@@ -2097,6 +2098,7 @@ export async function resumeWaitingSessionById(
 	triggerRef?: ProviderMessageRef,
 	claimJobId?: string,
 	reply?: IncomingReplyDescriptor,
+	expectedDeviceId?: string,
 ): Promise<ExecutionResult | null> {
 	const [waiting] = await db
 		.select()
@@ -2104,7 +2106,9 @@ export async function resumeWaitingSessionById(
 		.where(eq(flowSession.id, sessionId))
 		.limit(1);
 
-	if (!waiting) return null;
+	if (!waiting || (expectedDeviceId && waiting.deviceId !== expectedDeviceId)) {
+		return null;
+	}
 
 	const claimed = await claimWaitingSession(waiting, claimJobId);
 	if (!claimed) return null;
@@ -2192,6 +2196,17 @@ async function resumeFlowSession(
 	if (!flowRow) {
 		await markSessionFailed(session, "Flow not found");
 		return { status: "failed", sessionId: session.id, error: "Flow not found" };
+	}
+	if (
+		flowRow.deviceId !== session.deviceId ||
+		!(await hasFlowDeviceTenantConsistency(flowRow, session.deviceId))
+	) {
+		await markSessionFailed(session, "Flow device tenant mismatch");
+		return {
+			status: "failed",
+			sessionId: session.id,
+			error: "Flow device tenant mismatch",
+		};
 	}
 
 	const nodes = (flowRow.nodes ?? []) as FlowNode[];
@@ -2526,6 +2541,19 @@ export async function continueFlowExecution(
 			error: "Flow not found",
 		};
 	}
+	if (!(await hasFlowDeviceTenantConsistency(flowRow, input.deviceId))) {
+		await persistProgress(
+			input.executionLogId,
+			nodeResults,
+			"Flow device tenant mismatch",
+			"failed",
+		);
+		return {
+			status: "failed",
+			logId: input.executionLogId,
+			error: "Flow device tenant mismatch",
+		};
+	}
 
 	let session: typeof flowSession.$inferSelect | null = null;
 	if (input.sessionId) {
@@ -2545,6 +2573,23 @@ export async function continueFlowExecution(
 				status: "failed",
 				logId: input.executionLogId,
 				error: "Flow session not found",
+			};
+		}
+		if (
+			sessionRow.flowId !== flowRow.id ||
+			sessionRow.deviceId !== flowRow.deviceId ||
+			sessionRow.deviceId !== input.deviceId
+		) {
+			await persistProgress(
+				input.executionLogId,
+				nodeResults,
+				"Flow session device mismatch",
+				"failed",
+			);
+			return {
+				status: "failed",
+				logId: input.executionLogId,
+				error: "Flow session device mismatch",
 			};
 		}
 		session = sessionRow;
@@ -2684,6 +2729,24 @@ export async function continueFlowExecution(
 	return { status, logId: ctx.logId, sessionId: session?.id };
 }
 
+export async function hasFlowDeviceTenantConsistency(
+	flowRow: Pick<typeof flow.$inferSelect, "deviceId" | "tenantId">,
+	expectedDeviceId?: string,
+) {
+	if (
+		!flowRow.deviceId ||
+		(expectedDeviceId && flowRow.deviceId !== expectedDeviceId)
+	) {
+		return false;
+	}
+	const [flowDevice] = await db
+		.select({ tenantId: device.tenantId })
+		.from(device)
+		.where(eq(device.id, flowRow.deviceId))
+		.limit(1);
+	return flowDevice?.tenantId === flowRow.tenantId;
+}
+
 export async function executeFlow(
 	flowRow: typeof flow.$inferSelect,
 	contactNumber: string | null,
@@ -2691,6 +2754,9 @@ export async function executeFlow(
 	options: ExecutionOptions = {},
 ): Promise<ExecutionResult> {
 	const triggerSource = options.triggerSource ?? "message";
+	if (!(await hasFlowDeviceTenantConsistency(flowRow))) {
+		return { status: "failed", error: "Flow device tenant mismatch" };
+	}
 	const replyJid =
 		options.replyJid ??
 		(contactNumber ? `${contactNumber}@s.whatsapp.net` : undefined);

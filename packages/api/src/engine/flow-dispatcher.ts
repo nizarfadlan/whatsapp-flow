@@ -14,6 +14,7 @@ import {
 } from "@whatsapp-flow/whatsapp";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { matchesCronExpression } from "./cron";
+import { hasFlowDeviceTenantConsistency } from "./flow-executor";
 import { enqueueJob } from "./job-queue";
 import {
 	messageFlowJobIdempotencyKey,
@@ -148,6 +149,13 @@ export function startFlowDispatcher(): void {
 			for (const flowRow of flows) {
 				if (!flowRow.deviceId) continue;
 				if (!matchesFlowTrigger(flowRow, text, triggerContext)) continue;
+				if (!(await hasFlowDeviceTenantConsistency(flowRow, deviceId))) {
+					console.warn("Skipped flow dispatch for tenant mismatch", {
+						flowId: flowRow.id,
+						deviceId,
+					});
+					continue;
+				}
 
 				await enqueueJob({
 					kind: "flow.execute",
@@ -230,6 +238,15 @@ export function startScheduleDispatcher(): void {
 				if (!flowRow.deviceId) continue;
 				if (!cronExpression || !contactNumber) continue;
 				if (!matchesCronExpression(cronExpression, now)) continue;
+				if (
+					!(await hasFlowDeviceTenantConsistency(flowRow, flowRow.deviceId))
+				) {
+					console.warn("Skipped scheduled flow for tenant mismatch", {
+						flowId: flowRow.id,
+						deviceId: flowRow.deviceId,
+					});
+					continue;
+				}
 
 				await enqueueJob({
 					kind: "flow.execute",

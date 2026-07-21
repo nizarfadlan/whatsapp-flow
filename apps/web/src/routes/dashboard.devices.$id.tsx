@@ -30,7 +30,9 @@ import {
 	QrCode,
 	RefreshCw,
 	Settings,
+	ShieldCheck,
 	Smartphone,
+	UserMinus,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -278,6 +280,126 @@ function ResourceSyncCard({ deviceId }: { deviceId: string }) {
 	);
 }
 
+function DeviceDeploymentAccessCard({
+	deviceId,
+	tenantId,
+	ownerUserId,
+}: {
+	deviceId: string;
+	tenantId: string;
+	ownerUserId: string;
+}) {
+	const trpc = useTRPC();
+	const members = useQuery(trpc.tenant.listMembers.queryOptions({ tenantId }));
+	const grants = useQuery(
+		trpc.tenant.listDeviceGrants.queryOptions({ deviceId }),
+	);
+	const grantAccess = useMutation(
+		trpc.tenant.grantDeviceAccess.mutationOptions({
+			onSuccess: () => {
+				toast.success("Deployment access granted");
+				grants.refetch();
+			},
+			onError: (error) =>
+				toast.error(error.message || "Failed to grant access"),
+		}),
+	);
+	const revokeAccess = useMutation(
+		trpc.tenant.revokeDeviceAccess.mutationOptions({
+			onSuccess: () => {
+				toast.success("Deployment access revoked");
+				grants.refetch();
+			},
+			onError: (error) => {
+				grants.refetch();
+				toast.error(
+					error.message ||
+						"The deployment grant could not be revoked. Refresh and try again.",
+				);
+			},
+		}),
+	);
+	const grantedUserIds = new Set(grants.data?.map((grant) => grant.userId));
+	const eligibleMembers = members.data?.filter(
+		(member) => member.id !== ownerUserId,
+	);
+	const isPending = grantAccess.isPending || revokeAccess.isPending;
+
+	return (
+		<Card>
+			<CardHeader>
+				<div className="flex items-center gap-2">
+					<ShieldCheck className="size-4" />
+					<CardTitle className="text-sm">Deployment access</CardTitle>
+				</div>
+				<p className="text-muted-foreground text-xs">
+					Grant active tenant members permission to deploy flows to this
+					connection. They cannot view, configure, or manage this device.
+				</p>
+			</CardHeader>
+			<CardContent className="space-y-2">
+				{members.isLoading || grants.isLoading ? (
+					<div className="flex items-center gap-2 text-muted-foreground text-xs">
+						<LoaderCircle className="size-3.5 animate-spin" />
+						Loading members and deployment grants…
+					</div>
+				) : eligibleMembers && eligibleMembers.length > 0 ? (
+					eligibleMembers.map((member) => {
+						const hasGrant = grantedUserIds.has(member.id);
+						return (
+							<div
+								key={member.id}
+								className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+							>
+								<div className="min-w-0">
+									<p className="truncate font-medium text-sm">
+										{member.name || member.email}
+									</p>
+									<p className="truncate text-muted-foreground text-xs">
+										{member.email}
+										{member.role === "owner" ? " · Tenant owner" : ""}
+									</p>
+								</div>
+								{hasGrant ? (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										className="text-destructive"
+										disabled={isPending}
+										onClick={() =>
+											revokeAccess.mutate({ deviceId, userId: member.id })
+										}
+									>
+										<UserMinus className="size-3.5" />
+										Revoke deploy
+									</Button>
+								) : (
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={isPending}
+										onClick={() =>
+											grantAccess.mutate({ deviceId, userId: member.id })
+										}
+									>
+										Grant deploy
+									</Button>
+								)}
+							</div>
+						);
+					})
+				) : (
+					<p className="text-muted-foreground text-xs">
+						No active tenant members are eligible for deployment access.
+					</p>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
 function QrModal({
 	deviceId,
 	open,
@@ -423,7 +545,7 @@ function DeviceDetailPage() {
 		}),
 	);
 
-	if (!device) {
+	if (!device?.isOwner) {
 		return (
 			<div className="flex flex-col items-center gap-3 py-12">
 				<Smartphone className="size-10 text-muted-foreground/50" />
@@ -559,6 +681,12 @@ function DeviceDetailPage() {
 			{!isMeta && device.status === "connected" && (
 				<ResourceSyncCard deviceId={id} />
 			)}
+
+			<DeviceDeploymentAccessCard
+				deviceId={device.id}
+				tenantId={device.tenantId}
+				ownerUserId={device.ownerUserId}
+			/>
 
 			<Separator />
 

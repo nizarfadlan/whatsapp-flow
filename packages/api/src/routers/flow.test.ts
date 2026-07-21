@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { makeCurrentUser, makeSession } from "../test/helpers";
 
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 process.env.AUTH_SECRET ??= "x".repeat(32);
@@ -51,8 +52,59 @@ mock.module("../engine/flow-node-secrets", () => ({
 	WEBHOOK_AUTH_SECRET_KEY: "webhook_auth",
 }));
 
-const { getTriggerTagIds, validateFlowGraph, validateFlowGraphDiagnostics } =
-	await import("./flow");
+const {
+	flowRouter,
+	getTriggerTagIds,
+	sanitizeTriggerConfigForStorage,
+	validateFlowGraph,
+	validateFlowGraphDiagnostics,
+} = await import("./flow");
+
+type Selection = Record<string, unknown> | undefined;
+
+function createMockDb(selects: unknown[][]) {
+	const selections: Selection[] = [];
+
+	function query(selection?: Selection) {
+		selections.push(selection);
+		return {
+			from() {
+				return this;
+			},
+			innerJoin() {
+				return this;
+			},
+			leftJoin() {
+				return this;
+			},
+			where() {
+				return this;
+			},
+			limit() {
+				return Promise.resolve(selects.shift() ?? []);
+			},
+			orderBy() {
+				return Promise.resolve(selects.shift() ?? []);
+			},
+		};
+	}
+
+	return { db: { select: query }, selections };
+}
+
+function createCaller(selects: unknown[][]) {
+	const mockDb = createMockDb(selects);
+	return {
+		caller: flowRouter.createCaller({
+			auth: null,
+			session: makeSession(),
+			db: mockDb.db,
+			requestIp: "127.0.0.1",
+			requestUserAgent: "bun-test",
+		} as never),
+		selections: mockDb.selections,
+	};
+}
 
 function triggerNode() {
 	return {
@@ -61,6 +113,97 @@ function triggerNode() {
 		data: { triggerKind: "any_message" },
 	};
 }
+
+describe("flow ownership provenance", () => {
+	test("includes only owner display metadata in accessible flow listings", async () => {
+		const { caller, selections } = createCaller([
+			[makeCurrentUser()],
+			[
+				{
+					id: "flow-1",
+					name: "Support",
+					ownerName: "Flow Owner",
+					ownerEmail: "owner@example.com",
+					accessCapability: "viewer",
+				},
+			],
+		]);
+
+		const flows = await caller.list();
+		expect(
+			flows.map(({ id, name, accessCapability, owner }) => ({
+				id,
+				name,
+				accessCapability,
+				owner,
+			})),
+		).toEqual([
+			{
+				id: "flow-1",
+				name: "Support",
+				accessCapability: "viewer",
+				owner: { name: "Flow Owner", email: "owner@example.com" },
+			},
+		]);
+		expect(Object.keys(selections[1] ?? {}).sort()).toEqual([
+			"accessCapability",
+			"createdAt",
+			"description",
+			"deviceId",
+			"deviceName",
+			"id",
+			"name",
+			"ownerEmail",
+			"ownerName",
+			"status",
+			"triggerType",
+			"updatedAt",
+		]);
+	});
+
+	test("includes owner metadata only after verifying flow access", async () => {
+		const { caller, selections } = createCaller([
+			[makeCurrentUser()],
+			[
+				{
+					flow: {
+						id: "flow-1",
+						userId: "owner-1",
+						nodes: [],
+						edges: [],
+					},
+					grantCapability: "viewer",
+				},
+			],
+			[{ name: "Flow Owner", email: "owner@example.com" }],
+		]);
+
+		await expect(caller.getById({ id: "flow-1" })).resolves.toMatchObject({
+			id: "flow-1",
+			accessCapability: "viewer",
+			owner: { name: "Flow Owner", email: "owner@example.com" },
+		});
+		expect(Object.keys(selections[2] ?? {}).sort()).toEqual(["email", "name"]);
+	});
+});
+
+describe("flow webhook token storage", () => {
+	test("removes plaintext webhook tokens from trigger config", () => {
+		expect(
+			sanitizeTriggerConfigForStorage("webhook", {
+				webhookToken: "plaintext-token",
+				path: "/incoming",
+			}),
+		).toEqual({ path: "/incoming" });
+	});
+
+	test("preserves non-webhook trigger config unchanged", () => {
+		const triggerConfig = { webhookToken: "not-a-webhook-secret" };
+		expect(sanitizeTriggerConfigForStorage("keyword", triggerConfig)).toBe(
+			triggerConfig,
+		);
+	});
+});
 
 describe("flow trigger tag ownership inputs", () => {
 	test("collects unique sender and group tag IDs from a create payload", () => {

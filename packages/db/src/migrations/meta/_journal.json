@@ -22,6 +22,20 @@
 			"when": 1784603877188,
 			"tag": "0002_lyrical_silvermane",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1784616735742,
+			"tag": "0003_awesome_stark_industries",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1784620023476,
+			"tag": "0004_known_human_robot",
+			"breakpoints": true
 		}
 	]
 }

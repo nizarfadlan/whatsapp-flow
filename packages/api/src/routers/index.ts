@@ -11,6 +11,7 @@ import { inboxRouter } from "./inbox";
 import { mediaRouter } from "./media";
 import { rbacRouter } from "./rbac";
 import { settingsRouter } from "./settings";
+import { tenantRouter } from "./tenant";
 import { userRouter } from "./user";
 import { webhookRouter } from "./webhook";
 
@@ -37,6 +38,7 @@ export const appRouter = router({
 	rbac: rbacRouter,
 	webhook: webhookRouter,
 	settings: settingsRouter,
+	tenant: tenantRouter,
 	user: userRouter,
 });
 

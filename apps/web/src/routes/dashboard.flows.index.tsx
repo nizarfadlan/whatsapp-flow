@@ -11,6 +11,7 @@ import {
 	AlertDialogMedia,
 	AlertDialogTitle,
 } from "@whatsapp-flow/ui/components/alert-dialog";
+import { Badge } from "@whatsapp-flow/ui/components/badge";
 import { Button, buttonVariants } from "@whatsapp-flow/ui/components/button";
 import { Card, CardContent } from "@whatsapp-flow/ui/components/card";
 import {
@@ -68,6 +69,27 @@ function FlowStatusBadge({ status }: { status: string }) {
 			/>
 			{status}
 		</span>
+	);
+}
+
+function FlowAccessBadge({
+	capability,
+	owner,
+}: {
+	capability: "owner" | "editor" | "viewer";
+	owner: { name: string; email: string };
+}) {
+	if (capability === "owner") {
+		return <Badge variant="secondary">Owned</Badge>;
+	}
+
+	return (
+		<div className="space-y-1">
+			<Badge variant="outline">Shared · {capability}</Badge>
+			<p className="max-w-48 truncate text-muted-foreground text-xs">
+				Shared by {owner.name} · {owner.email}
+			</p>
+		</div>
 	);
 }
 
@@ -255,6 +277,16 @@ function FlowsPage() {
 									),
 								},
 								{
+									key: "access",
+									header: "Access",
+									cell: (f) => (
+										<FlowAccessBadge
+											capability={f.accessCapability}
+											owner={f.owner}
+										/>
+									),
+								},
+								{
 									key: "device",
 									header: "Device",
 									cell: (f) => (
@@ -289,42 +321,59 @@ function FlowsPage() {
 									cell: (f) => (
 										<DropdownMenu>
 											<DropdownMenuTrigger
-												render={<Button variant="ghost" size="icon-sm" />}
+												render={
+													<Button
+														variant="ghost"
+														size="icon-sm"
+														disabled={f.accessCapability === "viewer"}
+														title={
+															f.accessCapability === "viewer"
+																? "View-only access"
+																: "Flow actions"
+														}
+													/>
+												}
 											>
 												<MoreHorizontal className="size-4" />
 											</DropdownMenuTrigger>
 											<DropdownMenuContent>
-												<DropdownMenuItem
-													onClick={() => duplicateMut.mutate({ id: f.id })}
-												>
-													<Copy className="size-3.5" />
-													Duplicate
-												</DropdownMenuItem>
-												{f.status !== "active" && (
+												{f.accessCapability !== "viewer" && (
 													<DropdownMenuItem
-														onClick={() => requestActivate(f.id)}
+														onClick={() => duplicateMut.mutate({ id: f.id })}
 													>
-														<Play className="size-3.5" />
-														Activate
+														<Copy className="size-3.5" />
+														Duplicate
 													</DropdownMenuItem>
 												)}
-												{f.status === "active" && (
+												{f.accessCapability === "owner" &&
+													f.status !== "active" && (
+														<DropdownMenuItem
+															onClick={() => requestActivate(f.id)}
+														>
+															<Play className="size-3.5" />
+															Activate
+														</DropdownMenuItem>
+													)}
+												{f.accessCapability === "owner" &&
+													f.status === "active" && (
+														<DropdownMenuItem
+															onClick={() =>
+																toggleMut.mutate({ id: f.id, status: "paused" })
+															}
+														>
+															<Pause className="size-3.5" />
+															Pause
+														</DropdownMenuItem>
+													)}
+												{f.accessCapability === "owner" && (
 													<DropdownMenuItem
-														onClick={() =>
-															toggleMut.mutate({ id: f.id, status: "paused" })
-														}
+														variant="destructive"
+														onClick={() => deleteMut.mutate({ id: f.id })}
 													>
-														<Pause className="size-3.5" />
-														Pause
+														<Trash2 className="size-3.5" />
+														Delete
 													</DropdownMenuItem>
 												)}
-												<DropdownMenuItem
-													variant="destructive"
-													onClick={() => deleteMut.mutate({ id: f.id })}
-												>
-													<Trash2 className="size-3.5" />
-													Delete
-												</DropdownMenuItem>
 											</DropdownMenuContent>
 										</DropdownMenu>
 									),

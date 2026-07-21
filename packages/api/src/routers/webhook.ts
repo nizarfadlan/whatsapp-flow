@@ -1,11 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { device, flow } from "@whatsapp-flow/db/schema/device";
+import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
 import {
 	webhookDelivery,
 	webhookEndpoint,
 } from "@whatsapp-flow/db/schema/webhook";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
+import { requireTenantMembership } from "../authorization/tenant-access";
 import { WEBHOOK_EVENT_TYPES } from "../engine/webhook-events";
 import { assertSafeOutboundWebhookUrl } from "../engine/webhook-url-safety";
 import { protectedProcedure, router } from "../index";
@@ -54,16 +56,64 @@ async function validateWebhookUrl(url: string) {
 	}
 }
 
+async function requireTenantWebhookControl(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	tenantId: string,
+	userId: string,
+) {
+	const membership = await requireTenantMembership(db, tenantId, userId);
+	if (membership.role !== "owner") {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Tenant not found" });
+	}
+}
+
+async function requireWebhookEndpointControl(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	endpointId: string,
+	userId: string,
+) {
+	const rows = await db
+		.select({ endpoint: webhookEndpoint })
+		.from(webhookEndpoint)
+		.innerJoin(
+			tenantMember,
+			and(
+				eq(tenantMember.tenantId, webhookEndpoint.tenantId),
+				eq(tenantMember.userId, userId),
+				eq(tenantMember.role, "owner"),
+			),
+		)
+		.where(eq(webhookEndpoint.id, endpointId))
+		.limit(1);
+
+	const endpoint = rows[0]?.endpoint;
+	if (!endpoint) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Webhook endpoint not found",
+		});
+	}
+
+	return endpoint;
+}
+
 async function validateOwnedDevices(
 	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
 	ids: string[],
 	userId: string,
+	tenantId: string,
 ) {
 	if (ids.length === 0) return;
 	const rows = await db
 		.select({ id: device.id })
 		.from(device)
-		.where(and(eq(device.userId, userId), inArray(device.id, ids)));
+		.where(
+			and(
+				eq(device.userId, userId),
+				eq(device.tenantId, tenantId),
+				inArray(device.id, ids),
+			),
+		);
 
 	if (rows.length !== ids.length) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
@@ -74,12 +124,19 @@ async function validateOwnedFlows(
 	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
 	ids: string[],
 	userId: string,
+	tenantId: string,
 ) {
 	if (ids.length === 0) return;
 	const rows = await db
 		.select({ id: flow.id })
 		.from(flow)
-		.where(and(eq(flow.userId, userId), inArray(flow.id, ids)));
+		.where(
+			and(
+				eq(flow.userId, userId),
+				eq(flow.tenantId, tenantId),
+				inArray(flow.id, ids),
+			),
+		);
 
 	if (rows.length !== ids.length) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
@@ -91,7 +148,14 @@ export const webhookRouter = router({
 		return ctx.db
 			.select(safeEndpointSelect)
 			.from(webhookEndpoint)
-			.where(eq(webhookEndpoint.userId, ctx.session.user.id))
+			.innerJoin(
+				tenantMember,
+				and(
+					eq(tenantMember.tenantId, webhookEndpoint.tenantId),
+					eq(tenantMember.userId, ctx.session.user.id),
+					eq(tenantMember.role, "owner"),
+				),
+			)
 			.orderBy(desc(webhookEndpoint.createdAt));
 	}),
 
@@ -99,6 +163,7 @@ export const webhookRouter = router({
 		.input(
 			z.object({
 				name: z.string().min(1),
+				tenantId: z.string().min(1).optional(),
 				url: z.string().url(),
 				isActive: z.boolean().optional().default(true),
 				deviceIds: z.array(z.string().min(1)).optional().default([]),
@@ -107,6 +172,8 @@ export const webhookRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			const tenantId = input.tenantId ?? ctx.session.user.id;
+			await requireTenantWebhookControl(ctx.db, tenantId, ctx.session.user.id);
 			const deviceIds = normalizeStringIds(input.deviceIds);
 			const flowIds = normalizeStringIds(input.flowIds);
 			const subscribedEvents = normalizeSubscribedEvents(
@@ -114,14 +181,20 @@ export const webhookRouter = router({
 			);
 
 			await validateWebhookUrl(input.url);
-			await validateOwnedDevices(ctx.db, deviceIds, ctx.session.user.id);
-			await validateOwnedFlows(ctx.db, flowIds, ctx.session.user.id);
+			await validateOwnedDevices(
+				ctx.db,
+				deviceIds,
+				ctx.session.user.id,
+				tenantId,
+			);
+			await validateOwnedFlows(ctx.db, flowIds, ctx.session.user.id, tenantId);
 
 			const [row] = await ctx.db
 				.insert(webhookEndpoint)
 				.values({
 					id: crypto.randomUUID(),
 					userId: ctx.session.user.id,
+					tenantId,
 					name: input.name,
 					url: input.url,
 					secret: generateSecret(),
@@ -149,22 +222,11 @@ export const webhookRouter = router({
 		.mutation(async ({ ctx, input }) => {
 			const { id, deviceIds, flowIds, subscribedEvents, ...updates } = input;
 
-			const [owned] = await ctx.db
-				.select(safeEndpointSelect)
-				.from(webhookEndpoint)
-				.where(
-					and(
-						eq(webhookEndpoint.id, id),
-						eq(webhookEndpoint.userId, ctx.session.user.id),
-					),
-				)
-				.limit(1);
-			if (!owned) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Webhook endpoint not found",
-				});
-			}
+			const owned = await requireWebhookEndpointControl(
+				ctx.db,
+				id,
+				ctx.session.user.id,
+			);
 
 			const nextUpdates: typeof updates & {
 				deviceIds?: string[];
@@ -178,13 +240,23 @@ export const webhookRouter = router({
 
 			if (deviceIds) {
 				const normalized = normalizeStringIds(deviceIds);
-				await validateOwnedDevices(ctx.db, normalized, ctx.session.user.id);
+				await validateOwnedDevices(
+					ctx.db,
+					normalized,
+					ctx.session.user.id,
+					owned.tenantId,
+				);
 				nextUpdates.deviceIds = normalized;
 			}
 
 			if (flowIds) {
 				const normalized = normalizeStringIds(flowIds);
-				await validateOwnedFlows(ctx.db, normalized, ctx.session.user.id);
+				await validateOwnedFlows(
+					ctx.db,
+					normalized,
+					ctx.session.user.id,
+					owned.tenantId,
+				);
 				nextUpdates.flowIds = normalized;
 			}
 
@@ -201,28 +273,21 @@ export const webhookRouter = router({
 					.returning(safeEndpointSelect);
 				return updated;
 			}
-			return owned;
+			const [unchanged] = await ctx.db
+				.select(safeEndpointSelect)
+				.from(webhookEndpoint)
+				.where(eq(webhookEndpoint.id, id));
+			return unchanged;
 		}),
 
 	deleteEndpoint: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const [owned] = await ctx.db
-				.select({ id: webhookEndpoint.id })
-				.from(webhookEndpoint)
-				.where(
-					and(
-						eq(webhookEndpoint.id, input.id),
-						eq(webhookEndpoint.userId, ctx.session.user.id),
-					),
-				)
-				.limit(1);
-			if (!owned) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Webhook endpoint not found",
-				});
-			}
+			await requireWebhookEndpointControl(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 			await ctx.db
 				.delete(webhookEndpoint)
 				.where(eq(webhookEndpoint.id, input.id));
@@ -232,22 +297,11 @@ export const webhookRouter = router({
 	regenerateSecret: protectedProcedure
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const [owned] = await ctx.db
-				.select({ id: webhookEndpoint.id })
-				.from(webhookEndpoint)
-				.where(
-					and(
-						eq(webhookEndpoint.id, input.id),
-						eq(webhookEndpoint.userId, ctx.session.user.id),
-					),
-				)
-				.limit(1);
-			if (!owned) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Webhook endpoint not found",
-				});
-			}
+			await requireWebhookEndpointControl(
+				ctx.db,
+				input.id,
+				ctx.session.user.id,
+			);
 
 			const [updated] = await ctx.db
 				.update(webhookEndpoint)
@@ -271,22 +325,11 @@ export const webhookRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const [owned] = await ctx.db
-				.select({ id: webhookEndpoint.id })
-				.from(webhookEndpoint)
-				.where(
-					and(
-						eq(webhookEndpoint.id, input.endpointId),
-						eq(webhookEndpoint.userId, ctx.session.user.id),
-					),
-				)
-				.limit(1);
-			if (!owned) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Webhook endpoint not found",
-				});
-			}
+			await requireWebhookEndpointControl(
+				ctx.db,
+				input.endpointId,
+				ctx.session.user.id,
+			);
 
 			return ctx.db
 				.select()

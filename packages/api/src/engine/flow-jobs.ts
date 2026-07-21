@@ -14,6 +14,7 @@ import {
 	continueFlowExecution,
 	emitFlowSessionUpdated,
 	executeFlow,
+	hasFlowDeviceTenantConsistency,
 	parseInteractiveWaitContext,
 	recordFlowExecutionEvent,
 	resolveFlowTemplate,
@@ -53,6 +54,14 @@ export async function processFlowExecuteJob(input: FlowExecuteJobPayload) {
 		.limit(1);
 
 	if (!flowRow) return;
+	if (!(await hasFlowDeviceTenantConsistency(flowRow, input.deviceId))) {
+		logger.warn("flow.execution.skipped", {
+			flowId: input.flowId,
+			deviceId: input.deviceId,
+			reason: "flow_device_tenant_mismatch",
+		});
+		return;
+	}
 
 	const result = await executeFlow(
 		flowRow,
@@ -95,6 +104,7 @@ export async function processFlowResumeJob(
 		},
 		job.id,
 		input.reply,
+		input.deviceId,
 	);
 
 	if (!result) {

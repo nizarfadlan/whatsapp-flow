@@ -49,6 +49,7 @@ type WebhookPayloadFactory = () => WebhookPayload | Promise<WebhookPayload>;
 
 type EnqueueWebhookInput = {
 	userId: string;
+	tenantId: string;
 	deviceId: string;
 	eventType: WebhookEventType;
 	payload: WebhookPayload | WebhookPayloadFactory;
@@ -141,6 +142,13 @@ function endpointMatchesEvent(
 ) {
 	const subscribed = normalizeStringArray(endpoint.subscribedEvents);
 	return subscribed.includes("*") || subscribed.includes(eventType);
+}
+
+function endpointMatchesTenant(
+	endpoint: typeof webhookEndpoint.$inferSelect,
+	tenantId: string,
+) {
+	return endpoint.tenantId === tenantId;
 }
 
 function endpointMatchesDevice(
@@ -436,10 +444,11 @@ function normalizeContactNumber(jid: string) {
 export async function buildWebhookDeliveryRows(
 	input: EnqueueWebhookInput,
 	endpoints: (typeof webhookEndpoint.$inferSelect)[],
-	idBase = crypto.randomUUID(),
+	idBase: string = crypto.randomUUID(),
 ) {
 	const matchedEndpoints = endpoints.filter(
 		(endpoint) =>
+			endpointMatchesTenant(endpoint, input.tenantId) &&
 			endpointMatchesEvent(endpoint, input.eventType) &&
 			endpointMatchesDevice(endpoint, input.deviceId) &&
 			endpointMatchesFlow(endpoint, input.eventType, input.flowId),
@@ -465,6 +474,7 @@ export async function enqueueWebhook(input: EnqueueWebhookInput) {
 			.where(
 				and(
 					eq(webhookEndpoint.userId, input.userId),
+					eq(webhookEndpoint.tenantId, input.tenantId),
 					eq(webhookEndpoint.isActive, true),
 				),
 			);
@@ -553,13 +563,14 @@ export function startWebhookDispatcher() {
 	connectionManager.on("device:message-persisted", async (ev) => {
 		try {
 			const d = await db
-				.select({ userId: device.userId })
+				.select({ userId: device.userId, tenantId: device.tenantId })
 				.from(device)
 				.where(eq(device.id, ev.deviceId))
 				.limit(1);
 			if (d[0]) {
 				await enqueueWebhook({
 					userId: d[0].userId,
+					tenantId: d[0].tenantId,
 					deviceId: ev.deviceId,
 					eventType: "message.received",
 					payload: () => buildMessageReceivedPayload(ev),
@@ -578,13 +589,14 @@ export function startWebhookDispatcher() {
 	connectionManager.on("device:status", async (ev) => {
 		try {
 			const d = await db
-				.select({ userId: device.userId })
+				.select({ userId: device.userId, tenantId: device.tenantId })
 				.from(device)
 				.where(eq(device.id, ev.deviceId))
 				.limit(1);
 			if (d[0]) {
 				await enqueueWebhook({
 					userId: d[0].userId,
+					tenantId: d[0].tenantId,
 					deviceId: ev.deviceId,
 					eventType: "device.status_changed",
 					payload: {
@@ -611,7 +623,11 @@ export function startWebhookDispatcher() {
 			if (!eventType) return;
 
 			const rows = await db
-				.select({ userId: flow.userId, flowName: flow.name })
+				.select({
+					userId: flow.userId,
+					tenantId: flow.tenantId,
+					flowName: flow.name,
+				})
 				.from(flow)
 				.where(eq(flow.id, ev.flowId))
 				.limit(1);
@@ -620,6 +636,7 @@ export function startWebhookDispatcher() {
 
 			await enqueueWebhook({
 				userId: flowRow.userId,
+				tenantId: flowRow.tenantId,
 				deviceId: ev.deviceId,
 				flowId: ev.flowId,
 				eventType,

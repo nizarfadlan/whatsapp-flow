@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@whatsapp-flow/ui/components/button";
 import { Input } from "@whatsapp-flow/ui/components/input";
@@ -30,9 +30,11 @@ function ProviderIcon({ iconUrl }: { iconUrl?: string | null }) {
 }
 
 export default function SignInForm({
+	inviteToken,
 	onSwitchToSignUp,
 	showSignup,
 }: {
+	inviteToken?: string;
 	onSwitchToSignUp: () => void;
 	showSignup: boolean;
 }) {
@@ -44,9 +46,30 @@ export default function SignInForm({
 	const { data: publicSettings } = useQuery(
 		trpc.settings.public.queryOptions(),
 	);
+	const acceptTenantInvite = useMutation(
+		trpc.tenant.acceptInvite.mutationOptions(),
+	);
 	const [socialProviderPending, setSocialProviderPending] = useState<
 		string | null
 	>(null);
+
+	const acceptInviteAfterSignIn = async () => {
+		if (!inviteToken) return;
+		try {
+			await acceptTenantInvite.mutateAsync({ token: inviteToken });
+			toast.success("Tenant invite accepted");
+		} catch (error) {
+			if (error instanceof Error && error.message === "Invite not found") {
+				toast.info("This tenant invite is no longer available.");
+				return;
+			}
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Unable to accept tenant invite",
+			);
+		}
+	};
 
 	const form = useForm({
 		defaultValues: {
@@ -60,7 +83,8 @@ export default function SignInForm({
 					password: value.password,
 				},
 				{
-					onSuccess: () => {
+					onSuccess: async () => {
+						await acceptInviteAfterSignIn();
 						navigate({
 							to: "/dashboard",
 						});

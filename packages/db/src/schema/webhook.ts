@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { device } from "./device";
+import { tenant } from "./tenant";
 
 export const webhookEndpoint = pgTable(
 	"webhook_endpoint",
@@ -19,6 +20,9 @@ export const webhookEndpoint = pgTable(
 		userId: text("user_id")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
+		tenantId: text("tenant_id")
+			.notNull()
+			.references(() => tenant.id, { onDelete: "cascade" }),
 		deviceId: text("device_id").references(() => device.id, {
 			onDelete: "cascade",
 		}),
@@ -37,6 +41,10 @@ export const webhookEndpoint = pgTable(
 	},
 	(table) => [
 		index("webhook_endpoint_userId_idx").on(table.userId),
+		index("webhook_endpoint_tenant_created_idx").on(
+			table.tenantId,
+			table.createdAt,
+		),
 		index("webhook_endpoint_deviceId_idx").on(table.deviceId),
 	],
 );
@@ -82,6 +90,10 @@ export const webhookEndpointRelations = relations(
 		user: one(user, {
 			fields: [webhookEndpoint.userId],
 			references: [user.id],
+		}),
+		tenant: one(tenant, {
+			fields: [webhookEndpoint.tenantId],
+			references: [tenant.id],
 		}),
 		device: one(device, {
 			fields: [webhookEndpoint.deviceId],
