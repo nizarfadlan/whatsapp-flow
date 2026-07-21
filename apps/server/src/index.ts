@@ -28,6 +28,7 @@ import {
 	processWebhookDeliveryJob,
 	startWebhookDispatcher,
 } from "@whatsapp-flow/api/engine/webhook-dispatcher";
+import { logger as apiLogger } from "@whatsapp-flow/api/observability/logger";
 import { renderMetrics } from "@whatsapp-flow/api/observability/metrics";
 import { seedRbac } from "@whatsapp-flow/api/rbac";
 import { appRouter } from "@whatsapp-flow/api/routers/index";
@@ -387,6 +388,7 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 	}
 
 	return streamSSE(c, async (stream) => {
+		const startedAt = Date.now();
 		const onQr = (ev: { deviceId: string; qr: string }) => {
 			if (ev.deviceId === deviceId) {
 				stream.writeSSE({ data: JSON.stringify({ type: "qr", qr: ev.qr }) });
@@ -434,6 +436,10 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 			connectionManager.off("device:qr", onQr);
 			connectionManager.off("device:status", onStatus);
 			clearInterval(ping);
+			apiLogger.info("sse.device_stream.aborted", {
+				deviceId,
+				durationMs: Date.now() - startedAt,
+			});
 		});
 
 		// Wait indefinitely until client disconnects

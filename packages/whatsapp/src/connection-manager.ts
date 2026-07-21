@@ -19,6 +19,7 @@ import {
 	type DbAuthState,
 	useDbAuthState,
 } from "./auth-state";
+import { createBaileysLogger, logBaileysDiagnostic } from "./baileys-logger";
 import {
 	BoundedDeviceCache,
 	baileysMessageStore,
@@ -81,6 +82,10 @@ function getNumberValue(value: unknown) {
 		return Number.isFinite(parsed) ? parsed : undefined;
 	}
 	return undefined;
+}
+
+function getErrorName(error: unknown) {
+	return error instanceof Error ? error.name : "UnknownError";
 }
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
@@ -257,6 +262,11 @@ export class ConnectionManager extends EventEmitter {
 	private async reconnect(deviceId: string, generation: number) {
 		this.assertCurrentConnectionGeneration(deviceId, generation);
 		if (this.intentionalDisconnects.has(deviceId)) return;
+		logBaileysDiagnostic("info", "baileys.connection.reconnect_attempt", {
+			deviceId,
+			generation,
+			attempt: this.reconnectAttempts.get(deviceId) ?? 1,
+		});
 		const connection = await this.startConnection(deviceId, generation);
 		this.assertCurrentConnectionGeneration(deviceId, generation);
 		return connection;
@@ -275,14 +285,34 @@ export class ConnectionManager extends EventEmitter {
 
 	private async createConnection(deviceId: string, generation: number) {
 		this.assertCurrentConnectionGeneration(deviceId, generation);
+		logBaileysDiagnostic("info", "baileys.connection.create_started", {
+			deviceId,
+			generation,
+		});
 		await this.updateDeviceStatus(deviceId, "connecting");
 
-		const authState = await useDbAuthState(deviceId);
+		const authState = await useDbAuthState(deviceId).catch((error) => {
+			logBaileysDiagnostic("error", "baileys.connection.create_failed", {
+				deviceId,
+				generation,
+				stage: "auth_state",
+				errorName: getErrorName(error),
+			});
+			throw error;
+		});
 		if (!this.isCurrentConnectionGeneration(deviceId, generation)) {
 			authState.dispose();
 			throw new Error("Connection lifecycle was invalidated");
 		}
-		const { version } = await fetchLatestBaileysVersion();
+		const { version } = await fetchLatestBaileysVersion().catch((error) => {
+			logBaileysDiagnostic("error", "baileys.connection.create_failed", {
+				deviceId,
+				generation,
+				stage: "version_lookup",
+				errorName: getErrorName(error),
+			});
+			throw error;
+		});
 		if (!this.isCurrentConnectionGeneration(deviceId, generation)) {
 			authState.dispose();
 			throw new Error("Connection lifecycle was invalidated");
@@ -291,29 +321,43 @@ export class ConnectionManager extends EventEmitter {
 			MAX_MESSAGE_RETRY_CACHE_ENTRIES,
 			MESSAGE_RETRY_CACHE_TTL_MS,
 		);
-		const socket = makeWASocket({
-			...DEFAULT_CONNECTION_CONFIG,
-			auth: authState.state,
-			version,
-			markOnlineOnConnect: true,
-			// Let Baileys provide initial chats/contacts/groups so the app can build
-			// contact/group pickers and conversation history. Persistence is handled
-			// by server-side event listeners.
-			shouldSyncHistoryMessage: () => true,
-			enableRecentMessageCache: true,
-			maxMsgRetryCount: MAX_MESSAGE_RETRY_COUNT,
-			retryRequestDelayMs: MESSAGE_RETRY_REQUEST_DELAY_MS,
-			msgRetryCounterCache: {
-				get: <T>(key: string) =>
-					retryCounterCache.get(deviceId, key) as T | undefined,
-				set: <T>(key: string, value: T) =>
-					retryCounterCache.set(deviceId, key, value as number),
-				del: (key: string) => retryCounterCache.delete(deviceId, key),
-				flushAll: () => retryCounterCache.clearDevice(deviceId),
-			},
-			getMessage: (key) => baileysMessageStore.get(deviceId, key),
-			cachedGroupMetadata: (jid) => groupMetadataStore.get(deviceId, jid),
-		});
+		const logger = createBaileysLogger({ deviceId, generation });
+		const socket = (() => {
+			try {
+				return makeWASocket({
+					...DEFAULT_CONNECTION_CONFIG,
+					logger,
+					auth: authState.state,
+					version,
+					markOnlineOnConnect: true,
+					// Let Baileys provide initial chats/contacts/groups so the app can build
+					// contact/group pickers and conversation history. Persistence is handled
+					// by server-side event listeners.
+					shouldSyncHistoryMessage: () => true,
+					enableRecentMessageCache: true,
+					maxMsgRetryCount: MAX_MESSAGE_RETRY_COUNT,
+					retryRequestDelayMs: MESSAGE_RETRY_REQUEST_DELAY_MS,
+					msgRetryCounterCache: {
+						get: <T>(key: string) =>
+							retryCounterCache.get(deviceId, key) as T | undefined,
+						set: <T>(key: string, value: T) =>
+							retryCounterCache.set(deviceId, key, value as number),
+						del: (key: string) => retryCounterCache.delete(deviceId, key),
+						flushAll: () => retryCounterCache.clearDevice(deviceId),
+					},
+					getMessage: (key) => baileysMessageStore.get(deviceId, key),
+					cachedGroupMetadata: (jid) => groupMetadataStore.get(deviceId, jid),
+				});
+			} catch (error) {
+				logBaileysDiagnostic("error", "baileys.connection.create_failed", {
+					deviceId,
+					generation,
+					stage: "socket_creation",
+					errorName: getErrorName(error),
+				});
+				throw error;
+			}
+		})();
 
 		if (!this.isCurrentConnectionGeneration(deviceId, generation)) {
 			authState.dispose();
@@ -344,15 +388,26 @@ export class ConnectionManager extends EventEmitter {
 						void this.updateDeviceStatus(deviceId, "connected", phoneNumber);
 					}
 				})
-				.catch(() => {
-					console.error("Failed to persist Baileys credentials", {
-						deviceId,
-						operation: "saveCreds",
-					});
+				.catch((error) => {
+					logBaileysDiagnostic(
+						"error",
+						"baileys.connection.credentials_save_failed",
+						{
+							deviceId,
+							generation,
+							errorName: getErrorName(error),
+						},
+					);
 				});
 		});
 		socket.ev.on("connection.update", (update) => {
-			void this.handleConnectionUpdate(deviceId, socket, authState, update);
+			void this.handleConnectionUpdate(
+				deviceId,
+				generation,
+				socket,
+				authState,
+				update,
+			);
 		});
 		socket.ev.on("messages.upsert", (upsert) => {
 			void this.handleMessagesUpsert(deviceId, socket, upsert);
@@ -520,6 +575,7 @@ export class ConnectionManager extends EventEmitter {
 
 	private async handleConnectionUpdate(
 		deviceId: string,
+		generation: number,
 		socket: DeviceConnection["socket"],
 		authState: DbAuthState,
 		update: BaileysEventMap["connection.update"],
@@ -529,14 +585,40 @@ export class ConnectionManager extends EventEmitter {
 			return;
 		}
 
+		logBaileysDiagnostic("info", "baileys.connection.updated", {
+			deviceId,
+			generation,
+			connection: update.connection ?? null,
+			hasQr: Boolean(update.qr),
+			isNewLogin: update.isNewLogin ?? null,
+			receivedPendingNotifications: update.receivedPendingNotifications ?? null,
+			isOnline: update.isOnline ?? null,
+		});
+
 		if (update.qr) {
-			const qr = await QRCode.toDataURL(update.qr);
-			if (this.connections.get(deviceId)?.socket !== socket) return;
-			connection.qrCode = qr;
-			this.emit("device:qr", { deviceId, qr });
+			logBaileysDiagnostic("info", "baileys.connection.qr_received", {
+				deviceId,
+				generation,
+			});
+			try {
+				const qr = await QRCode.toDataURL(update.qr);
+				if (this.connections.get(deviceId)?.socket !== socket) return;
+				connection.qrCode = qr;
+				this.emit("device:qr", { deviceId, qr });
+			} catch (error) {
+				logBaileysDiagnostic("error", "baileys.connection.qr_encoding_failed", {
+					deviceId,
+					generation,
+					errorName: getErrorName(error),
+				});
+			}
 		}
 
 		if (update.connection === "open") {
+			logBaileysDiagnostic("info", "baileys.connection.opened", {
+				deviceId,
+				generation,
+			});
 			this.reconnectAttempts.delete(deviceId);
 			this.clearReconnectTimer(deviceId);
 			const phoneNumber = connection.socket.user?.id
@@ -562,6 +644,13 @@ export class ConnectionManager extends EventEmitter {
 			const statusCode = lastError?.output?.statusCode;
 			const classification = classifyDisconnectReason(statusCode);
 			const intentional = this.intentionalDisconnects.delete(deviceId);
+			logBaileysDiagnostic("info", "baileys.connection.closed", {
+				deviceId,
+				generation,
+				classification: classification.reason,
+				statusCode: statusCode ?? null,
+				intentional,
+			});
 			const statusReason = intentional
 				? "intentional_disconnect"
 				: `baileys_${classification.reason}`;
@@ -632,7 +721,15 @@ export class ConnectionManager extends EventEmitter {
 
 		const generation = this.connectionGenerations.get(deviceId) ?? 0;
 		const attempt = (this.reconnectAttempts.get(deviceId) ?? 0) + 1;
-		if (attempt > MAX_RECONNECT_ATTEMPTS) return;
+		if (attempt > MAX_RECONNECT_ATTEMPTS) {
+			logBaileysDiagnostic("warn", "baileys.connection.reconnect_exhausted", {
+				deviceId,
+				generation,
+				attempt,
+				maxAttempts: MAX_RECONNECT_ATTEMPTS,
+			});
+			return;
+		}
 		this.reconnectAttempts.set(deviceId, attempt);
 
 		const baseDelay = Math.min(
@@ -641,6 +738,12 @@ export class ConnectionManager extends EventEmitter {
 		);
 		const jitter = baseDelay * RECONNECT_JITTER_RATIO * Math.random();
 		const delay = Math.round(baseDelay + jitter);
+		logBaileysDiagnostic("info", "baileys.connection.reconnect_scheduled", {
+			deviceId,
+			generation,
+			attempt,
+			delayMs: delay,
+		});
 		const timer = setTimeout(() => {
 			this.reconnectTimers.delete(deviceId);
 			if (!this.isCurrentConnectionGeneration(deviceId, generation)) return;

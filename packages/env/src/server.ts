@@ -82,6 +82,9 @@ export const env = createEnv({
 		SMTP_USER: z.string().optional(),
 		SMTP_PASSWORD: z.string().optional(),
 		SMTP_FROM: z.string().optional(),
+		BAILEYS_LOG_LEVEL: z
+			.enum(["silent", "error", "warn", "info", "debug"])
+			.default("info"),
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),
