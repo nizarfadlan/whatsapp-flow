@@ -3,6 +3,7 @@ import {
 	classifyMigrationDatabase,
 	formatDrizzleKitFailure,
 	isKnownMigrationLedgerPrefix,
+	requiredApplicationTablesForAppliedMigrations,
 } from "./migrate";
 
 const migrationEntries = [
@@ -62,6 +63,27 @@ describe("isKnownMigrationLedgerPrefix", () => {
 	});
 });
 
+describe("requiredApplicationTablesForAppliedMigrations", () => {
+	test("allows the baseline prefix to upgrade into tenant sharing", () => {
+		expect(requiredApplicationTablesForAppliedMigrations(1)).not.toContain(
+			"flow_access_grant",
+		);
+	});
+
+	test("requires tenant sharing tables after their migration is recorded", () => {
+		expect(requiredApplicationTablesForAppliedMigrations(2)).toEqual(
+			expect.arrayContaining([
+				"device_access_grant",
+				"flow_access_grant",
+				"flow_trigger_secret",
+				"tenant",
+				"tenant_invitation",
+				"tenant_member",
+			]),
+		);
+	});
+});
+
 describe("classifyMigrationDatabase", () => {
 	test("allows an application schema with a known pending-migration prefix", () => {
 		expect(
@@ -69,8 +91,20 @@ describe("classifyMigrationDatabase", () => {
 				hasApplicationTables: true,
 				hasMigrationLedgerRows: true,
 				hasKnownMigrationLedgerPrefix: true,
+				missingRequiredApplicationTables: [],
 			}),
 		).toBe("migrated");
+	});
+
+	test("refuses a known ledger whose required schema is incomplete", () => {
+		expect(
+			classifyMigrationDatabase({
+				hasApplicationTables: true,
+				hasMigrationLedgerRows: true,
+				hasKnownMigrationLedgerPrefix: true,
+				missingRequiredApplicationTables: ["flow_access_grant"],
+			}),
+		).toBe("inconsistent");
 	});
 
 	test("keeps populated databases without a known ledger unsafe", () => {
@@ -79,6 +113,7 @@ describe("classifyMigrationDatabase", () => {
 				hasApplicationTables: true,
 				hasMigrationLedgerRows: false,
 				hasKnownMigrationLedgerPrefix: false,
+				missingRequiredApplicationTables: [],
 			}),
 		).toBe("inconsistent");
 		expect(
@@ -86,6 +121,7 @@ describe("classifyMigrationDatabase", () => {
 				hasApplicationTables: true,
 				hasMigrationLedgerRows: true,
 				hasKnownMigrationLedgerPrefix: false,
+				missingRequiredApplicationTables: [],
 			}),
 		).toBe("inconsistent");
 	});
@@ -96,6 +132,7 @@ describe("classifyMigrationDatabase", () => {
 				hasApplicationTables: false,
 				hasMigrationLedgerRows: false,
 				hasKnownMigrationLedgerPrefix: false,
+				missingRequiredApplicationTables: [],
 			}),
 		).toBe("empty");
 	});

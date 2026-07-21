@@ -47,12 +47,35 @@ const applicationTables = [
 	"webhook_endpoint",
 ] as const;
 
+type ApplicationTable = (typeof applicationTables)[number];
+
 const migrationJournal = JSON.parse(
 	readFileSync(
 		new URL("../src/migrations/meta/_journal.json", import.meta.url),
 		"utf8",
 	),
 ) as { entries: { tag: string; when: number }[] };
+
+const tenantSharingMigrationIndex = migrationJournal.entries.findIndex(
+	({ tag }) => tag === "0001_massive_doctor_doom",
+);
+
+if (tenantSharingMigrationIndex === -1) {
+	throw new Error(
+		"Migration journal is missing the tenant-sharing migration: 0001_massive_doctor_doom.",
+	);
+}
+
+const applicationTableMigrationIndexes: Partial<
+	Record<ApplicationTable, number>
+> = {
+	device_access_grant: tenantSharingMigrationIndex,
+	flow_access_grant: tenantSharingMigrationIndex,
+	flow_trigger_secret: tenantSharingMigrationIndex,
+	tenant: tenantSharingMigrationIndex,
+	tenant_invitation: tenantSharingMigrationIndex,
+	tenant_member: tenantSharingMigrationIndex,
+};
 
 export type MigrationLedgerEntry = {
 	createdAt: number;
@@ -70,6 +93,15 @@ const expectedMigrationLedgerEntries: readonly MigrationLedgerEntry[] =
 	}));
 
 export type MigrationDatabaseState = "empty" | "migrated" | "inconsistent";
+
+export function requiredApplicationTablesForAppliedMigrations(
+	appliedMigrationCount: number,
+): readonly ApplicationTable[] {
+	return applicationTables.filter(
+		(table) =>
+			appliedMigrationCount > (applicationTableMigrationIndexes[table] ?? 0),
+	);
+}
 
 export function isKnownMigrationLedgerPrefix(
 	appliedMigrationEntries: readonly MigrationLedgerEntry[],
@@ -90,16 +122,22 @@ export function classifyMigrationDatabase({
 	hasApplicationTables,
 	hasMigrationLedgerRows,
 	hasKnownMigrationLedgerPrefix,
+	missingRequiredApplicationTables,
 }: {
 	hasApplicationTables: boolean;
 	hasMigrationLedgerRows: boolean;
 	hasKnownMigrationLedgerPrefix: boolean;
+	missingRequiredApplicationTables: readonly string[];
 }): MigrationDatabaseState {
 	if (!hasApplicationTables && !hasMigrationLedgerRows) {
 		return "empty";
 	}
 
-	if (hasApplicationTables && hasKnownMigrationLedgerPrefix) {
+	if (
+		hasApplicationTables &&
+		hasKnownMigrationLedgerPrefix &&
+		missingRequiredApplicationTables.length === 0
+	) {
 		return "migrated";
 	}
 
@@ -112,13 +150,27 @@ function recoveryError({
 	hasMigrationLedgerRows,
 	hasKnownMigrationLedgerPrefix,
 	missingApplicationTables,
+	missingRequiredApplicationTables,
 }: {
 	hasApplicationTables: boolean;
 	hasMigrationLedger: boolean;
 	hasMigrationLedgerRows: boolean;
 	hasKnownMigrationLedgerPrefix: boolean;
 	missingApplicationTables: readonly string[];
+	missingRequiredApplicationTables: readonly string[];
 }): string {
+	if (
+		hasKnownMigrationLedgerPrefix &&
+		missingRequiredApplicationTables.length > 0
+	) {
+		return [
+			"Migration preflight refused to run: the Drizzle migration ledger records migrations whose required application tables are missing.",
+			`Missing required tables: ${missingRequiredApplicationTables.join(", ")}.`,
+			"This database may have been partially restored or its migration ledger may not match its schema.",
+			"Recover it using the approved recovery procedure before rerunning db:migrate.",
+		].join("\n");
+	}
+
 	if (hasApplicationTables && !hasMigrationLedgerRows) {
 		const ledgerState = hasMigrationLedger ? "empty" : "missing";
 
@@ -193,6 +245,14 @@ async function inspectDatabase(databaseUrl: string) {
 		const missingApplicationTables = applicationTables.filter(
 			(table) => !foundApplicationTables.has(table),
 		);
+		const requiredApplicationTables = hasKnownMigrationLedgerPrefix
+			? requiredApplicationTablesForAppliedMigrations(
+					appliedMigrationEntries.length,
+				)
+			: [];
+		const missingRequiredApplicationTables = requiredApplicationTables.filter(
+			(table) => !foundApplicationTables.has(table),
+		);
 
 		return {
 			hasApplicationTables: foundApplicationTables.size > 0,
@@ -200,6 +260,7 @@ async function inspectDatabase(databaseUrl: string) {
 			hasMigrationLedgerRows,
 			hasKnownMigrationLedgerPrefix,
 			missingApplicationTables,
+			missingRequiredApplicationTables,
 		};
 	} finally {
 		await client.end();
