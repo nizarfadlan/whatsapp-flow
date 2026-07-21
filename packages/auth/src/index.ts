@@ -29,14 +29,22 @@ function signupDisabledError() {
 	return new APIError("BAD_REQUEST", { message: signupDisabledMessage });
 }
 
-async function isGlobalSignupEnabled(db: ReturnType<typeof createDb>) {
+async function getSignupSettings(db: ReturnType<typeof createDb>) {
 	const [settings] = await db
-		.select({ globalSignupEnabled: appSettings.globalSignupEnabled })
+		.select({
+			globalSignupEnabled: appSettings.globalSignupEnabled,
+			emailPasswordSignupEnabled: appSettings.emailPasswordSignupEnabled,
+		})
 		.from(appSettings)
 		.where(eq(appSettings.id, APP_SETTINGS_ID))
 		.limit(1);
 
-	return settings?.globalSignupEnabled ?? true;
+	return (
+		settings ?? {
+			globalSignupEnabled: true,
+			emailPasswordSignupEnabled: true,
+		}
+	);
 }
 
 async function hasActiveInviteForEmail(
@@ -104,7 +112,13 @@ export async function createAuth() {
 				if (typeof email !== "string") return;
 
 				const db = createDb();
-				if (await isGlobalSignupEnabled(db)) return;
+				const signupSettings = await getSignupSettings(db);
+				if (
+					signupSettings.globalSignupEnabled &&
+					signupSettings.emailPasswordSignupEnabled
+				) {
+					return;
+				}
 
 				const inviteToken = ctx.body?.inviteToken;
 				if (
@@ -120,7 +134,8 @@ export async function createAuth() {
 				create: {
 					before: async (user) => {
 						const db = createDb();
-						if (await isGlobalSignupEnabled(db)) return;
+						const { globalSignupEnabled } = await getSignupSettings(db);
+						if (globalSignupEnabled) return;
 						if (await hasActiveInviteForEmail(db, user.email)) return;
 
 						throw signupDisabledError();

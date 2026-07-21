@@ -15,6 +15,13 @@
 			"when": 1784181136079,
 			"tag": "0001_massive_doctor_doom",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1784603877188,
+			"tag": "0002_lyrical_silvermane",
+			"breakpoints": true
 		}
 	]
 }

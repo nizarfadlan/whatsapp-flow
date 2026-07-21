@@ -45,6 +45,7 @@ const DEFAULT_BRANDING = {
 };
 const DEFAULT_SIGNUP_SETTINGS = {
 	globalSignupEnabled: true,
+	emailPasswordSignupEnabled: true,
 };
 const OIDC_DISPLAY_NAME = "OIDC Connection";
 const THE_SVG_CDN =
@@ -403,7 +404,10 @@ async function getBranding(db: ReturnType<typeof createDb>) {
 
 async function getSignupSettings(db: ReturnType<typeof createDb>) {
 	const [row] = await db
-		.select({ globalSignupEnabled: appSettings.globalSignupEnabled })
+		.select({
+			globalSignupEnabled: appSettings.globalSignupEnabled,
+			emailPasswordSignupEnabled: appSettings.emailPasswordSignupEnabled,
+		})
 		.from(appSettings)
 		.where(eq(appSettings.id, APP_SETTINGS_ID))
 		.limit(1);
@@ -696,7 +700,7 @@ export const settingsRouter = router({
 		return {
 			branding,
 			auth: {
-				emailPasswordEnabled: true,
+				emailPasswordEnabled: signupSettings.emailPasswordSignupEnabled,
 				globalSignupEnabled: signupSettings.globalSignupEnabled,
 				providers,
 			},
@@ -710,7 +714,12 @@ export const settingsRouter = router({
 	),
 
 	updateSignupSettings: adminProcedure
-		.input(z.object({ globalSignupEnabled: z.boolean() }))
+		.input(
+			z.object({
+				globalSignupEnabled: z.boolean(),
+				emailPasswordSignupEnabled: z.boolean(),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
 			const before = await getSignupSettings(ctx.db);
 			const [row] = await ctx.db
@@ -718,15 +727,20 @@ export const settingsRouter = router({
 				.values({
 					id: APP_SETTINGS_ID,
 					globalSignupEnabled: input.globalSignupEnabled,
+					emailPasswordSignupEnabled: input.emailPasswordSignupEnabled,
 				})
 				.onConflictDoUpdate({
 					target: appSettings.id,
 					set: {
 						globalSignupEnabled: input.globalSignupEnabled,
+						emailPasswordSignupEnabled: input.emailPasswordSignupEnabled,
 						updatedAt: new Date(),
 					},
 				})
-				.returning({ globalSignupEnabled: appSettings.globalSignupEnabled });
+				.returning({
+					globalSignupEnabled: appSettings.globalSignupEnabled,
+					emailPasswordSignupEnabled: appSettings.emailPasswordSignupEnabled,
+				});
 
 			if (!row) {
 				throw new TRPCError({
@@ -736,7 +750,7 @@ export const settingsRouter = router({
 			}
 
 			await writeAuditLog(ctx, {
-				action: "settings.global_signup_updated",
+				action: "settings.signup_policy_updated",
 				targetType: "settings",
 				targetId: APP_SETTINGS_ID,
 				targetDisplay: "Account registration",

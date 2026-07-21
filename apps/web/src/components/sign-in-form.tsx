@@ -86,6 +86,14 @@ export default function SignInForm({
 		type: string;
 	}) => {
 		setSocialProviderPending(provider.providerId);
+		const callbackURL = new URL(
+			"/dashboard",
+			window.location.origin,
+		).toString();
+		const errorCallbackURL = new URL(
+			"/login",
+			window.location.origin,
+		).toString();
 		const callbacks = {
 			onError: (error: { error: { message?: string; statusText: string } }) => {
 				setSocialProviderPending(null);
@@ -97,7 +105,8 @@ export default function SignInForm({
 			await authClient.signIn.oauth2(
 				{
 					providerId: provider.providerId,
-					callbackURL: "/dashboard",
+					callbackURL,
+					errorCallbackURL,
 				},
 				callbacks,
 			);
@@ -107,7 +116,8 @@ export default function SignInForm({
 		await authClient.signIn.social(
 			{
 				provider: provider.providerId,
-				callbackURL: "/dashboard",
+				callbackURL,
+				errorCallbackURL,
 			},
 			callbacks,
 		);

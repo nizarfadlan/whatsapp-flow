@@ -1306,13 +1306,40 @@ function SettingsPage() {
 						Account registration
 					</CardTitle>
 					<CardDescription>
-						Control whether people can create accounts without an invitation.
+						Control which methods people can use to create accounts.
 					</CardDescription>
 				</CardHeader>
-				<CardContent>
+				<CardContent className="space-y-4">
 					<div className="flex items-center justify-between gap-4 rounded-lg border p-4">
 						<div className="space-y-1">
-							<Label htmlFor="globalSignupEnabled">Allow global signup</Label>
+							<Label htmlFor="emailPasswordSignupEnabled">
+								Allow email/password signup
+							</Label>
+							<p className="text-muted-foreground text-xs">
+								Disabling it requires a valid invitation for new password
+								accounts. Existing users can still sign in.
+							</p>
+						</div>
+						<Switch
+							id="emailPasswordSignupEnabled"
+							checked={
+								signupSettingsQuery.data?.emailPasswordSignupEnabled ?? true
+							}
+							disabled={
+								signupSettingsQuery.isPending || updateSignupSettings.isPending
+							}
+							onCheckedChange={(emailPasswordSignupEnabled) =>
+								updateSignupSettings.mutate({
+									globalSignupEnabled:
+										signupSettingsQuery.data?.globalSignupEnabled ?? true,
+									emailPasswordSignupEnabled,
+								})
+							}
+						/>
+					</div>
+					<div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+						<div className="space-y-1">
+							<Label htmlFor="globalSignupEnabled">Allow public signup</Label>
 							<p className="text-muted-foreground text-xs">
 								When disabled, email, OAuth, and OIDC registration require a
 								valid invitation. Existing users can still sign in.
@@ -1325,7 +1352,12 @@ function SettingsPage() {
 								signupSettingsQuery.isPending || updateSignupSettings.isPending
 							}
 							onCheckedChange={(globalSignupEnabled) =>
-								updateSignupSettings.mutate({ globalSignupEnabled })
+								updateSignupSettings.mutate({
+									globalSignupEnabled,
+									emailPasswordSignupEnabled:
+										signupSettingsQuery.data?.emailPasswordSignupEnabled ??
+										true,
+								})
 							}
 						/>
 					</div>

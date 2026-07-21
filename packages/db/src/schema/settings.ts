@@ -25,6 +25,9 @@ export const appSettings = pgTable("app_settings", {
 	primaryColor: text("primary_color"),
 	supportEmail: text("support_email"),
 	globalSignupEnabled: boolean("global_signup_enabled").default(true).notNull(),
+	emailPasswordSignupEnabled: boolean("email_password_signup_enabled")
+		.default(true)
+		.notNull(),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 	updatedAt: timestamp("updated_at")
 		.defaultNow()

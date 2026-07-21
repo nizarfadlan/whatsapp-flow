@@ -1,0 +1,1 @@
+ALTER TABLE "app_settings" ADD COLUMN "email_password_signup_enabled" boolean DEFAULT true NOT NULL;

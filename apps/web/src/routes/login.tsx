@@ -36,7 +36,10 @@ function RouteComponent() {
 			: new URLSearchParams(window.location.search).get("invite");
 	const [showSignIn, setShowSignIn] = useState(!inviteToken);
 	const globalSignupEnabled = publicSettings?.auth.globalSignupEnabled ?? true;
-	const registrationAvailable = globalSignupEnabled || Boolean(inviteToken);
+	const emailPasswordEnabled =
+		publicSettings?.auth.emailPasswordEnabled ?? true;
+	const registrationAvailable =
+		(emailPasswordEnabled && globalSignupEnabled) || Boolean(inviteToken);
 	const showSignUp = !showSignIn && registrationAvailable;
 	const branding = publicSettings?.branding;
 	const appName = branding?.appName ?? "WhatsApp Flow";
@@ -101,7 +104,7 @@ function RouteComponent() {
 							/>
 						) : (
 							<SignInForm
-								showSignup={globalSignupEnabled}
+								showSignup={registrationAvailable}
 								onSwitchToSignUp={() => setShowSignIn(false)}
 							/>
 						)}
