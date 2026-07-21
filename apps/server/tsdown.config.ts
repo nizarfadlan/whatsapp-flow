@@ -7,5 +7,6 @@ export default defineConfig({
 	clean: true,
 	deps: {
 		alwaysBundle: [/^@whatsapp-flow\/.*/],
+		neverBundle: ["baileys"],
 	},
 });
