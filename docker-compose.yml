@@ -26,8 +26,11 @@ services:
       target: migrate
     profiles:
       - tools
-    env_file:
-      - .env.docker
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: "no"
 
   server:

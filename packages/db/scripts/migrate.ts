@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import dotenv from "dotenv";
 import { Client } from "pg";
 
@@ -45,22 +47,59 @@ const applicationTables = [
 	"webhook_endpoint",
 ] as const;
 
+const migrationJournal = JSON.parse(
+	readFileSync(
+		new URL("../src/migrations/meta/_journal.json", import.meta.url),
+		"utf8",
+	),
+) as { entries: { tag: string; when: number }[] };
+
+export type MigrationLedgerEntry = {
+	createdAt: number;
+	hash: string;
+};
+
+const expectedMigrationLedgerEntries: readonly MigrationLedgerEntry[] =
+	migrationJournal.entries.map(({ tag, when }) => ({
+		createdAt: when,
+		hash: createHash("sha256")
+			.update(
+				readFileSync(new URL(`../src/migrations/${tag}.sql`, import.meta.url)),
+			)
+			.digest("hex"),
+	}));
+
 export type MigrationDatabaseState = "empty" | "migrated" | "inconsistent";
+
+export function isKnownMigrationLedgerPrefix(
+	appliedMigrationEntries: readonly MigrationLedgerEntry[],
+	migrationEntries = expectedMigrationLedgerEntries,
+): boolean {
+	return (
+		appliedMigrationEntries.length > 0 &&
+		appliedMigrationEntries.length <= migrationEntries.length &&
+		appliedMigrationEntries.every(
+			(entry, index) =>
+				entry.createdAt === migrationEntries[index]?.createdAt &&
+				entry.hash === migrationEntries[index]?.hash,
+		)
+	);
+}
 
 export function classifyMigrationDatabase({
 	hasApplicationTables,
-	hasCompleteApplicationSchema,
 	hasMigrationLedgerRows,
+	hasKnownMigrationLedgerPrefix,
 }: {
 	hasApplicationTables: boolean;
-	hasCompleteApplicationSchema: boolean;
 	hasMigrationLedgerRows: boolean;
+	hasKnownMigrationLedgerPrefix: boolean;
 }): MigrationDatabaseState {
 	if (!hasApplicationTables && !hasMigrationLedgerRows) {
 		return "empty";
 	}
 
-	if (hasCompleteApplicationSchema && hasMigrationLedgerRows) {
+	if (hasApplicationTables && hasKnownMigrationLedgerPrefix) {
 		return "migrated";
 	}
 
@@ -71,11 +110,13 @@ function recoveryError({
 	hasApplicationTables,
 	hasMigrationLedger,
 	hasMigrationLedgerRows,
+	hasKnownMigrationLedgerPrefix,
 	missingApplicationTables,
 }: {
 	hasApplicationTables: boolean;
 	hasMigrationLedger: boolean;
 	hasMigrationLedgerRows: boolean;
+	hasKnownMigrationLedgerPrefix: boolean;
 	missingApplicationTables: readonly string[];
 }): string {
 	if (hasApplicationTables && !hasMigrationLedgerRows) {
@@ -88,10 +129,12 @@ function recoveryError({
 		].join("\n");
 	}
 
-	if (hasApplicationTables) {
+	if (hasApplicationTables && !hasKnownMigrationLedgerPrefix) {
 		return [
-			"Migration preflight refused to run: the Drizzle migration ledger has entries, but the application schema is incomplete.",
-			`Missing required tables: ${missingApplicationTables.join(", ")}.`,
+			"Migration preflight refused to run: the Drizzle migration ledger does not match a known ordered prefix from the checked-in migration journal.",
+			...(missingApplicationTables.length > 0
+				? [`Missing required tables: ${missingApplicationTables.join(", ")}.`]
+				: []),
 			"This database may have been partially restored or use an incompatible migration lineage.",
 			"Recover it using the approved recovery procedure before rerunning db:migrate.",
 		].join("\n");
@@ -125,14 +168,24 @@ async function inspectDatabase(databaseUrl: string) {
 			)`,
 		);
 		const hasMigrationLedger = ledgerRows[0]?.exists ?? false;
-		let hasMigrationLedgerRows = false;
+		let appliedMigrationEntries: MigrationLedgerEntry[] = [];
 
 		if (hasMigrationLedger) {
-			const { rows } = await client.query<{ exists: boolean }>(
-				"select exists (select 1 from drizzle.__drizzle_migrations)",
+			const { rows } = await client.query<{
+				created_at: string | number;
+				hash: string;
+			}>(
+				"select hash, created_at from drizzle.__drizzle_migrations order by id",
 			);
-			hasMigrationLedgerRows = rows[0]?.exists ?? false;
+			appliedMigrationEntries = rows.map((row) => ({
+				createdAt: Number(row.created_at),
+				hash: row.hash,
+			}));
 		}
+		const hasMigrationLedgerRows = appliedMigrationEntries.length > 0;
+		const hasKnownMigrationLedgerPrefix = isKnownMigrationLedgerPrefix(
+			appliedMigrationEntries,
+		);
 
 		const foundApplicationTables = new Set(
 			tableRows.map((row) => row.table_name),
@@ -143,9 +196,9 @@ async function inspectDatabase(databaseUrl: string) {
 
 		return {
 			hasApplicationTables: foundApplicationTables.size > 0,
-			hasCompleteApplicationSchema: missingApplicationTables.length === 0,
 			hasMigrationLedger,
 			hasMigrationLedgerRows,
+			hasKnownMigrationLedgerPrefix,
 			missingApplicationTables,
 		};
 	} finally {
@@ -153,13 +206,55 @@ async function inspectDatabase(databaseUrl: string) {
 	}
 }
 
-async function runDrizzleKit(): Promise<never> {
+export function redactDatabaseCredentials(
+	output: string,
+	databaseUrl: string,
+): string {
+	return output
+		.replaceAll(databaseUrl, "DATABASE_URL=<redacted>")
+		.replace(/postgres(?:ql)?:\/\/\S+/giu, "DATABASE_URL=<redacted>");
+}
+
+export function formatDrizzleKitFailure({
+	exitCode,
+	stdout,
+	stderr,
+	databaseUrl,
+}: {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	databaseUrl: string;
+}): string {
+	return [
+		`drizzle-kit migrate failed with exit code ${exitCode}.`,
+		"Captured stdout:",
+		redactDatabaseCredentials(stdout, databaseUrl) || "(no output)",
+		"Captured stderr:",
+		redactDatabaseCredentials(stderr, databaseUrl) || "(no output)",
+	].join("\n");
+}
+
+async function runDrizzleKit(databaseUrl: string): Promise<void> {
 	const child = Bun.spawn(["drizzle-kit", "migrate"], {
 		stdin: "inherit",
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: "pipe",
+		stderr: "pipe",
 	});
-	process.exit(await child.exited);
+	const [exitCode, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+
+	if (exitCode !== 0) {
+		throw new Error(
+			formatDrizzleKitFailure({ exitCode, stdout, stderr, databaseUrl }),
+		);
+	}
+
+	process.stdout.write(stdout);
+	process.stderr.write(stderr);
 }
 
 async function main() {
@@ -179,7 +274,7 @@ async function main() {
 		throw new Error(recoveryError(inspection));
 	}
 
-	await runDrizzleKit();
+	await runDrizzleKit(databaseUrl);
 }
 
 if (import.meta.main) {
