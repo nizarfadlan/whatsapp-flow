@@ -16,7 +16,7 @@ import { LogOut, Mail, ShieldCheck, UserCircle } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/account")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/account")({
 	component: AccountPage,
 });
 

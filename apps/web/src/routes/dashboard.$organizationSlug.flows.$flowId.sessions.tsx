@@ -31,10 +31,13 @@ import { cn } from "@whatsapp-flow/ui/lib/utils";
 import { ArrowLeft, CheckCircle, Clock, Loader2, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useFlowSessionSSE } from "@/hooks/use-flow-session-sse";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/flows/$flowId/sessions")({
+export const Route = createFileRoute(
+	"/dashboard/$organizationSlug/flows/$flowId/sessions",
+)({
 	component: FlowSessionsPage,
 });
 
@@ -108,9 +111,13 @@ function SessionTimeline({
 	sessionId: string;
 	flowNodes: { id: string; type?: string; data?: Record<string, unknown> }[];
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data } = useSuspenseQuery(
-		trpc.flowSession.timeline.queryOptions({ id: sessionId }),
+		trpc.flowSession.timeline.queryOptions({
+			id: sessionId,
+			tenantId: organization.id,
+		}),
 	);
 	const events = data as TimelineEvent[];
 
@@ -322,13 +329,19 @@ function SessionDetails({
 }
 
 function FlowSessionsPage() {
+	const organization = useActiveOrganization();
 	const { flowId } = Route.useParams();
 	const trpc = useTRPC();
 	const { data: flow } = useSuspenseQuery(
-		trpc.flow.getById.queryOptions({ id: flowId }),
+		trpc.flow.getById.queryOptions({ id: flowId, tenantId: organization.id }),
 	);
 	const { data: sessions, refetch } = useSuspenseQuery(
-		trpc.flowSession.list.queryOptions({ flowId, status: "all", limit: 100 }),
+		trpc.flowSession.list.queryOptions({
+			flowId,
+			tenantId: organization.id,
+			status: "all",
+			limit: 100,
+		}),
 	);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [cancelId, setCancelId] = useState<string | null>(null);
@@ -375,8 +388,8 @@ function FlowSessionsPage() {
 					</p>
 				</div>
 				<Link
-					to="/dashboard/flows/$flowId"
-					params={{ flowId }}
+					to="/dashboard/$organizationSlug/flows/$flowId"
+					params={{ organizationSlug: organization.slug, flowId }}
 					className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
 				>
 					<ArrowLeft className="size-3.5" />
@@ -518,7 +531,8 @@ function FlowSessionsPage() {
 						<AlertDialogCancel>Keep session</AlertDialogCancel>
 						<AlertDialogAction
 							onClick={() => {
-								if (cancelId) cancelMut.mutate({ id: cancelId });
+								if (cancelId)
+									cancelMut.mutate({ id: cancelId, tenantId: organization.id });
 							}}
 						>
 							Cancel session

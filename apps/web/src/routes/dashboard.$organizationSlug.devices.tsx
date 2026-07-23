@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { DataTable } from "@/components/data-table";
 import {
 	initialMetaConfigFormState,
@@ -52,7 +53,7 @@ import {
 import { useDeviceStatusSSE } from "@/hooks/use-device-status-sse";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/devices")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/devices")({
 	component: DevicesPage,
 });
 
@@ -234,6 +235,7 @@ function loadFacebookSdk(appId: string, graphApiVersion: string) {
 }
 
 function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [open, setOpen] = useState(false);
 	const [provider, setProvider] = useState<"baileys" | "meta_cloud">("baileys");
@@ -318,7 +320,9 @@ function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
 		}),
 	);
 	const embeddedSignupConfig = useQuery({
-		...trpc.device.getMetaEmbeddedSignupConfig.queryOptions(),
+		...trpc.device.getMetaEmbeddedSignupConfig.queryOptions({
+			tenantId: organization.id,
+		}),
 		enabled: open && provider === "meta_cloud",
 	});
 
@@ -343,6 +347,7 @@ function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
 				selection.businessAccountId ?? metaForm.businessAccountId.trim();
 			createMetaEmbedded.mutate({
 				name: name.trim(),
+				tenantId: organization.id,
 				code: auth.code,
 				state: auth.state,
 				phoneNumberId,
@@ -352,7 +357,7 @@ function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
 			});
 			return true;
 		},
-		[createMetaEmbedded, metaForm, name],
+		[createMetaEmbedded, metaForm, name, organization.id],
 	);
 
 	const startEmbeddedSignup = async () => {
@@ -522,11 +527,16 @@ function AddDeviceDialog({ onAdded }: { onAdded: () => void }) {
 							if (isMeta) {
 								createMeta.mutate({
 									name: name.trim(),
+									tenantId: organization.id,
 									...toMetaConfigPayload(metaForm),
 								});
 								return;
 							}
-							create.mutate({ name: name.trim(), provider });
+							create.mutate({
+								name: name.trim(),
+								provider,
+								tenantId: organization.id,
+							});
 						}}
 					>
 						{isPending ? "Creating..." : "Create"}
@@ -548,6 +558,7 @@ function QrModal({
 	onOpenChange: (v: boolean) => void;
 	onStatusChange?: () => void;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [qrCode, setQrCode] = useState<string | null>(null);
 	const [status, setStatus] = useState<string>("connecting");
@@ -569,7 +580,7 @@ function QrModal({
 		}
 
 		const es = new EventSource(
-			`${import.meta.env.VITE_SERVER_URL}/api/devices/${deviceId}/events`,
+			`${import.meta.env.VITE_SERVER_URL}/api/devices/${deviceId}/events?tenantId=${encodeURIComponent(organization.id)}`,
 			{ withCredentials: true },
 		);
 		eventSourceRef.current = es;
@@ -591,7 +602,7 @@ function QrModal({
 		};
 
 		return () => es.close();
-	}, [deviceId, onStatusChange, open]);
+	}, [deviceId, onStatusChange, open, organization.id]);
 
 	useEffect(() => {
 		if (status === "connected") {
@@ -640,6 +651,7 @@ function QrModal({
 							onClick={() =>
 								pairingCodeMut.mutate({
 									id: deviceId,
+									tenantId: organization.id,
 									phoneNumber,
 								})
 							}
@@ -663,9 +675,10 @@ function QrModal({
 }
 
 function DevicesPage() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data: devices, refetch } = useSuspenseQuery(
-		trpc.device.list.queryOptions(),
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
 	);
 	const [qrDeviceId, setQrDeviceId] = useState<string | null>(null);
 	const [editingMetaDeviceId, setEditingMetaDeviceId] = useState<string | null>(
@@ -716,7 +729,7 @@ function DevicesPage() {
 	);
 
 	const handleConnect = (deviceId: string, provider?: string) => {
-		connectMut.mutate({ id: deviceId });
+		connectMut.mutate({ id: deviceId, tenantId: organization.id });
 		if (provider !== "meta_cloud") setQrDeviceId(deviceId);
 	};
 
@@ -807,6 +820,7 @@ function DevicesPage() {
 																syncAllMut.mutate({
 																	id: d.id,
 																	resource: "all",
+																	tenantId: organization.id,
 																	mode: "normal",
 																})
 															}
@@ -831,7 +845,12 @@ function DevicesPage() {
 												)}
 												{d.status !== "disconnected" && (
 													<DropdownMenuItem
-														onClick={() => disconnectMut.mutate({ id: d.id })}
+														onClick={() =>
+															disconnectMut.mutate({
+																id: d.id,
+																tenantId: organization.id,
+															})
+														}
 													>
 														<PowerOff className="size-3.5" />
 														Disconnect
@@ -856,7 +875,12 @@ function DevicesPage() {
 												)}
 												<DropdownMenuItem
 													variant="destructive"
-													onClick={() => logoutMut.mutate({ id: d.id })}
+													onClick={() =>
+														logoutMut.mutate({
+															id: d.id,
+															tenantId: organization.id,
+														})
+													}
 												>
 													<LogOut className="size-3.5" />
 													{d.provider === "meta_cloud"
@@ -865,7 +889,12 @@ function DevicesPage() {
 												</DropdownMenuItem>
 												<DropdownMenuItem
 													variant="destructive"
-													onClick={() => deleteMut.mutate({ id: d.id })}
+													onClick={() =>
+														deleteMut.mutate({
+															id: d.id,
+															tenantId: organization.id,
+														})
+													}
 												>
 													<Trash2 className="size-3.5" />
 													Delete

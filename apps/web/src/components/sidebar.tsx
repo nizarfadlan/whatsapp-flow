@@ -33,71 +33,92 @@ import {
 	Webhook,
 } from "lucide-react";
 
+import { useActiveOrganization } from "@/components/active-organization";
 import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
 const navItems = [
-	{ to: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
 	{
-		to: "/dashboard/devices",
+		to: "/dashboard/$organizationSlug",
+		label: "Overview",
+		icon: LayoutDashboard,
+		exact: true,
+	},
+	{
+		to: "/dashboard/$organizationSlug/devices",
 		label: "Devices",
 		icon: Smartphone,
 		exact: false,
 		permission: "devices.read",
 	},
 	{
-		to: "/dashboard/flows",
+		to: "/dashboard/$organizationSlug/flows",
 		label: "Flows",
 		icon: MessageSquare,
 		exact: false,
 		permission: "flows.read",
 	},
 	{
-		to: "/dashboard/inbox",
+		to: "/dashboard/$organizationSlug/inbox",
 		label: "Inbox",
 		icon: Inbox,
 		exact: false,
 		permission: "inbox.read",
 	},
-	{ to: "/dashboard/contacts", label: "Contacts", icon: Users, exact: false },
-	{ to: "/dashboard/groups", label: "Groups", icon: UsersRound, exact: false },
 	{
-		to: "/dashboard/newsletters",
+		to: "/dashboard/$organizationSlug/contacts",
+		label: "Contacts",
+		icon: Users,
+		exact: false,
+	},
+	{
+		to: "/dashboard/$organizationSlug/groups",
+		label: "Groups",
+		icon: UsersRound,
+		exact: false,
+	},
+	{
+		to: "/dashboard/$organizationSlug/newsletters",
 		label: "Newsletters",
 		icon: Megaphone,
 		exact: false,
 	},
-	{ to: "/dashboard/logs", label: "Logs", icon: Activity, exact: false },
 	{
-		to: "/dashboard/webhooks",
+		to: "/dashboard/$organizationSlug/logs",
+		label: "Logs",
+		icon: Activity,
+		exact: false,
+	},
+	{
+		to: "/dashboard/$organizationSlug/webhooks",
 		label: "Webhooks",
 		icon: Webhook,
 		exact: false,
 		permission: "webhooks.read",
 	},
 	{
-		to: "/dashboard/users",
+		to: "/dashboard/$organizationSlug/users",
 		label: "Users",
 		icon: UserCircle,
 		exact: false,
 		permission: "users.read",
 	},
 	{
-		to: "/dashboard/roles",
+		to: "/dashboard/$organizationSlug/roles",
 		label: "Roles",
 		icon: ShieldCheck,
 		exact: false,
 		permission: "roles.read",
 	},
 	{
-		to: "/dashboard/audit",
+		to: "/dashboard/$organizationSlug/audit",
 		label: "Audit",
 		icon: ClipboardList,
 		exact: false,
 		permission: "audit.read",
 	},
 	{
-		to: "/dashboard/settings",
+		to: "/dashboard/$organizationSlug/settings",
 		label: "Settings",
 		icon: Settings,
 		exact: false,
@@ -174,6 +195,7 @@ function Brand() {
 
 function SidebarNav() {
 	const location = useLocation();
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const permissionsQuery = useQuery(trpc.rbac.me.queryOptions());
 	const permissions = permissionsQuery.data
@@ -187,14 +209,21 @@ function SidebarNav() {
 				const permission = "permission" in item ? item.permission : undefined;
 				if (permission && permissions && !permissions.has(permission))
 					return null;
+				const path = to.replace("$organizationSlug", organization.slug);
 				const active = exact
-					? location.pathname === to
-					: location.pathname === to || location.pathname.startsWith(`${to}/`);
+					? location.pathname === path
+					: location.pathname === path ||
+						location.pathname.startsWith(`${path}/`);
 
 				return (
 					<SidebarMenuItem key={to}>
 						<SidebarMenuButton
-							render={<Link to={to} />}
+							render={
+								<Link
+									to={to}
+									params={{ organizationSlug: organization.slug }}
+								/>
+							}
 							isActive={active}
 							tooltip={label}
 						>
@@ -209,6 +238,7 @@ function SidebarNav() {
 }
 
 function SidebarAccountFooter() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data: session } = authClient.useSession();
 	const { data: publicSettings } = useQuery(
@@ -237,7 +267,8 @@ function SidebarAccountFooter() {
 
 			<div className="grid gap-1 text-xs">
 				<Link
-					to="/dashboard/account"
+					to="/dashboard/$organizationSlug/account"
+					params={{ organizationSlug: organization.slug }}
 					className="flex items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 				>
 					<UserCircle className="size-3.5" />
@@ -258,6 +289,8 @@ function SidebarAccountFooter() {
 }
 
 export function DashboardSidebar({ className }: { className?: string }) {
+	const organization = useActiveOrganization();
+
 	return (
 		<Sidebar collapsible="icon" variant="inset" className={className}>
 			<SidebarHeader>
@@ -269,7 +302,12 @@ export function DashboardSidebar({ className }: { className?: string }) {
 						<SidebarMenu>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									render={<Link to="/dashboard/flows/new" />}
+									render={
+										<Link
+											to="/dashboard/$organizationSlug/flows/new"
+											params={{ organizationSlug: organization.slug }}
+										/>
+									}
 									variant="outline"
 									tooltip="New Flow"
 								>

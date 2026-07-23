@@ -56,7 +56,7 @@ import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/users")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/users")({
 	component: UsersPage,
 });
 

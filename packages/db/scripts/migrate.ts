@@ -39,6 +39,11 @@ const applicationTables = [
 	"tenant",
 	"tenant_invitation",
 	"tenant_member",
+	"tenant_member_provenance",
+	"tenant_permission",
+	"tenant_role",
+	"tenant_role_assignment",
+	"tenant_role_permission",
 	"user",
 	"user_invitation",
 	"user_role_assignment",
@@ -57,12 +62,21 @@ const migrationJournal = JSON.parse(
 ) as { entries: { tag: string; when: number }[] };
 
 const tenantSharingMigrationIndex = migrationJournal.entries.findIndex(
-	({ tag }) => tag === "0001_massive_doctor_doom",
+	({ tag }) => tag === "0003_awesome_stark_industries",
+);
+const organizationFoundationMigrationIndex = migrationJournal.entries.findIndex(
+	({ tag }) => tag === "0005_keen_lord_tyger",
 );
 
 if (tenantSharingMigrationIndex === -1) {
 	throw new Error(
 		"Migration journal is missing the tenant-sharing migration: 0001_massive_doctor_doom.",
+	);
+}
+
+if (organizationFoundationMigrationIndex === -1) {
+	throw new Error(
+		"Migration journal is missing the organization foundation migration: 0005_keen_lord_tyger.",
 	);
 }
 
@@ -75,6 +89,11 @@ const applicationTableMigrationIndexes: Partial<
 	tenant: tenantSharingMigrationIndex,
 	tenant_invitation: tenantSharingMigrationIndex,
 	tenant_member: tenantSharingMigrationIndex,
+	tenant_member_provenance: organizationFoundationMigrationIndex,
+	tenant_permission: organizationFoundationMigrationIndex,
+	tenant_role: organizationFoundationMigrationIndex,
+	tenant_role_assignment: organizationFoundationMigrationIndex,
+	tenant_role_permission: organizationFoundationMigrationIndex,
 };
 
 export type MigrationLedgerEntry = {

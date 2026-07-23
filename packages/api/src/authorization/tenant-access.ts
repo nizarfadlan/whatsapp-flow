@@ -5,7 +5,7 @@ import {
 	flow,
 	flowAccessGrant,
 } from "@whatsapp-flow/db/schema/device";
-import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
+import { tenant, tenantMember } from "@whatsapp-flow/db/schema/tenant";
 import { and, eq, or } from "drizzle-orm";
 
 type Database = ReturnType<typeof import("@whatsapp-flow/db").createDb>;
@@ -27,10 +27,21 @@ export async function requireTenantMembership(
 	userId: string,
 ) {
 	const rows = await db
-		.select()
+		.select({
+			tenantId: tenantMember.tenantId,
+			userId: tenantMember.userId,
+			role: tenantMember.role,
+			status: tenantMember.status,
+		})
 		.from(tenantMember)
+		.innerJoin(tenant, eq(tenant.id, tenantMember.tenantId))
 		.where(
-			and(eq(tenantMember.tenantId, tenantId), eq(tenantMember.userId, userId)),
+			and(
+				eq(tenantMember.tenantId, tenantId),
+				eq(tenantMember.userId, userId),
+				eq(tenantMember.status, "active"),
+				eq(tenant.status, "active"),
+			),
 		)
 		.limit(1);
 
@@ -55,7 +66,12 @@ export async function getFlowAccess(
 			and(
 				eq(tenantMember.tenantId, flow.tenantId),
 				eq(tenantMember.userId, userId),
+				eq(tenantMember.status, "active"),
 			),
+		)
+		.innerJoin(
+			tenant,
+			and(eq(tenant.id, flow.tenantId), eq(tenant.status, "active")),
 		)
 		.leftJoin(
 			flowAccessGrant,
@@ -129,7 +145,12 @@ export async function requireDeviceDeployAccess(
 			and(
 				eq(tenantMember.tenantId, device.tenantId),
 				eq(tenantMember.userId, userId),
+				eq(tenantMember.status, "active"),
 			),
+		)
+		.innerJoin(
+			tenant,
+			and(eq(tenant.id, device.tenantId), eq(tenant.status, "active")),
 		)
 		.leftJoin(
 			deviceAccessGrant,

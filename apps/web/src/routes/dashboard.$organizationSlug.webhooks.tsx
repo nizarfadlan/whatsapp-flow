@@ -30,10 +30,11 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { DataTable } from "@/components/data-table";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/webhooks")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/webhooks")({
 	component: WebhooksPage,
 });
 
@@ -143,6 +144,7 @@ function summarizeSelection(
 }
 
 function WebhooksPage() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [form, setForm] = useState<WebhookFormState>(emptyForm);
@@ -151,9 +153,11 @@ function WebhooksPage() {
 		trpc.webhook.listEndpoints.queryOptions(),
 	);
 	const { data: devices = [] } = useSuspenseQuery(
-		trpc.device.list.queryOptions(),
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
 	);
-	const { data: flows = [] } = useSuspenseQuery(trpc.flow.list.queryOptions());
+	const { data: flows = [] } = useSuspenseQuery(
+		trpc.flow.list.queryOptions({ tenantId: organization.id }),
+	);
 
 	const deviceLabels = useMemo(
 		() =>

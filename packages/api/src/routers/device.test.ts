@@ -25,6 +25,18 @@ mock.module("@whatsapp-flow/whatsapp", () => ({
 
 const { deviceRouter } = await import("./device");
 
+const organizationMembership = {
+	tenantId: "tenant-1",
+	userId: "user-1",
+	role: "member",
+	organization: {
+		id: "tenant-1",
+		name: "Organization",
+		slug: "organization",
+		status: "active",
+	},
+};
+
 type Selection = Record<string, unknown> | undefined;
 
 function createMockDb(selects: unknown[][]) {
@@ -58,7 +70,25 @@ function createMockDb(selects: unknown[][]) {
 }
 
 function createCaller(selects: unknown[][]) {
-	const mockDb = createMockDb(selects);
+	const mockDb = createMockDb(
+		selects.length > 2
+			? [
+					selects[0] ?? [],
+					[organizationMembership],
+					[organizationMembership],
+					[{ key: "organization.devices.read" }],
+					[organizationMembership],
+					[{ key: "organization.flows.execute" }],
+					...selects.slice(1),
+				]
+			: [
+					selects[0] ?? [],
+					[organizationMembership],
+					[organizationMembership],
+					[{ key: "organization.devices.read" }],
+					...selects.slice(1),
+				],
+	);
 	return {
 		caller: deviceRouter.createCaller({
 			auth: null,
@@ -97,8 +127,10 @@ describe("deviceRouter.list", () => {
 			],
 		]);
 
-		await expect(caller.list()).resolves.toHaveLength(1);
-		expect(Object.keys(selections[1] ?? {}).sort()).toEqual([
+		await expect(caller.list({ tenantId: "tenant-1" })).resolves.toHaveLength(
+			1,
+		);
+		expect(Object.keys(selections[4] ?? {}).sort()).toEqual([
 			"businessAccountId",
 			"createdAt",
 			"displayPhoneNumber",
@@ -140,7 +172,9 @@ describe("deviceRouter.listForDeploy", () => {
 			],
 		]);
 
-		await expect(caller.listForDeploy({ flowId: "flow-1" })).resolves.toEqual([
+		await expect(
+			caller.listForDeploy({ tenantId: "tenant-1", flowId: "flow-1" }),
+		).resolves.toEqual([
 			{
 				id: "device-1",
 				name: "Support line",
@@ -148,7 +182,7 @@ describe("deviceRouter.listForDeploy", () => {
 				status: "connected",
 			},
 		]);
-		expect(Object.keys(selections[2] ?? {}).sort()).toEqual([
+		expect(Object.keys(selections[7] ?? {}).sort()).toEqual([
 			"id",
 			"name",
 			"provider",
@@ -159,6 +193,8 @@ describe("deviceRouter.listForDeploy", () => {
 	test("does not list devices when the caller lacks active flow tenant membership", async () => {
 		const { caller } = createCaller([[makeCurrentUser()], []]);
 
-		await expectNotFound(caller.listForDeploy({ flowId: "flow-1" }));
+		await expectNotFound(
+			caller.listForDeploy({ tenantId: "tenant-1", flowId: "flow-1" }),
+		);
 	});
 });

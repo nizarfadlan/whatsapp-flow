@@ -44,11 +44,12 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { DataTable } from "@/components/data-table";
 import { useDeviceStatusSSE } from "@/hooks/use-device-status-sse";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/flows/")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/flows/")({
 	component: FlowsPage,
 });
 
@@ -111,6 +112,7 @@ function DeviceBadge({
 }
 
 function CreateFlowDialog({ onCreated }: { onCreated: () => void }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
@@ -143,7 +145,7 @@ function CreateFlowDialog({ onCreated }: { onCreated: () => void }) {
 					onChange={(e) => setName(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && name.trim()) {
-							create.mutate({ name: name.trim() });
+							create.mutate({ name: name.trim(), tenantId: organization.id });
 						}
 					}}
 				/>
@@ -153,7 +155,9 @@ function CreateFlowDialog({ onCreated }: { onCreated: () => void }) {
 					</Button>
 					<Button
 						disabled={!name.trim() || create.isPending}
-						onClick={() => create.mutate({ name: name.trim() })}
+						onClick={() =>
+							create.mutate({ name: name.trim(), tenantId: organization.id })
+						}
 					>
 						{create.isPending ? "Creating..." : "Create"}
 					</Button>
@@ -164,11 +168,14 @@ function CreateFlowDialog({ onCreated }: { onCreated: () => void }) {
 }
 
 function FlowsPage() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data: flows, refetch } = useSuspenseQuery(
-		trpc.flow.list.queryOptions(),
+		trpc.flow.list.queryOptions({ tenantId: organization.id }),
 	);
-	const { data: devices } = useSuspenseQuery(trpc.device.list.queryOptions());
+	const { data: devices } = useSuspenseQuery(
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
+	);
 	const [confirmFlowId, setConfirmFlowId] = useState<string | null>(null);
 	useDeviceStatusSSE();
 
@@ -207,7 +214,11 @@ function FlowsPage() {
 		const targetFlow = flows.find((f) => f.id === flowId);
 		if (!targetFlow?.deviceId) {
 			// Will error with "Deploy flow to a device before activating"
-			toggleMut.mutate({ id: flowId, status: "active" });
+			toggleMut.mutate({
+				id: flowId,
+				status: "active",
+				tenantId: organization.id,
+			});
 			return;
 		}
 
@@ -221,7 +232,11 @@ function FlowsPage() {
 		if (conflicting) {
 			setConfirmFlowId(flowId);
 		} else {
-			toggleMut.mutate({ id: flowId, status: "active" });
+			toggleMut.mutate({
+				id: flowId,
+				status: "active",
+				tenantId: organization.id,
+			});
 		}
 	};
 
@@ -268,8 +283,11 @@ function FlowsPage() {
 									className: "font-medium",
 									cell: (f) => (
 										<Link
-											to="/dashboard/flows/$flowId"
-											params={{ flowId: f.id }}
+											to="/dashboard/$organizationSlug/flows/$flowId"
+											params={{
+												organizationSlug: organization.slug,
+												flowId: f.id,
+											}}
 											className="hover:text-primary hover:underline"
 										>
 											{f.name}
@@ -339,7 +357,12 @@ function FlowsPage() {
 											<DropdownMenuContent>
 												{f.accessCapability !== "viewer" && (
 													<DropdownMenuItem
-														onClick={() => duplicateMut.mutate({ id: f.id })}
+														onClick={() =>
+															duplicateMut.mutate({
+																id: f.id,
+																tenantId: organization.id,
+															})
+														}
 													>
 														<Copy className="size-3.5" />
 														Duplicate
@@ -358,7 +381,11 @@ function FlowsPage() {
 													f.status === "active" && (
 														<DropdownMenuItem
 															onClick={() =>
-																toggleMut.mutate({ id: f.id, status: "paused" })
+																toggleMut.mutate({
+																	id: f.id,
+																	status: "paused",
+																	tenantId: organization.id,
+																})
 															}
 														>
 															<Pause className="size-3.5" />
@@ -368,7 +395,12 @@ function FlowsPage() {
 												{f.accessCapability === "owner" && (
 													<DropdownMenuItem
 														variant="destructive"
-														onClick={() => deleteMut.mutate({ id: f.id })}
+														onClick={() =>
+															deleteMut.mutate({
+																id: f.id,
+																tenantId: organization.id,
+															})
+														}
 													>
 														<Trash2 className="size-3.5" />
 														Delete
@@ -409,7 +441,11 @@ function FlowsPage() {
 						<AlertDialogAction
 							onClick={() => {
 								if (confirmFlowId) {
-									toggleMut.mutate({ id: confirmFlowId, status: "active" });
+									toggleMut.mutate({
+										id: confirmFlowId,
+										status: "active",
+										tenantId: organization.id,
+									});
 								}
 								setConfirmFlowId(null);
 							}}

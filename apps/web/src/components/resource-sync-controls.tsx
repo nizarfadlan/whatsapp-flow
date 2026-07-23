@@ -7,6 +7,7 @@ import {
 import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useTRPC } from "@/utils/trpc";
 
 type SyncResource = "contacts" | "groups" | "newsletters";
@@ -25,6 +26,7 @@ type SyncStartResult = {
 const activeStatuses = new Set(["queued", "running"]);
 
 export function useResourceSyncCompletion(resource: SyncResource) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const [tracked, setTracked] = useState<{
@@ -34,6 +36,7 @@ export function useResourceSyncCompletion(resource: SyncResource) {
 	const status = useQuery({
 		...trpc.device.syncStatus.queryOptions({
 			id: tracked?.deviceId ?? "",
+			tenantId: organization.id,
 			limit: 30,
 		}),
 		enabled: Boolean(tracked),
@@ -92,6 +95,7 @@ export function ResourceSyncControls({
 	devices: SyncDevice[];
 	resource: SyncResource;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const trackCompletion = useResourceSyncCompletion(resource);
 	const [deviceId, setDeviceId] = useState("");
@@ -148,7 +152,12 @@ export function ResourceSyncControls({
 				disabled={!canSync || startSync.isPending}
 				onClick={() => {
 					if (!deviceId) return;
-					startSync.mutate({ id: deviceId, resource, mode: "normal" });
+					startSync.mutate({
+						id: deviceId,
+						resource,
+						mode: "normal",
+						tenantId: organization.id,
+					});
 				}}
 			>
 				<RefreshCw className="size-3.5" />

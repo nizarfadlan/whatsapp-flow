@@ -28,6 +28,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useFlowLogSSE } from "@/hooks/use-flow-log-sse";
 import { useTRPC } from "@/utils/trpc";
 
@@ -116,13 +117,15 @@ function formatEventType(type: string) {
 }
 
 function ContactCell({ log }: { log: FlowLogRow }) {
+	const organization = useActiveOrganization();
 	const displayName =
 		log.contactName ?? log.contactPushName ?? log.contactNumber;
 
 	if (log.inboxThreadId) {
 		return (
 			<Link
-				to="/dashboard/inbox"
+				to="/dashboard/$organizationSlug/inbox"
+				params={{ organizationSlug: organization.slug }}
 				search={{ thread: log.inboxThreadId }}
 				className="group inline-flex flex-col hover:text-primary"
 			>
@@ -137,7 +140,8 @@ function ContactCell({ log }: { log: FlowLogRow }) {
 	if (log.contactId) {
 		return (
 			<Link
-				to="/dashboard/contacts"
+				to="/dashboard/$organizationSlug/contacts"
+				params={{ organizationSlug: organization.slug }}
 				search={{ search: log.contactNumber ?? undefined }}
 				className="group inline-flex flex-col hover:text-primary"
 			>
@@ -166,12 +170,16 @@ function LogDetailPanel({
 	logId: string;
 	flowNodes?: { id: string; type?: string; data?: Record<string, unknown> }[];
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data: log } = useSuspenseQuery(
-		trpc.flowLog.getById.queryOptions({ id: logId }),
+		trpc.flowLog.getById.queryOptions({ id: logId, tenantId: organization.id }),
 	);
 	const { data: timeline } = useSuspenseQuery(
-		trpc.flowLog.timeline.queryOptions({ id: logId }),
+		trpc.flowLog.timeline.queryOptions({
+			id: logId,
+			tenantId: organization.id,
+		}),
 	);
 
 	const events = timeline as TimelineEvent[];
@@ -222,8 +230,11 @@ function LogDetailPanel({
 							Flow
 						</p>
 						<Link
-							to="/dashboard/flows/$flowId"
-							params={{ flowId: log.flowId }}
+							to="/dashboard/$organizationSlug/flows/$flowId"
+							params={{
+								organizationSlug: organization.slug,
+								flowId: log.flowId,
+							}}
 							className="mt-1 block font-medium hover:text-primary"
 						>
 							{log.flowName}
@@ -262,8 +273,11 @@ function LogDetailPanel({
 							</p>
 						)}
 						<Link
-							to="/dashboard/flows/$flowId/sessions"
-							params={{ flowId: log.flowId }}
+							to="/dashboard/$organizationSlug/flows/$flowId/sessions"
+							params={{
+								organizationSlug: organization.slug,
+								flowId: log.flowId,
+							}}
 							className={cn(
 								buttonVariants({ variant: "outline", size: "sm" }),
 								"mt-2 h-7 w-full text-xs",
@@ -367,7 +381,8 @@ function LogDetailPanel({
 				<div className="space-y-1.5">
 					{log.inboxThreadId && (
 						<Link
-							to="/dashboard/inbox"
+							to="/dashboard/$organizationSlug/inbox"
+							params={{ organizationSlug: organization.slug }}
 							search={{ thread: log.inboxThreadId }}
 							className={cn(
 								buttonVariants({ variant: "outline", size: "sm" }),
@@ -380,7 +395,8 @@ function LogDetailPanel({
 					)}
 					{log.contactId && (
 						<Link
-							to="/dashboard/contacts"
+							to="/dashboard/$organizationSlug/contacts"
+							params={{ organizationSlug: organization.slug }}
 							search={{ search: log.contactNumber ?? undefined }}
 							className={cn(
 								buttonVariants({ variant: "outline", size: "sm" }),
@@ -392,8 +408,8 @@ function LogDetailPanel({
 						</Link>
 					)}
 					<Link
-						to="/dashboard/flows/$flowId"
-						params={{ flowId: log.flowId }}
+						to="/dashboard/$organizationSlug/flows/$flowId"
+						params={{ organizationSlug: organization.slug, flowId: log.flowId }}
 						className={cn(
 							buttonVariants({ variant: "outline", size: "sm" }),
 							"h-8 w-full justify-start text-xs",
@@ -421,9 +437,14 @@ export function FlowLogsView({
 	limit?: number;
 	flowNodes?: { id: string; type?: string; data?: Record<string, unknown> }[];
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const { data: logs } = useSuspenseQuery(
-		trpc.flowLog.list.queryOptions({ flowId, limit }),
+		trpc.flowLog.list.queryOptions({
+			flowId,
+			limit,
+			tenantId: organization.id,
+		}),
 	);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	useFlowLogSSE();
@@ -506,8 +527,11 @@ export function FlowLogsView({
 												{!flowId && (
 													<TableCell>
 														<Link
-															to="/dashboard/flows/$flowId"
-															params={{ flowId: log.flowId }}
+															to="/dashboard/$organizationSlug/flows/$flowId"
+															params={{
+																organizationSlug: organization.slug,
+																flowId: log.flowId,
+															}}
 															className="hover:text-primary hover:underline"
 															onClick={(e) => e.stopPropagation()}
 														>

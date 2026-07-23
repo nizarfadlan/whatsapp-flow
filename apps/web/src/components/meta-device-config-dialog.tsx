@@ -13,6 +13,7 @@ import { Input } from "@whatsapp-flow/ui/components/input";
 import { Label } from "@whatsapp-flow/ui/components/label";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useTRPC } from "@/utils/trpc";
 
 type MetaTokenMetadata = {
@@ -216,10 +217,14 @@ export function MetaDeviceConfigDialog({
 	onOpenChange: (open: boolean) => void;
 	onSaved: () => void;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [form, setForm] = useState(initialMetaConfigFormState);
 	const config = useQuery({
-		...trpc.device.getMetaConfig.queryOptions({ id: deviceId ?? "" }),
+		...trpc.device.getMetaConfig.queryOptions({
+			id: deviceId ?? "",
+			tenantId: organization.id,
+		}),
 		enabled: open && Boolean(deviceId),
 	});
 	const configure = useMutation(
@@ -285,7 +290,11 @@ export function MetaDeviceConfigDialog({
 						disabled={!canSubmit || configure.isPending || config.isLoading}
 						onClick={() => {
 							if (!deviceId) return;
-							configure.mutate({ id: deviceId, ...toMetaConfigPayload(form) });
+							configure.mutate({
+								id: deviceId,
+								tenantId: organization.id,
+								...toMetaConfigPayload(form),
+							});
 						}}
 					>
 						{configure.isPending ? "Saving..." : "Save"}

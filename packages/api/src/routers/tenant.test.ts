@@ -11,7 +11,7 @@ process.env.NODE_ENV = "test";
 
 const { tenantRouter } = await import("./tenant");
 
-function createMockDb(selects: unknown[][]) {
+function createMockDb(selects: unknown[][], whereConditions?: unknown[]) {
 	function query() {
 		return {
 			from() {
@@ -20,10 +20,14 @@ function createMockDb(selects: unknown[][]) {
 			innerJoin() {
 				return this;
 			},
-			where() {
+			where(condition: unknown) {
+				whereConditions?.push(condition);
 				return this;
 			},
 			limit() {
+				return Promise.resolve(selects.shift() ?? []);
+			},
+			orderBy() {
 				return Promise.resolve(selects.shift() ?? []);
 			},
 		};
@@ -158,18 +162,20 @@ describe("tenantRouter access boundaries", () => {
 	test("does not let a flow owner manage a flow after losing tenant membership", async () => {
 		await expectNotFound(
 			createCaller([[makeCurrentUser()], []]).listFlowGrants({
+				tenantId: "tenant-1",
 				flowId: "flow-1",
 			}),
-			"Flow not found",
+			"Tenant not found",
 		);
 	});
 
 	test("does not let a device owner manage a device after losing tenant membership", async () => {
 		await expectNotFound(
 			createCaller([[makeCurrentUser()], []]).listDeviceGrants({
+				tenantId: "tenant-1",
 				deviceId: "device-1",
 			}),
-			"Device not found",
+			"Tenant not found",
 		);
 	});
 });

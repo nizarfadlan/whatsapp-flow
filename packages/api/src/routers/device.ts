@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { device, deviceAccessGrant } from "@whatsapp-flow/db/schema/device";
-import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
+import { device, flow } from "@whatsapp-flow/db/schema/device";
 import { env } from "@whatsapp-flow/env/server";
 import {
 	configureMetaDevice,
@@ -9,18 +8,15 @@ import {
 	connectionManager,
 	getMetaConfigSummary,
 } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
-import {
-	requireFlowAccess,
-	requireTenantMembership,
-} from "../authorization/tenant-access";
+import { requireOrganizationPermission } from "../authorization/organization";
 import {
 	listDeviceResourceSyncRuns,
 	startDeviceResourceSync,
 } from "../engine/device-resource-sync";
-import { protectedProcedure, router } from "../index";
+import { organizationPermissionProcedure, router } from "../index";
 import { logger } from "../observability/logger";
 
 const requiredTrimmedString = z.string().trim().min(1);
@@ -50,25 +46,17 @@ const metaEmbeddedSignupInput = metaConfigInput
 		redirectUri: optionalTrimmedString,
 	});
 
-async function requireDeviceOwnership(
+async function requireOrganizationDevice(
 	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
 	deviceId: string,
-	userId: string,
+	tenantId: string,
 ) {
-	const rows = await db
-		.select({ device })
+	const [found] = await db
+		.select()
 		.from(device)
-		.innerJoin(
-			tenantMember,
-			and(
-				eq(tenantMember.tenantId, device.tenantId),
-				eq(tenantMember.userId, userId),
-			),
-		)
-		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
+		.where(and(eq(device.id, deviceId), eq(device.tenantId, tenantId)))
 		.limit(1);
 
-	const found = rows[0]?.device;
 	if (!found) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 	}
@@ -190,48 +178,56 @@ function toMetaConfigError(error: unknown) {
 }
 
 export const deviceRouter = router({
-	list: protectedProcedure.query(async ({ ctx }) => {
-		return ctx.db
-			.select({
-				id: device.id,
-				name: device.name,
-				provider: device.provider,
-				tenantId: device.tenantId,
-				ownerUserId: device.userId,
-				isOwner: sql<boolean>`${device.userId} = ${ctx.session.user.id}`,
-				externalId: device.externalId,
-				phoneNumber: device.phoneNumber,
-				businessAccountId: device.businessAccountId,
-				displayPhoneNumber: device.displayPhoneNumber,
-				status: device.status,
-				statusReason: device.statusReason,
-				lastError: device.lastError,
-				lastConnectedAt: device.lastConnectedAt,
-				lastWebhookAt: device.lastWebhookAt,
-				createdAt: device.createdAt,
-				updatedAt: device.updatedAt,
-			})
-			.from(device)
-			.innerJoin(
-				tenantMember,
-				and(
-					eq(tenantMember.tenantId, device.tenantId),
-					eq(tenantMember.userId, ctx.session.user.id),
-				),
-			)
-			.where(eq(device.userId, ctx.session.user.id))
-			.orderBy(desc(device.updatedAt));
-	}),
+	list: organizationPermissionProcedure("organization.devices.read").query(
+		async ({ ctx }) => {
+			return ctx.db
+				.select({
+					id: device.id,
+					name: device.name,
+					provider: device.provider,
+					tenantId: device.tenantId,
+					ownerUserId: device.userId,
+					isOwner: sql<boolean>`${device.userId} = ${ctx.currentUser.id}`,
+					externalId: device.externalId,
+					phoneNumber: device.phoneNumber,
+					businessAccountId: device.businessAccountId,
+					displayPhoneNumber: device.displayPhoneNumber,
+					status: device.status,
+					statusReason: device.statusReason,
+					lastError: device.lastError,
+					lastConnectedAt: device.lastConnectedAt,
+					lastWebhookAt: device.lastWebhookAt,
+					createdAt: device.createdAt,
+					updatedAt: device.updatedAt,
+				})
+				.from(device)
+				.where(eq(device.tenantId, ctx.organization.id))
+				.orderBy(desc(device.updatedAt));
+		},
+	),
 
-	listForDeploy: protectedProcedure
+	listForDeploy: organizationPermissionProcedure("organization.devices.read")
 		.input(z.object({ flowId: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const { flow: targetFlow } = await requireFlowAccess(
+			await requireOrganizationPermission(
 				ctx.db,
-				input.flowId,
-				ctx.session.user.id,
-				"editor",
+				ctx.organization.id,
+				ctx.currentUser.id,
+				"organization.flows.execute",
 			);
+			const [targetFlow] = await ctx.db
+				.select({ id: flow.id })
+				.from(flow)
+				.where(
+					and(
+						eq(flow.id, input.flowId),
+						eq(flow.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!targetFlow) {
+				throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
+			}
 
 			return ctx.db
 				.select({
@@ -241,45 +237,20 @@ export const deviceRouter = router({
 					status: device.status,
 				})
 				.from(device)
-				.innerJoin(
-					tenantMember,
-					and(
-						eq(tenantMember.tenantId, device.tenantId),
-						eq(tenantMember.userId, ctx.session.user.id),
-					),
-				)
-				.leftJoin(
-					deviceAccessGrant,
-					and(
-						eq(deviceAccessGrant.deviceId, device.id),
-						eq(deviceAccessGrant.tenantId, device.tenantId),
-						eq(deviceAccessGrant.userId, ctx.session.user.id),
-						eq(deviceAccessGrant.capability, "deploy"),
-					),
-				)
-				.where(
-					and(
-						eq(device.tenantId, targetFlow.tenantId),
-						or(
-							eq(device.userId, ctx.session.user.id),
-							eq(deviceAccessGrant.userId, ctx.session.user.id),
-						),
-					),
-				)
+				.where(eq(device.tenantId, ctx.organization.id))
 				.orderBy(desc(device.updatedAt));
 		}),
 
-	create: protectedProcedure
+	create: organizationPermissionProcedure("organization.devices.manage")
 		.input(
 			z.object({
 				name: z.string().min(1),
-				tenantId: z.string().min(1).optional(),
+				tenantId: z.string().min(1),
 				provider: z.enum(["baileys", "meta_cloud"]).default("baileys"),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const tenantId = input.tenantId ?? ctx.session.user.id;
-			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
+			const tenantId = ctx.organization.id;
 			const id = crypto.randomUUID();
 			const rows = await ctx.db
 				.insert(device)
@@ -316,17 +287,16 @@ export const deviceRouter = router({
 			return row;
 		}),
 
-	createMeta: protectedProcedure
+	createMeta: organizationPermissionProcedure("organization.devices.manage")
 		.input(
 			metaConfigInput.extend({
 				name: requiredTrimmedString,
-				tenantId: z.string().min(1).optional(),
+				tenantId: z.string().min(1),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
 			requireInitialMetaCredentials(input);
-			const tenantId = input.tenantId ?? ctx.session.user.id;
-			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
+			const tenantId = ctx.organization.id;
 
 			const id = crypto.randomUUID();
 			await ctx.db.insert(device).values({
@@ -370,7 +340,9 @@ export const deviceRouter = router({
 			}
 		}),
 
-	getMetaEmbeddedSignupConfig: protectedProcedure.query(({ ctx }) => ({
+	getMetaEmbeddedSignupConfig: organizationPermissionProcedure(
+		"organization.devices.manage",
+	).query(({ ctx }) => ({
 		configured: Boolean(
 			env.META_APP_ID &&
 				env.META_APP_SECRET &&
@@ -382,17 +354,18 @@ export const deviceRouter = router({
 		graphApiVersion: env.META_GRAPH_API_VERSION,
 	})),
 
-	createMetaEmbedded: protectedProcedure
+	createMetaEmbedded: organizationPermissionProcedure(
+		"organization.devices.manage",
+	)
 		.input(
 			metaEmbeddedSignupInput.extend({
-				tenantId: z.string().min(1).optional(),
+				tenantId: z.string().min(1),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
 			requireValidEmbeddedSignupState(input.state, ctx.session.user.id);
 			requireAllowedEmbeddedRedirectUri(input.redirectUri);
-			const tenantId = input.tenantId ?? ctx.session.user.id;
-			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
+			const tenantId = ctx.organization.id;
 
 			const id = crypto.randomUUID();
 			await ctx.db.insert(device).values({
@@ -435,17 +408,17 @@ export const deviceRouter = router({
 			}
 		}),
 
-	configureMeta: protectedProcedure
+	configureMeta: organizationPermissionProcedure("organization.devices.manage")
 		.input(
 			metaConfigInput.extend({
 				id: z.string().min(1),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			if (found.provider !== "meta_cloud") {
 				throw new TRPCError({
@@ -514,25 +487,25 @@ export const deviceRouter = router({
 			}
 		}),
 
-	getMetaConfig: protectedProcedure
+	getMetaConfig: organizationPermissionProcedure("organization.devices.read")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			if (found.provider !== "meta_cloud") return null;
 			return getMetaConfigSummary(input.id);
 		}),
 
-	delete: protectedProcedure
+	delete: organizationPermissionProcedure("organization.devices.manage")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			await connectionManager.disconnect(input.id);
 			await ctx.db.delete(device).where(eq(device.id, input.id));
@@ -551,13 +524,13 @@ export const deviceRouter = router({
 			return { success: true };
 		}),
 
-	connect: protectedProcedure
+	connect: organizationPermissionProcedure("organization.devices.connect")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			const connection = await connectionManager.connect(input.id);
 			await writeAuditLog(ctx, {
@@ -578,7 +551,9 @@ export const deviceRouter = router({
 			};
 		}),
 
-	requestPairingCode: protectedProcedure
+	requestPairingCode: organizationPermissionProcedure(
+		"organization.devices.connect",
+	)
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -586,7 +561,7 @@ export const deviceRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await requireOrganizationDevice(ctx.db, input.id, ctx.organization.id);
 			try {
 				const code = await connectionManager.requestPairingCode(
 					input.id,
@@ -612,13 +587,13 @@ export const deviceRouter = router({
 			}
 		}),
 
-	disconnect: protectedProcedure
+	disconnect: organizationPermissionProcedure("organization.devices.connect")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			await connectionManager.disconnect(input.id);
 			await writeAuditLog(ctx, {
@@ -631,13 +606,13 @@ export const deviceRouter = router({
 			return { success: true };
 		}),
 
-	logout: protectedProcedure
+	logout: organizationPermissionProcedure("organization.devices.connect")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			await connectionManager.logout(input.id);
 			await writeAuditLog(ctx, {
@@ -650,14 +625,14 @@ export const deviceRouter = router({
 			return { success: true };
 		}),
 
-	getQR: protectedProcedure
+	getQR: organizationPermissionProcedure("organization.devices.connect")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await requireOrganizationDevice(ctx.db, input.id, ctx.organization.id);
 			return { qrCode: connectionManager.getQrCode(input.id) };
 		}),
 
-	startSync: protectedProcedure
+	startSync: organizationPermissionProcedure("organization.devices.connect")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -666,10 +641,10 @@ export const deviceRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			requireConnectedBaileysDevice(found);
 			return startDeviceResourceSync({
@@ -681,7 +656,7 @@ export const deviceRouter = router({
 			});
 		}),
 
-	syncStatus: protectedProcedure
+	syncStatus: organizationPermissionProcedure("organization.devices.read")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -689,7 +664,7 @@ export const deviceRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			await requireDeviceOwnership(ctx.db, input.id, ctx.session.user.id);
+			await requireOrganizationDevice(ctx.db, input.id, ctx.organization.id);
 			return listDeviceResourceSyncRuns({
 				deviceId: input.id,
 				limit: input.limit,
@@ -697,13 +672,13 @@ export const deviceRouter = router({
 			});
 		}),
 
-	status: protectedProcedure
+	status: organizationPermissionProcedure("organization.devices.read")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
+			const found = await requireOrganizationDevice(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			return {
 				id: found.id,

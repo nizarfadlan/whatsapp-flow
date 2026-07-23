@@ -13,6 +13,7 @@ import {
 import { Skeleton } from "@whatsapp-flow/ui/components/skeleton";
 import { LogOut, User } from "lucide-react";
 
+import { useActiveOrganization } from "@/components/active-organization";
 import { authClient } from "@/lib/auth-client";
 
 function getInitials(name?: string | null, email?: string | null) {
@@ -26,6 +27,7 @@ function getInitials(name?: string | null, email?: string | null) {
 }
 
 export default function UserMenu() {
+	const organization = useActiveOrganization();
 	const navigate = useNavigate();
 	const { data: session, isPending } = authClient.useSession();
 
@@ -71,7 +73,14 @@ export default function UserMenu() {
 						</span>
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					<DropdownMenuItem render={<Link to="/dashboard/account" />}>
+					<DropdownMenuItem
+						render={
+							<Link
+								to="/dashboard/$organizationSlug/account"
+								params={{ organizationSlug: organization.slug }}
+							/>
+						}
+					>
 						<User className="size-3.5" />
 						Account
 					</DropdownMenuItem>

@@ -1,3 +1,4 @@
+import type { createDb } from "@whatsapp-flow/db";
 import { auditLog } from "@whatsapp-flow/db/schema/audit";
 import { desc, eq, sql } from "drizzle-orm";
 import { auditHashAlgorithm, hashAuditEntry } from "./audit-hash";
@@ -10,6 +11,11 @@ type AuditContext = Pick<
 > & {
 	currentUser?: { id: string; email: string };
 };
+
+type AuditDatabase = Pick<
+	ReturnType<typeof createDb>,
+	"execute" | "insert" | "select" | "update"
+>;
 
 type AuditLogInput = {
 	action: string;
@@ -24,7 +30,11 @@ type AuditLogInput = {
 
 export const redactAuditValue = redactSensitiveValue;
 
-export async function writeAuditLog(ctx: AuditContext, input: AuditLogInput) {
+export async function writeAuditLog(
+	ctx: AuditContext,
+	input: AuditLogInput,
+	db: AuditDatabase = ctx.db,
+) {
 	const values = {
 		id: crypto.randomUUID(),
 		actorUserId: ctx.currentUser?.id ?? ctx.session?.user.id ?? null,
@@ -41,14 +51,12 @@ export async function writeAuditLog(ctx: AuditContext, input: AuditLogInput) {
 		metadata: input.metadata == null ? null : redactAuditValue(input.metadata),
 	};
 
-	const dbWithTransaction = ctx.db as typeof ctx.db & {
-		transaction?: <T>(
-			callback: (tx: typeof ctx.db) => Promise<T>,
-		) => Promise<T>;
+	const dbWithTransaction = db as typeof db & {
+		transaction?: <T>(callback: (tx: typeof db) => Promise<T>) => Promise<T>;
 	};
 
 	if (!dbWithTransaction.transaction) {
-		await ctx.db.insert(auditLog).values(values);
+		await db.insert(auditLog).values(values);
 		return;
 	}
 

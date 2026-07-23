@@ -9,36 +9,39 @@ import {
 	DropdownMenuTrigger,
 } from "@whatsapp-flow/ui/components/dropdown-menu";
 import { Input } from "@whatsapp-flow/ui/components/input";
-import { Megaphone, MoreHorizontal, RefreshCw, Search } from "lucide-react";
+import { MoreHorizontal, RefreshCw, Search, UsersRound } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { DataTable } from "@/components/data-table";
 import {
 	ResourceSyncControls,
 	useResourceSyncCompletion,
 } from "@/components/resource-sync-controls";
+import { TagBadges, TagPicker } from "@/components/tag-picker";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/newsletters")({
-	component: NewslettersPage,
+export const Route = createFileRoute("/dashboard/$organizationSlug/groups")({
+	component: GroupsPage,
 });
 
-function NewslettersPage() {
+function GroupsPage() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
-	const trackSyncCompletion = useResourceSyncCompletion("newsletters");
+	const trackSyncCompletion = useResourceSyncCompletion("groups");
 	const [search, setSearch] = useState("");
-	const { data: newsletters = [] } = useSuspenseQuery(
-		trpc.channel.list.queryOptions({ search: search || undefined, limit: 100 }),
+	const { data: groups = [], refetch } = useSuspenseQuery(
+		trpc.group.list.queryOptions({ search: search || undefined, limit: 100 }),
 	);
 	const { data: devices = [] } = useSuspenseQuery(
-		trpc.device.list.queryOptions(),
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
 	);
 	const devicesById = new Map(devices.map((device) => [device.id, device]));
 	const syncOneMut = useMutation(
-		trpc.channel.syncOne.mutationOptions({
+		trpc.group.syncOne.mutationOptions({
 			onSuccess: (result) => {
 				trackSyncCompletion(result);
-				toast.success("Newsletter sync queued");
+				toast.success("Group sync queued");
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -46,11 +49,11 @@ function NewslettersPage() {
 
 	const columns = [
 		{
-			key: "name",
-			header: "Newsletter Name",
-			cell: (row: (typeof newsletters)[0]) => (
+			key: "subject",
+			header: "Group Name",
+			cell: (row: (typeof groups)[0]) => (
 				<div className="flex flex-col">
-					<span className="font-medium text-xs">{row.name}</span>
+					<span className="font-medium text-xs">{row.subject}</span>
 					{row.description && (
 						<span className="max-w-xs truncate text-[10px] text-muted-foreground">
 							{row.description}
@@ -60,46 +63,61 @@ function NewslettersPage() {
 			),
 		},
 		{
-			key: "subscribers",
-			header: "Subscribers",
-			cell: (row: (typeof newsletters)[0]) => (
-				<span className="text-xs">{row.subscribersCount}</span>
+			key: "participants",
+			header: "Members",
+			cell: (row: (typeof groups)[0]) => (
+				<span className="text-xs">{row.participantCount}</span>
 			),
 		},
 		{
 			key: "jid",
 			header: "JID",
-			cell: (row: (typeof newsletters)[0]) => (
+			cell: (row: (typeof groups)[0]) => (
 				<span className="font-mono text-[10px] text-muted-foreground">
 					{row.jid}
 				</span>
 			),
 		},
 		{
-			key: "verification",
-			header: "Verification",
-			cell: (row: (typeof newsletters)[0]) => (
+			key: "source",
+			header: "Source",
+			cell: (row: (typeof groups)[0]) => (
 				<Badge variant="outline" className="h-4 px-1 text-[9px]">
-					{row.verificationStatus ?? "UNVERIFIED"}
+					{row.source}
 				</Badge>
 			),
 		},
 		{
-			key: "isSubscribed",
-			header: "Subscribed",
-			cell: (row: (typeof newsletters)[0]) => (
+			key: "isMember",
+			header: "Member",
+			cell: (row: (typeof groups)[0]) => (
 				<Badge
-					variant={row.isSubscribed ? "default" : "secondary"}
+					variant={row.isMember ? "default" : "secondary"}
 					className="h-4 px-1 text-[9px]"
 				>
-					{row.isSubscribed ? "✓" : "Left"}
+					{row.isMember ? "✓" : "Left"}
 				</Badge>
+			),
+		},
+		{
+			key: "tags",
+			header: "Tags",
+			cell: (row: (typeof groups)[0]) => (
+				<div className="flex items-center gap-1">
+					<TagBadges tags={row.tags} />
+					<TagPicker
+						resource="group"
+						resourceId={row.id}
+						tags={row.tags}
+						onSaved={refetch}
+					/>
+				</div>
 			),
 		},
 		{
 			key: "actions",
 			header: "",
-			cell: (row: (typeof newsletters)[0]) => {
+			cell: (row: (typeof groups)[0]) => {
 				const device = devicesById.get(row.deviceId);
 				const canSync =
 					device?.provider !== "meta_cloud" && device?.status === "connected";
@@ -131,36 +149,36 @@ function NewslettersPage() {
 		<div className="flex flex-col gap-4 p-4">
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div>
-					<h1 className="font-semibold text-base">Newsletters</h1>
+					<h1 className="font-semibold text-base">Groups</h1>
 					<p className="text-muted-foreground text-xs">
-						{newsletters.length} newsletters · synced from your WhatsApp devices
+						{groups.length} groups · synced from your WhatsApp devices
 					</p>
 				</div>
-				<ResourceSyncControls devices={devices} resource="newsletters" />
+				<ResourceSyncControls devices={devices} resource="groups" />
 			</div>
 
 			<div className="relative max-w-xs">
 				<Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
 				<Input
 					className="h-8 pl-8 text-xs"
-					placeholder="Search newsletters..."
+					placeholder="Search groups..."
 					value={search}
 					onChange={(e) => setSearch(e.target.value)}
 				/>
 			</div>
 
-			{newsletters.length === 0 ? (
+			{groups.length === 0 ? (
 				<div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
-					<Megaphone className="size-8 opacity-30" />
+					<UsersRound className="size-8 opacity-30" />
 					<p className="text-xs">
 						{search
-							? "No newsletters found"
-							: "No newsletters yet — connect a device to sync"}
+							? "No groups found"
+							: "No groups yet — connect a device to sync"}
 					</p>
 				</div>
 			) : (
 				<DataTable
-					data={newsletters}
+					data={groups}
 					columns={columns}
 					getRowKey={(row) => row.id}
 				/>

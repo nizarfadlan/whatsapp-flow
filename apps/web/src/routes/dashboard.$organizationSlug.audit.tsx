@@ -31,7 +31,7 @@ import { toast } from "sonner";
 
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/audit")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/audit")({
 	component: AuditPage,
 });
 

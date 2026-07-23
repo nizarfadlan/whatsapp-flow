@@ -29,6 +29,7 @@ import {
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { useActiveOrganization } from "@/components/active-organization";
 import { DataTable } from "@/components/data-table";
 import {
 	ResourceSyncControls,
@@ -37,7 +38,7 @@ import {
 import { TagBadges, TagPicker } from "@/components/tag-picker";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/contacts")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/contacts")({
 	validateSearch: z.object({
 		search: z.string().optional(),
 	}),
@@ -45,6 +46,7 @@ export const Route = createFileRoute("/dashboard/contacts")({
 });
 
 function ContactsPage() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const trackSyncCompletion = useResourceSyncCompletion("contacts");
 	const { search: searchFromUrl } = Route.useSearch();
@@ -57,7 +59,7 @@ function ContactsPage() {
 		trpc.contact.list.queryOptions({ search: search || undefined, limit: 100 }),
 	);
 	const { data: devices = [] } = useSuspenseQuery(
-		trpc.device.list.queryOptions(),
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
 	);
 	const defaultDeviceId = devices[0]?.id;
 	const devicesById = new Map(devices.map((device) => [device.id, device]));

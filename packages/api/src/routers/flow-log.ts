@@ -9,8 +9,7 @@ import {
 import { inboxThread } from "@whatsapp-flow/db/schema/inbox";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { requireFlowAccess } from "../authorization/tenant-access";
-import { protectedProcedure, router } from "../index";
+import { organizationPermissionProcedure, router } from "../index";
 
 function buildLogSelect() {
 	return {
@@ -39,7 +38,7 @@ function buildLogSelect() {
 }
 
 export const flowLogRouter = router({
-	list: protectedProcedure
+	list: organizationPermissionProcedure("organization.flows.read")
 		.input(
 			z.object({
 				flowId: z.string().optional(),
@@ -48,17 +47,9 @@ export const flowLogRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			const accessibleFlow = input.flowId
-				? await requireFlowAccess(
-						ctx.db,
-						input.flowId,
-						ctx.session.user.id,
-						"viewer",
-					)
-				: null;
-			const conditions = accessibleFlow
-				? [eq(flowExecutionLog.flowId, accessibleFlow.flow.id)]
-				: [eq(flow.userId, ctx.session.user.id)];
+			const conditions = [eq(flow.tenantId, ctx.organization.id)];
+			if (input.flowId)
+				conditions.push(eq(flowExecutionLog.flowId, input.flowId));
 			if (input.deviceId)
 				conditions.push(eq(flowExecutionLog.deviceId, input.deviceId));
 
@@ -91,27 +82,11 @@ export const flowLogRouter = router({
 				.limit(input.limit);
 		}),
 
-	getById: protectedProcedure
+	getById: organizationPermissionProcedure("organization.flows.read")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const target = await ctx.db
-				.select({ flowId: flowExecutionLog.flowId })
-				.from(flowExecutionLog)
-				.where(eq(flowExecutionLog.id, input.id))
-				.limit(1);
-			if (!target[0]) return null;
-
-			const access = await requireFlowAccess(
-				ctx.db,
-				target[0].flowId,
-				ctx.session.user.id,
-				"viewer",
-			);
 			const rows = await ctx.db
-				.select({
-					...buildLogSelect(),
-					flowNodes: flow.nodes,
-				})
+				.select({ ...buildLogSelect(), flowNodes: flow.nodes })
 				.from(flowExecutionLog)
 				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
 				.innerJoin(device, eq(flowExecutionLog.deviceId, device.id))
@@ -137,7 +112,7 @@ export const flowLogRouter = router({
 				.where(
 					and(
 						eq(flowExecutionLog.id, input.id),
-						eq(flowExecutionLog.flowId, access.flow.id),
+						eq(flow.tenantId, ctx.organization.id),
 					),
 				)
 				.limit(1);
@@ -145,41 +120,29 @@ export const flowLogRouter = router({
 			return rows[0] ?? null;
 		}),
 
-	timeline: protectedProcedure
+	timeline: organizationPermissionProcedure("organization.flows.read")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const target = await ctx.db
-				.select({ flowId: flowExecutionLog.flowId })
+			const [authorizedLog] = await ctx.db
+				.select({ id: flowExecutionLog.id, flowId: flowExecutionLog.flowId })
 				.from(flowExecutionLog)
-				.where(eq(flowExecutionLog.id, input.id))
-				.limit(1);
-			if (!target[0]) return [];
-
-			const access = await requireFlowAccess(
-				ctx.db,
-				target[0].flowId,
-				ctx.session.user.id,
-				"viewer",
-			);
-			const authorizedLog = await ctx.db
-				.select({ id: flowExecutionLog.id })
-				.from(flowExecutionLog)
+				.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
 				.where(
 					and(
 						eq(flowExecutionLog.id, input.id),
-						eq(flowExecutionLog.flowId, access.flow.id),
+						eq(flow.tenantId, ctx.organization.id),
 					),
 				)
 				.limit(1);
-			if (!authorizedLog[0]) return [];
+			if (!authorizedLog) return [];
 
 			return ctx.db
 				.select()
 				.from(flowExecutionEvent)
 				.where(
 					and(
-						eq(flowExecutionEvent.executionLogId, authorizedLog[0].id),
-						eq(flowExecutionEvent.flowId, access.flow.id),
+						eq(flowExecutionEvent.executionLogId, authorizedLog.id),
+						eq(flowExecutionEvent.flowId, authorizedLog.flowId),
 					),
 				)
 				.orderBy(asc(flowExecutionEvent.createdAt));

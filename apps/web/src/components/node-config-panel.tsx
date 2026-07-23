@@ -49,6 +49,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useTRPC } from "@/utils/trpc";
 import { ContactCombobox } from "./contact-combobox";
 import type {
@@ -208,6 +209,7 @@ function TriggerWebhookConfig({
 	flowId: string;
 	canRotateWebhookToken: boolean;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [transientToken, setTransientToken] = useState<string | null>(null);
 	const rotateWebhookToken = useMutation(
@@ -270,7 +272,12 @@ function TriggerWebhookConfig({
 							className="h-7 px-2"
 							size="sm"
 							variant="outline"
-							onClick={() => rotateWebhookToken.mutate({ id: flowId })}
+							onClick={() =>
+								rotateWebhookToken.mutate({
+									id: flowId,
+									tenantId: organization.id,
+								})
+							}
 							disabled={rotateWebhookToken.isPending}
 						>
 							<RefreshCw className="size-3" />

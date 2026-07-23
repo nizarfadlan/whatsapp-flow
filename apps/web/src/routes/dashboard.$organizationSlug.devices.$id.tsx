@@ -36,10 +36,13 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import { MetaDeviceConfigDialog } from "@/components/meta-device-config-dialog";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/devices/$id")({
+export const Route = createFileRoute(
+	"/dashboard/$organizationSlug/devices/$id",
+)({
 	component: DeviceDetailPage,
 });
 
@@ -138,9 +141,14 @@ function syncRunSummary(status: string) {
 }
 
 function ResourceSyncCard({ deviceId }: { deviceId: string }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const syncStatus = useQuery({
-		...trpc.device.syncStatus.queryOptions({ id: deviceId, limit: 12 }),
+		...trpc.device.syncStatus.queryOptions({
+			id: deviceId,
+			tenantId: organization.id,
+			limit: 12,
+		}),
 		refetchInterval: (query) =>
 			query.state.data?.some((run) => activeSyncStatuses.has(run.status))
 				? 3_000
@@ -158,7 +166,13 @@ function ResourceSyncCard({ deviceId }: { deviceId: string }) {
 	const queueSync = (
 		resource: "contacts" | "groups" | "newsletters" | "all",
 		mode: "normal" | "repair" = "normal",
-	) => startSync.mutate({ id: deviceId, resource, mode });
+	) =>
+		startSync.mutate({
+			id: deviceId,
+			resource,
+			mode,
+			tenantId: organization.id,
+		});
 
 	return (
 		<Card>
@@ -292,7 +306,7 @@ function DeviceDeploymentAccessCard({
 	const trpc = useTRPC();
 	const members = useQuery(trpc.tenant.listMembers.queryOptions({ tenantId }));
 	const grants = useQuery(
-		trpc.tenant.listDeviceGrants.queryOptions({ deviceId }),
+		trpc.tenant.listDeviceGrants.queryOptions({ tenantId, deviceId }),
 	);
 	const grantAccess = useMutation(
 		trpc.tenant.grantDeviceAccess.mutationOptions({
@@ -368,7 +382,11 @@ function DeviceDeploymentAccessCard({
 										className="text-destructive"
 										disabled={isPending}
 										onClick={() =>
-											revokeAccess.mutate({ deviceId, userId: member.id })
+											revokeAccess.mutate({
+												tenantId,
+												deviceId,
+												userId: member.id,
+											})
 										}
 									>
 										<UserMinus className="size-3.5" />
@@ -381,7 +399,11 @@ function DeviceDeploymentAccessCard({
 										variant="outline"
 										disabled={isPending}
 										onClick={() =>
-											grantAccess.mutate({ deviceId, userId: member.id })
+											grantAccess.mutate({
+												tenantId,
+												deviceId,
+												userId: member.id,
+											})
 										}
 									>
 										Grant deploy
@@ -411,6 +433,7 @@ function QrModal({
 	onOpenChange: (v: boolean) => void;
 	onStatusChange?: () => void;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [qrCode, setQrCode] = useState<string | null>(null);
 	const [status, setStatus] = useState<string>("connecting");
@@ -432,7 +455,7 @@ function QrModal({
 		}
 
 		const es = new EventSource(
-			`${import.meta.env.VITE_SERVER_URL}/api/devices/${deviceId}/events`,
+			`${import.meta.env.VITE_SERVER_URL}/api/devices/${deviceId}/events?tenantId=${encodeURIComponent(organization.id)}`,
 			{ withCredentials: true },
 		);
 		eventSourceRef.current = es;
@@ -449,7 +472,7 @@ function QrModal({
 		es.onerror = () => es.close();
 
 		return () => es.close();
-	}, [deviceId, onStatusChange, open]);
+	}, [deviceId, onStatusChange, open, organization.id]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -485,6 +508,7 @@ function QrModal({
 							onClick={() =>
 								pairingCodeMut.mutate({
 									id: deviceId,
+									tenantId: organization.id,
 									phoneNumber,
 								})
 							}
@@ -508,10 +532,11 @@ function QrModal({
 }
 
 function DeviceDetailPage() {
+	const organization = useActiveOrganization();
 	const { id } = Route.useParams();
 	const trpc = useTRPC();
 	const { data: devices, refetch } = useSuspenseQuery(
-		trpc.device.list.queryOptions(),
+		trpc.device.list.queryOptions({ tenantId: organization.id }),
 	);
 	const device = devices.find((d) => d.id === id);
 
@@ -551,7 +576,8 @@ function DeviceDetailPage() {
 				<Smartphone className="size-10 text-muted-foreground/50" />
 				<p className="text-muted-foreground text-sm">Device not found</p>
 				<Link
-					to="/dashboard/devices"
+					to="/dashboard/$organizationSlug/devices"
+					params={{ organizationSlug: organization.slug }}
 					className="text-primary text-xs hover:underline"
 				>
 					Back to devices
@@ -563,14 +589,15 @@ function DeviceDetailPage() {
 	const isMeta = device.provider === "meta_cloud";
 	const metaWarnings = getMetaWarnings(device);
 	const handleConnect = () => {
-		connectMut.mutate({ id });
+		connectMut.mutate({ id, tenantId: organization.id });
 		if (!isMeta) setQrOpen(true);
 	};
 
 	return (
 		<div className="space-y-4">
 			<Link
-				to="/dashboard/devices"
+				to="/dashboard/$organizationSlug/devices"
+				params={{ organizationSlug: organization.slug }}
 				className={cn(
 					buttonVariants({ variant: "ghost", size: "sm" }),
 					"w-fit",
@@ -636,7 +663,9 @@ function DeviceDetailPage() {
 						size="sm"
 						variant="outline"
 						className="h-7 text-xs"
-						onClick={() => disconnectMut.mutate({ id })}
+						onClick={() =>
+							disconnectMut.mutate({ id, tenantId: organization.id })
+						}
 						disabled={disconnectMut.isPending}
 					>
 						<PowerOff className="size-3.5" />
@@ -670,7 +699,7 @@ function DeviceDetailPage() {
 					size="sm"
 					variant="outline"
 					className="h-7 text-destructive text-xs"
-					onClick={() => logoutMut.mutate({ id })}
+					onClick={() => logoutMut.mutate({ id, tenantId: organization.id })}
 					disabled={logoutMut.isPending}
 				>
 					<LogOut className="size-3.5" />

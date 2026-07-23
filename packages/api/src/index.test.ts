@@ -11,12 +11,26 @@ process.env.ADMIN_EMAILS = "bootstrap@example.com";
 process.env.META_WEBHOOK_VERIFY_TOKEN ??= "verify-token";
 process.env.NODE_ENV = "test";
 
-const { adminProcedure, protectedProcedure, publicProcedure, router } =
-	await import("./index");
+const {
+	adminProcedure,
+	organizationPermissionProcedure,
+	organizationProcedure,
+	protectedProcedure,
+	publicProcedure,
+	router,
+} = await import("./index");
 
 const testRouter = router({
 	protected: protectedProcedure.query(({ ctx }) => ctx.currentUser),
 	admin: adminProcedure.query(({ ctx }) => ctx.currentUser),
+	organization: organizationProcedure.query(({ ctx, input }) => ({
+		input,
+		organization: ctx.organization,
+		membership: ctx.organizationMembership,
+	})),
+	organizationPermission: organizationPermissionProcedure("flows.manage").query(
+		({ ctx }) => ctx.organization.id,
+	),
 });
 
 const errorRouter = router({
@@ -75,6 +89,61 @@ function createCaller(currentUser: unknown, session = makeSession()) {
 	} as never);
 }
 
+type MembershipState = "active" | "suspended" | "missing";
+
+function createOrganizationCaller(
+	membershipState: MembershipState,
+	permissionRows: Array<{ key: string }> = [],
+) {
+	const currentUser = makeCurrentUser();
+	const membership = {
+		tenantId: "tenant-1",
+		userId: currentUser.id,
+		role: "member",
+		organization: {
+			id: "tenant-1",
+			name: "Organization",
+			slug: "organization",
+			status: "active",
+		},
+	};
+
+	const db = {
+		select() {
+			let joinCount = 0;
+			return {
+				from() {
+					return this;
+				},
+				innerJoin() {
+					joinCount += 1;
+					return this;
+				},
+				where() {
+					return this;
+				},
+				limit() {
+					if (joinCount === 0) return Promise.resolve([currentUser]);
+					if (joinCount === 1) {
+						return Promise.resolve(
+							membershipState === "active" ? [membership] : [],
+						);
+					}
+					return Promise.resolve(permissionRows);
+				},
+			};
+		},
+	};
+
+	return testRouter.createCaller({
+		auth: null,
+		session: makeSession(),
+		db,
+		requestIp: null,
+		requestUserAgent: null,
+	} as never);
+}
+
 async function expectProcedureError(
 	value: Promise<unknown>,
 	code: TRPCError["code"],
@@ -94,7 +163,9 @@ async function expectProcedureError(
 describe("tRPC error formatting", () => {
 	test("hides unexpected database errors from clients", async () => {
 		const response = await callErrorRouter("internal");
-		const body = await response.json();
+		const body = (await response.json()) as {
+			error: { data: Record<string, unknown> };
+		};
 		const serialized = JSON.stringify(body);
 
 		expect(response.status).toBe(500);
@@ -115,7 +186,9 @@ describe("tRPC error formatting", () => {
 
 	test("preserves expected tRPC errors", async () => {
 		const response = await callErrorRouter("forbidden");
-		const body = await response.json();
+		const body = (await response.json()) as {
+			error: { data: Record<string, unknown> };
+		};
 
 		expect(response.status).toBe(403);
 		expect(body).toMatchObject({
@@ -159,6 +232,53 @@ describe("protectedProcedure", () => {
 			id: "user-1",
 			status: "active",
 		});
+	});
+});
+
+describe("organizationProcedure", () => {
+	test("rejects missing organization membership", async () => {
+		await expectProcedureError(
+			createOrganizationCaller("missing").organization({
+				tenantId: "tenant-1",
+			}),
+			"NOT_FOUND",
+			"Tenant not found",
+		);
+	});
+
+	test("rejects inactive organization membership", async () => {
+		await expectProcedureError(
+			createOrganizationCaller("suspended").organization({
+				tenantId: "tenant-1",
+			}),
+			"NOT_FOUND",
+			"Tenant not found",
+		);
+	});
+
+	test("adds verified organization context and preserves router input", async () => {
+		await expect(
+			createOrganizationCaller("active").organization({
+				tenantId: "tenant-1",
+				futureRouterField: "retained",
+			}),
+		).resolves.toMatchObject({
+			input: { tenantId: "tenant-1", futureRouterField: "retained" },
+			organization: { id: "tenant-1", status: "active" },
+			membership: { tenantId: "tenant-1", userId: "user-1", role: "member" },
+		});
+	});
+});
+
+describe("organizationPermissionProcedure", () => {
+	test("returns forbidden only after active membership verification", async () => {
+		await expectProcedureError(
+			createOrganizationCaller("active").organizationPermission({
+				tenantId: "tenant-1",
+			}),
+			"FORBIDDEN",
+			"Organization permission required",
+		);
 	});
 });
 

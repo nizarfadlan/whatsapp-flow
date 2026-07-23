@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { trpcServer } from "@hono/trpc-server";
+import { getActiveOrganizationMembership } from "@whatsapp-flow/api/authorization/organization";
 import { createContext } from "@whatsapp-flow/api/context";
 import { processDeviceResourceSyncJob } from "@whatsapp-flow/api/engine/device-resource-sync";
 import {
@@ -39,6 +40,8 @@ import { channel, chatGroup } from "@whatsapp-flow/db/schema/contact";
 import {
 	device,
 	flow,
+	flowExecutionLog,
+	flowSession,
 	flowTriggerSecret,
 } from "@whatsapp-flow/db/schema/device";
 import { inboxMessage, inboxThread } from "@whatsapp-flow/db/schema/inbox";
@@ -391,21 +394,27 @@ app.post("/api/flows/:flowId/webhook", async (c) => {
 // SSE endpoint: real-time device events (QR code + status)
 app.get("/api/devices/:deviceId/events", async (c) => {
 	const deviceId = c.req.param("deviceId");
+	const tenantId = c.req.query("tenantId");
+	if (!tenantId) return c.text("tenantId is required", 400);
 
 	// Verify active session (SSE carries cookies)
 	const authResult = await requireActiveSession(c);
 	if (authResult.response) return authResult.response;
 
-	// Verify device ownership
 	const { db, session } = authResult;
+	const membership = await getActiveOrganizationMembership(
+		db,
+		tenantId,
+		session.user.id,
+	);
+	if (!membership) return c.text("Not Found", 404);
+
 	const [owned] = await db
 		.select({ id: device.id })
 		.from(device)
-		.where(and(eq(device.id, deviceId), eq(device.userId, session.user.id)))
+		.where(and(eq(device.id, deviceId), eq(device.tenantId, tenantId)))
 		.limit(1);
-	if (!owned) {
-		return c.text("Not Found", 404);
-	}
+	if (!owned) return c.text("Not Found", 404);
 
 	return streamSSE(c, async (stream) => {
 		const startedAt = Date.now();
@@ -469,16 +478,84 @@ app.get("/api/devices/:deviceId/events", async (c) => {
 	});
 });
 
-// Global SSE endpoint: all device events for user
+async function isTenantFlowLogEvent(
+	db: ReturnType<typeof createDb>,
+	tenantId: string,
+	event: { logId: string; flowId: string; deviceId: string },
+) {
+	const [record] = await db
+		.select({ id: flowExecutionLog.id })
+		.from(flowExecutionLog)
+		.innerJoin(flow, eq(flowExecutionLog.flowId, flow.id))
+		.innerJoin(device, eq(flowExecutionLog.deviceId, device.id))
+		.where(
+			and(
+				eq(flowExecutionLog.id, event.logId),
+				eq(flowExecutionLog.flowId, event.flowId),
+				eq(flowExecutionLog.deviceId, event.deviceId),
+				eq(flow.tenantId, tenantId),
+				eq(device.tenantId, tenantId),
+			),
+		)
+		.limit(1);
+	return Boolean(record);
+}
+
+async function isTenantFlowSessionEvent(
+	db: ReturnType<typeof createDb>,
+	tenantId: string,
+	event: {
+		sessionId: string;
+		flowId: string;
+		deviceId: string;
+		executionLogId: string;
+	},
+) {
+	const [record] = await db
+		.select({ id: flowSession.id })
+		.from(flowSession)
+		.innerJoin(
+			flowExecutionLog,
+			eq(flowSession.executionLogId, flowExecutionLog.id),
+		)
+		.innerJoin(flow, eq(flowSession.flowId, flow.id))
+		.innerJoin(device, eq(flowSession.deviceId, device.id))
+		.where(
+			and(
+				eq(flowSession.id, event.sessionId),
+				eq(flowSession.flowId, event.flowId),
+				eq(flowSession.deviceId, event.deviceId),
+				eq(flowSession.executionLogId, event.executionLogId),
+				eq(flowExecutionLog.flowId, event.flowId),
+				eq(flowExecutionLog.deviceId, event.deviceId),
+				eq(flow.tenantId, tenantId),
+				eq(device.tenantId, tenantId),
+			),
+		)
+		.limit(1);
+	return Boolean(record);
+}
+
+// Global SSE endpoint: all device events for an active organization
 app.get("/api/events", async (c) => {
+	const tenantId = c.req.query("tenantId");
+	if (!tenantId) return c.text("tenantId is required", 400);
+
 	const authResult = await requireActiveSession(c);
 	if (authResult.response) return authResult.response;
 
 	const { db, session } = authResult;
+	const membership = await getActiveOrganizationMembership(
+		db,
+		tenantId,
+		session.user.id,
+	);
+	if (!membership) return c.text("Not Found", 404);
+
 	const userDevices = await db
 		.select({ id: device.id })
 		.from(device)
-		.where(eq(device.userId, session.user.id));
+		.where(eq(device.tenantId, tenantId));
 
 	const deviceIds = new Set(userDevices.map((d) => d.id));
 
@@ -529,16 +606,19 @@ app.get("/api/events", async (c) => {
 			flowId: string;
 			deviceId: string;
 		}) => {
-			if (deviceIds.has(ev.deviceId)) {
-				stream.writeSSE({
-					data: JSON.stringify({
-						type: "flow:log:updated",
-						logId: ev.logId,
-						flowId: ev.flowId,
-						deviceId: ev.deviceId,
-					}),
-				});
-			}
+			void isTenantFlowLogEvent(db, tenantId, ev)
+				.then((isAuthorized) => {
+					if (!isAuthorized) return;
+					stream.writeSSE({
+						data: JSON.stringify({
+							type: "flow:log:updated",
+							logId: ev.logId,
+							flowId: ev.flowId,
+							deviceId: ev.deviceId,
+						}),
+					});
+				})
+				.catch(() => undefined);
 		};
 
 		const onFlowSessionUpdated = (ev: {
@@ -550,20 +630,23 @@ app.get("/api/events", async (c) => {
 			contactKey: string;
 			status: string;
 		}) => {
-			if (deviceIds.has(ev.deviceId)) {
-				stream.writeSSE({
-					data: JSON.stringify({
-						type: "flow:session:updated",
-						sessionId: ev.sessionId,
-						flowId: ev.flowId,
-						deviceId: ev.deviceId,
-						executionLogId: ev.executionLogId,
-						contactNumber: ev.contactNumber,
-						contactKey: ev.contactKey,
-						status: ev.status,
-					}),
-				});
-			}
+			void isTenantFlowSessionEvent(db, tenantId, ev)
+				.then((isAuthorized) => {
+					if (!isAuthorized) return;
+					stream.writeSSE({
+						data: JSON.stringify({
+							type: "flow:session:updated",
+							sessionId: ev.sessionId,
+							flowId: ev.flowId,
+							deviceId: ev.deviceId,
+							executionLogId: ev.executionLogId,
+							contactNumber: ev.contactNumber,
+							contactKey: ev.contactKey,
+							status: ev.status,
+						}),
+					});
+				})
+				.catch(() => undefined);
 		};
 
 		connectionManager.on("device:qr", onQr);

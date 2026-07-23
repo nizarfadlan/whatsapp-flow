@@ -13,25 +13,27 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
-import { Route as DashboardWebhooksRouteImport } from './routes/dashboard.webhooks'
-import { Route as DashboardUsersRouteImport } from './routes/dashboard.users'
-import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
-import { Route as DashboardRolesRouteImport } from './routes/dashboard.roles'
-import { Route as DashboardNewslettersRouteImport } from './routes/dashboard.newsletters'
-import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
-import { Route as DashboardInboxRouteImport } from './routes/dashboard.inbox'
-import { Route as DashboardGroupsRouteImport } from './routes/dashboard.groups'
-import { Route as DashboardFlowsRouteImport } from './routes/dashboard.flows'
-import { Route as DashboardDevicesRouteImport } from './routes/dashboard.devices'
-import { Route as DashboardContactsRouteImport } from './routes/dashboard.contacts'
-import { Route as DashboardAuditRouteImport } from './routes/dashboard.audit'
-import { Route as DashboardAccountRouteImport } from './routes/dashboard.account'
-import { Route as DashboardFlowsIndexRouteImport } from './routes/dashboard.flows.index'
-import { Route as DashboardFlowsNewRouteImport } from './routes/dashboard.flows.new'
-import { Route as DashboardFlowsFlowIdRouteImport } from './routes/dashboard.flows.$flowId'
-import { Route as DashboardDevicesIdRouteImport } from './routes/dashboard.devices.$id'
-import { Route as DashboardFlowsFlowIdSessionsRouteImport } from './routes/dashboard.flows.$flowId.sessions'
-import { Route as DashboardFlowsFlowIdLogsRouteImport } from './routes/dashboard.flows.$flowId.logs'
+import { Route as DashboardOrganizationSlugRouteImport } from './routes/dashboard.$organizationSlug'
+import { Route as DashboardOrganizationSlugIndexRouteImport } from './routes/dashboard.$organizationSlug.index'
+import { Route as DashboardOrganizationSlugWebhooksRouteImport } from './routes/dashboard.$organizationSlug.webhooks'
+import { Route as DashboardOrganizationSlugUsersRouteImport } from './routes/dashboard.$organizationSlug.users'
+import { Route as DashboardOrganizationSlugSettingsRouteImport } from './routes/dashboard.$organizationSlug.settings'
+import { Route as DashboardOrganizationSlugRolesRouteImport } from './routes/dashboard.$organizationSlug.roles'
+import { Route as DashboardOrganizationSlugNewslettersRouteImport } from './routes/dashboard.$organizationSlug.newsletters'
+import { Route as DashboardOrganizationSlugLogsRouteImport } from './routes/dashboard.$organizationSlug.logs'
+import { Route as DashboardOrganizationSlugInboxRouteImport } from './routes/dashboard.$organizationSlug.inbox'
+import { Route as DashboardOrganizationSlugGroupsRouteImport } from './routes/dashboard.$organizationSlug.groups'
+import { Route as DashboardOrganizationSlugFlowsRouteImport } from './routes/dashboard.$organizationSlug.flows'
+import { Route as DashboardOrganizationSlugDevicesRouteImport } from './routes/dashboard.$organizationSlug.devices'
+import { Route as DashboardOrganizationSlugContactsRouteImport } from './routes/dashboard.$organizationSlug.contacts'
+import { Route as DashboardOrganizationSlugAuditRouteImport } from './routes/dashboard.$organizationSlug.audit'
+import { Route as DashboardOrganizationSlugAccountRouteImport } from './routes/dashboard.$organizationSlug.account'
+import { Route as DashboardOrganizationSlugFlowsIndexRouteImport } from './routes/dashboard.$organizationSlug.flows.index'
+import { Route as DashboardOrganizationSlugFlowsNewRouteImport } from './routes/dashboard.$organizationSlug.flows.new'
+import { Route as DashboardOrganizationSlugFlowsFlowIdRouteImport } from './routes/dashboard.$organizationSlug.flows.$flowId'
+import { Route as DashboardOrganizationSlugDevicesIdRouteImport } from './routes/dashboard.$organizationSlug.devices.$id'
+import { Route as DashboardOrganizationSlugFlowsFlowIdSessionsRouteImport } from './routes/dashboard.$organizationSlug.flows.$flowId.sessions'
+import { Route as DashboardOrganizationSlugFlowsFlowIdLogsRouteImport } from './routes/dashboard.$organizationSlug.flows.$flowId.logs'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -53,177 +55,211 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DashboardRoute,
 } as any)
-const DashboardWebhooksRoute = DashboardWebhooksRouteImport.update({
-  id: '/webhooks',
-  path: '/webhooks',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardUsersRoute = DashboardUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardSettingsRoute = DashboardSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardRolesRoute = DashboardRolesRouteImport.update({
-  id: '/roles',
-  path: '/roles',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardNewslettersRoute = DashboardNewslettersRouteImport.update({
-  id: '/newsletters',
-  path: '/newsletters',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardLogsRoute = DashboardLogsRouteImport.update({
-  id: '/logs',
-  path: '/logs',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardInboxRoute = DashboardInboxRouteImport.update({
-  id: '/inbox',
-  path: '/inbox',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardGroupsRoute = DashboardGroupsRouteImport.update({
-  id: '/groups',
-  path: '/groups',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardFlowsRoute = DashboardFlowsRouteImport.update({
-  id: '/flows',
-  path: '/flows',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardDevicesRoute = DashboardDevicesRouteImport.update({
-  id: '/devices',
-  path: '/devices',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardContactsRoute = DashboardContactsRouteImport.update({
-  id: '/contacts',
-  path: '/contacts',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardAuditRoute = DashboardAuditRouteImport.update({
-  id: '/audit',
-  path: '/audit',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardAccountRoute = DashboardAccountRouteImport.update({
-  id: '/account',
-  path: '/account',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardFlowsIndexRoute = DashboardFlowsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => DashboardFlowsRoute,
-} as any)
-const DashboardFlowsNewRoute = DashboardFlowsNewRouteImport.update({
-  id: '/new',
-  path: '/new',
-  getParentRoute: () => DashboardFlowsRoute,
-} as any)
-const DashboardFlowsFlowIdRoute = DashboardFlowsFlowIdRouteImport.update({
-  id: '/$flowId',
-  path: '/$flowId',
-  getParentRoute: () => DashboardFlowsRoute,
-} as any)
-const DashboardDevicesIdRoute = DashboardDevicesIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => DashboardDevicesRoute,
-} as any)
-const DashboardFlowsFlowIdSessionsRoute =
-  DashboardFlowsFlowIdSessionsRouteImport.update({
-    id: '/sessions',
-    path: '/sessions',
-    getParentRoute: () => DashboardFlowsFlowIdRoute,
+const DashboardOrganizationSlugRoute =
+  DashboardOrganizationSlugRouteImport.update({
+    id: '/$organizationSlug',
+    path: '/$organizationSlug',
+    getParentRoute: () => DashboardRoute,
   } as any)
-const DashboardFlowsFlowIdLogsRoute =
-  DashboardFlowsFlowIdLogsRouteImport.update({
+const DashboardOrganizationSlugIndexRoute =
+  DashboardOrganizationSlugIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugWebhooksRoute =
+  DashboardOrganizationSlugWebhooksRouteImport.update({
+    id: '/webhooks',
+    path: '/webhooks',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugUsersRoute =
+  DashboardOrganizationSlugUsersRouteImport.update({
+    id: '/users',
+    path: '/users',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugSettingsRoute =
+  DashboardOrganizationSlugSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugRolesRoute =
+  DashboardOrganizationSlugRolesRouteImport.update({
+    id: '/roles',
+    path: '/roles',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugNewslettersRoute =
+  DashboardOrganizationSlugNewslettersRouteImport.update({
+    id: '/newsletters',
+    path: '/newsletters',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugLogsRoute =
+  DashboardOrganizationSlugLogsRouteImport.update({
     id: '/logs',
     path: '/logs',
-    getParentRoute: () => DashboardFlowsFlowIdRoute,
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugInboxRoute =
+  DashboardOrganizationSlugInboxRouteImport.update({
+    id: '/inbox',
+    path: '/inbox',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugGroupsRoute =
+  DashboardOrganizationSlugGroupsRouteImport.update({
+    id: '/groups',
+    path: '/groups',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsRoute =
+  DashboardOrganizationSlugFlowsRouteImport.update({
+    id: '/flows',
+    path: '/flows',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugDevicesRoute =
+  DashboardOrganizationSlugDevicesRouteImport.update({
+    id: '/devices',
+    path: '/devices',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugContactsRoute =
+  DashboardOrganizationSlugContactsRouteImport.update({
+    id: '/contacts',
+    path: '/contacts',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugAuditRoute =
+  DashboardOrganizationSlugAuditRouteImport.update({
+    id: '/audit',
+    path: '/audit',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugAccountRoute =
+  DashboardOrganizationSlugAccountRouteImport.update({
+    id: '/account',
+    path: '/account',
+    getParentRoute: () => DashboardOrganizationSlugRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsIndexRoute =
+  DashboardOrganizationSlugFlowsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => DashboardOrganizationSlugFlowsRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsNewRoute =
+  DashboardOrganizationSlugFlowsNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () => DashboardOrganizationSlugFlowsRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsFlowIdRoute =
+  DashboardOrganizationSlugFlowsFlowIdRouteImport.update({
+    id: '/$flowId',
+    path: '/$flowId',
+    getParentRoute: () => DashboardOrganizationSlugFlowsRoute,
+  } as any)
+const DashboardOrganizationSlugDevicesIdRoute =
+  DashboardOrganizationSlugDevicesIdRouteImport.update({
+    id: '/$id',
+    path: '/$id',
+    getParentRoute: () => DashboardOrganizationSlugDevicesRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsFlowIdSessionsRoute =
+  DashboardOrganizationSlugFlowsFlowIdSessionsRouteImport.update({
+    id: '/sessions',
+    path: '/sessions',
+    getParentRoute: () => DashboardOrganizationSlugFlowsFlowIdRoute,
+  } as any)
+const DashboardOrganizationSlugFlowsFlowIdLogsRoute =
+  DashboardOrganizationSlugFlowsFlowIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => DashboardOrganizationSlugFlowsFlowIdRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
-  '/dashboard/account': typeof DashboardAccountRoute
-  '/dashboard/audit': typeof DashboardAuditRoute
-  '/dashboard/contacts': typeof DashboardContactsRoute
-  '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
-  '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
-  '/dashboard/groups': typeof DashboardGroupsRoute
-  '/dashboard/inbox': typeof DashboardInboxRoute
-  '/dashboard/logs': typeof DashboardLogsRoute
-  '/dashboard/newsletters': typeof DashboardNewslettersRoute
-  '/dashboard/roles': typeof DashboardRolesRoute
-  '/dashboard/settings': typeof DashboardSettingsRoute
-  '/dashboard/users': typeof DashboardUsersRoute
-  '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/$organizationSlug': typeof DashboardOrganizationSlugRouteWithChildren
   '/dashboard/': typeof DashboardIndexRoute
-  '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
-  '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
-  '/dashboard/flows/new': typeof DashboardFlowsNewRoute
-  '/dashboard/flows/': typeof DashboardFlowsIndexRoute
-  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
-  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
+  '/dashboard/$organizationSlug/account': typeof DashboardOrganizationSlugAccountRoute
+  '/dashboard/$organizationSlug/audit': typeof DashboardOrganizationSlugAuditRoute
+  '/dashboard/$organizationSlug/contacts': typeof DashboardOrganizationSlugContactsRoute
+  '/dashboard/$organizationSlug/devices': typeof DashboardOrganizationSlugDevicesRouteWithChildren
+  '/dashboard/$organizationSlug/flows': typeof DashboardOrganizationSlugFlowsRouteWithChildren
+  '/dashboard/$organizationSlug/groups': typeof DashboardOrganizationSlugGroupsRoute
+  '/dashboard/$organizationSlug/inbox': typeof DashboardOrganizationSlugInboxRoute
+  '/dashboard/$organizationSlug/logs': typeof DashboardOrganizationSlugLogsRoute
+  '/dashboard/$organizationSlug/newsletters': typeof DashboardOrganizationSlugNewslettersRoute
+  '/dashboard/$organizationSlug/roles': typeof DashboardOrganizationSlugRolesRoute
+  '/dashboard/$organizationSlug/settings': typeof DashboardOrganizationSlugSettingsRoute
+  '/dashboard/$organizationSlug/users': typeof DashboardOrganizationSlugUsersRoute
+  '/dashboard/$organizationSlug/webhooks': typeof DashboardOrganizationSlugWebhooksRoute
+  '/dashboard/$organizationSlug/': typeof DashboardOrganizationSlugIndexRoute
+  '/dashboard/$organizationSlug/devices/$id': typeof DashboardOrganizationSlugDevicesIdRoute
+  '/dashboard/$organizationSlug/flows/$flowId': typeof DashboardOrganizationSlugFlowsFlowIdRouteWithChildren
+  '/dashboard/$organizationSlug/flows/new': typeof DashboardOrganizationSlugFlowsNewRoute
+  '/dashboard/$organizationSlug/flows/': typeof DashboardOrganizationSlugFlowsIndexRoute
+  '/dashboard/$organizationSlug/flows/$flowId/logs': typeof DashboardOrganizationSlugFlowsFlowIdLogsRoute
+  '/dashboard/$organizationSlug/flows/$flowId/sessions': typeof DashboardOrganizationSlugFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/dashboard/account': typeof DashboardAccountRoute
-  '/dashboard/audit': typeof DashboardAuditRoute
-  '/dashboard/contacts': typeof DashboardContactsRoute
-  '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
-  '/dashboard/groups': typeof DashboardGroupsRoute
-  '/dashboard/inbox': typeof DashboardInboxRoute
-  '/dashboard/logs': typeof DashboardLogsRoute
-  '/dashboard/newsletters': typeof DashboardNewslettersRoute
-  '/dashboard/roles': typeof DashboardRolesRoute
-  '/dashboard/settings': typeof DashboardSettingsRoute
-  '/dashboard/users': typeof DashboardUsersRoute
-  '/dashboard/webhooks': typeof DashboardWebhooksRoute
   '/dashboard': typeof DashboardIndexRoute
-  '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
-  '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
-  '/dashboard/flows/new': typeof DashboardFlowsNewRoute
-  '/dashboard/flows': typeof DashboardFlowsIndexRoute
-  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
-  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
+  '/dashboard/$organizationSlug/account': typeof DashboardOrganizationSlugAccountRoute
+  '/dashboard/$organizationSlug/audit': typeof DashboardOrganizationSlugAuditRoute
+  '/dashboard/$organizationSlug/contacts': typeof DashboardOrganizationSlugContactsRoute
+  '/dashboard/$organizationSlug/devices': typeof DashboardOrganizationSlugDevicesRouteWithChildren
+  '/dashboard/$organizationSlug/groups': typeof DashboardOrganizationSlugGroupsRoute
+  '/dashboard/$organizationSlug/inbox': typeof DashboardOrganizationSlugInboxRoute
+  '/dashboard/$organizationSlug/logs': typeof DashboardOrganizationSlugLogsRoute
+  '/dashboard/$organizationSlug/newsletters': typeof DashboardOrganizationSlugNewslettersRoute
+  '/dashboard/$organizationSlug/roles': typeof DashboardOrganizationSlugRolesRoute
+  '/dashboard/$organizationSlug/settings': typeof DashboardOrganizationSlugSettingsRoute
+  '/dashboard/$organizationSlug/users': typeof DashboardOrganizationSlugUsersRoute
+  '/dashboard/$organizationSlug/webhooks': typeof DashboardOrganizationSlugWebhooksRoute
+  '/dashboard/$organizationSlug': typeof DashboardOrganizationSlugIndexRoute
+  '/dashboard/$organizationSlug/devices/$id': typeof DashboardOrganizationSlugDevicesIdRoute
+  '/dashboard/$organizationSlug/flows/$flowId': typeof DashboardOrganizationSlugFlowsFlowIdRouteWithChildren
+  '/dashboard/$organizationSlug/flows/new': typeof DashboardOrganizationSlugFlowsNewRoute
+  '/dashboard/$organizationSlug/flows': typeof DashboardOrganizationSlugFlowsIndexRoute
+  '/dashboard/$organizationSlug/flows/$flowId/logs': typeof DashboardOrganizationSlugFlowsFlowIdLogsRoute
+  '/dashboard/$organizationSlug/flows/$flowId/sessions': typeof DashboardOrganizationSlugFlowsFlowIdSessionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
-  '/dashboard/account': typeof DashboardAccountRoute
-  '/dashboard/audit': typeof DashboardAuditRoute
-  '/dashboard/contacts': typeof DashboardContactsRoute
-  '/dashboard/devices': typeof DashboardDevicesRouteWithChildren
-  '/dashboard/flows': typeof DashboardFlowsRouteWithChildren
-  '/dashboard/groups': typeof DashboardGroupsRoute
-  '/dashboard/inbox': typeof DashboardInboxRoute
-  '/dashboard/logs': typeof DashboardLogsRoute
-  '/dashboard/newsletters': typeof DashboardNewslettersRoute
-  '/dashboard/roles': typeof DashboardRolesRoute
-  '/dashboard/settings': typeof DashboardSettingsRoute
-  '/dashboard/users': typeof DashboardUsersRoute
-  '/dashboard/webhooks': typeof DashboardWebhooksRoute
+  '/dashboard/$organizationSlug': typeof DashboardOrganizationSlugRouteWithChildren
   '/dashboard/': typeof DashboardIndexRoute
-  '/dashboard/devices/$id': typeof DashboardDevicesIdRoute
-  '/dashboard/flows/$flowId': typeof DashboardFlowsFlowIdRouteWithChildren
-  '/dashboard/flows/new': typeof DashboardFlowsNewRoute
-  '/dashboard/flows/': typeof DashboardFlowsIndexRoute
-  '/dashboard/flows/$flowId/logs': typeof DashboardFlowsFlowIdLogsRoute
-  '/dashboard/flows/$flowId/sessions': typeof DashboardFlowsFlowIdSessionsRoute
+  '/dashboard/$organizationSlug/account': typeof DashboardOrganizationSlugAccountRoute
+  '/dashboard/$organizationSlug/audit': typeof DashboardOrganizationSlugAuditRoute
+  '/dashboard/$organizationSlug/contacts': typeof DashboardOrganizationSlugContactsRoute
+  '/dashboard/$organizationSlug/devices': typeof DashboardOrganizationSlugDevicesRouteWithChildren
+  '/dashboard/$organizationSlug/flows': typeof DashboardOrganizationSlugFlowsRouteWithChildren
+  '/dashboard/$organizationSlug/groups': typeof DashboardOrganizationSlugGroupsRoute
+  '/dashboard/$organizationSlug/inbox': typeof DashboardOrganizationSlugInboxRoute
+  '/dashboard/$organizationSlug/logs': typeof DashboardOrganizationSlugLogsRoute
+  '/dashboard/$organizationSlug/newsletters': typeof DashboardOrganizationSlugNewslettersRoute
+  '/dashboard/$organizationSlug/roles': typeof DashboardOrganizationSlugRolesRoute
+  '/dashboard/$organizationSlug/settings': typeof DashboardOrganizationSlugSettingsRoute
+  '/dashboard/$organizationSlug/users': typeof DashboardOrganizationSlugUsersRoute
+  '/dashboard/$organizationSlug/webhooks': typeof DashboardOrganizationSlugWebhooksRoute
+  '/dashboard/$organizationSlug/': typeof DashboardOrganizationSlugIndexRoute
+  '/dashboard/$organizationSlug/devices/$id': typeof DashboardOrganizationSlugDevicesIdRoute
+  '/dashboard/$organizationSlug/flows/$flowId': typeof DashboardOrganizationSlugFlowsFlowIdRouteWithChildren
+  '/dashboard/$organizationSlug/flows/new': typeof DashboardOrganizationSlugFlowsNewRoute
+  '/dashboard/$organizationSlug/flows/': typeof DashboardOrganizationSlugFlowsIndexRoute
+  '/dashboard/$organizationSlug/flows/$flowId/logs': typeof DashboardOrganizationSlugFlowsFlowIdLogsRoute
+  '/dashboard/$organizationSlug/flows/$flowId/sessions': typeof DashboardOrganizationSlugFlowsFlowIdSessionsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -231,74 +267,79 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/login'
-    | '/dashboard/account'
-    | '/dashboard/audit'
-    | '/dashboard/contacts'
-    | '/dashboard/devices'
-    | '/dashboard/flows'
-    | '/dashboard/groups'
-    | '/dashboard/inbox'
-    | '/dashboard/logs'
-    | '/dashboard/newsletters'
-    | '/dashboard/roles'
-    | '/dashboard/settings'
-    | '/dashboard/users'
-    | '/dashboard/webhooks'
+    | '/dashboard/$organizationSlug'
     | '/dashboard/'
-    | '/dashboard/devices/$id'
-    | '/dashboard/flows/$flowId'
-    | '/dashboard/flows/new'
-    | '/dashboard/flows/'
-    | '/dashboard/flows/$flowId/logs'
-    | '/dashboard/flows/$flowId/sessions'
+    | '/dashboard/$organizationSlug/account'
+    | '/dashboard/$organizationSlug/audit'
+    | '/dashboard/$organizationSlug/contacts'
+    | '/dashboard/$organizationSlug/devices'
+    | '/dashboard/$organizationSlug/flows'
+    | '/dashboard/$organizationSlug/groups'
+    | '/dashboard/$organizationSlug/inbox'
+    | '/dashboard/$organizationSlug/logs'
+    | '/dashboard/$organizationSlug/newsletters'
+    | '/dashboard/$organizationSlug/roles'
+    | '/dashboard/$organizationSlug/settings'
+    | '/dashboard/$organizationSlug/users'
+    | '/dashboard/$organizationSlug/webhooks'
+    | '/dashboard/$organizationSlug/'
+    | '/dashboard/$organizationSlug/devices/$id'
+    | '/dashboard/$organizationSlug/flows/$flowId'
+    | '/dashboard/$organizationSlug/flows/new'
+    | '/dashboard/$organizationSlug/flows/'
+    | '/dashboard/$organizationSlug/flows/$flowId/logs'
+    | '/dashboard/$organizationSlug/flows/$flowId/sessions'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
-    | '/dashboard/account'
-    | '/dashboard/audit'
-    | '/dashboard/contacts'
-    | '/dashboard/devices'
-    | '/dashboard/groups'
-    | '/dashboard/inbox'
-    | '/dashboard/logs'
-    | '/dashboard/newsletters'
-    | '/dashboard/roles'
-    | '/dashboard/settings'
-    | '/dashboard/users'
-    | '/dashboard/webhooks'
     | '/dashboard'
-    | '/dashboard/devices/$id'
-    | '/dashboard/flows/$flowId'
-    | '/dashboard/flows/new'
-    | '/dashboard/flows'
-    | '/dashboard/flows/$flowId/logs'
-    | '/dashboard/flows/$flowId/sessions'
+    | '/dashboard/$organizationSlug/account'
+    | '/dashboard/$organizationSlug/audit'
+    | '/dashboard/$organizationSlug/contacts'
+    | '/dashboard/$organizationSlug/devices'
+    | '/dashboard/$organizationSlug/groups'
+    | '/dashboard/$organizationSlug/inbox'
+    | '/dashboard/$organizationSlug/logs'
+    | '/dashboard/$organizationSlug/newsletters'
+    | '/dashboard/$organizationSlug/roles'
+    | '/dashboard/$organizationSlug/settings'
+    | '/dashboard/$organizationSlug/users'
+    | '/dashboard/$organizationSlug/webhooks'
+    | '/dashboard/$organizationSlug'
+    | '/dashboard/$organizationSlug/devices/$id'
+    | '/dashboard/$organizationSlug/flows/$flowId'
+    | '/dashboard/$organizationSlug/flows/new'
+    | '/dashboard/$organizationSlug/flows'
+    | '/dashboard/$organizationSlug/flows/$flowId/logs'
+    | '/dashboard/$organizationSlug/flows/$flowId/sessions'
   id:
     | '__root__'
     | '/'
     | '/dashboard'
     | '/login'
-    | '/dashboard/account'
-    | '/dashboard/audit'
-    | '/dashboard/contacts'
-    | '/dashboard/devices'
-    | '/dashboard/flows'
-    | '/dashboard/groups'
-    | '/dashboard/inbox'
-    | '/dashboard/logs'
-    | '/dashboard/newsletters'
-    | '/dashboard/roles'
-    | '/dashboard/settings'
-    | '/dashboard/users'
-    | '/dashboard/webhooks'
+    | '/dashboard/$organizationSlug'
     | '/dashboard/'
-    | '/dashboard/devices/$id'
-    | '/dashboard/flows/$flowId'
-    | '/dashboard/flows/new'
-    | '/dashboard/flows/'
-    | '/dashboard/flows/$flowId/logs'
-    | '/dashboard/flows/$flowId/sessions'
+    | '/dashboard/$organizationSlug/account'
+    | '/dashboard/$organizationSlug/audit'
+    | '/dashboard/$organizationSlug/contacts'
+    | '/dashboard/$organizationSlug/devices'
+    | '/dashboard/$organizationSlug/flows'
+    | '/dashboard/$organizationSlug/groups'
+    | '/dashboard/$organizationSlug/inbox'
+    | '/dashboard/$organizationSlug/logs'
+    | '/dashboard/$organizationSlug/newsletters'
+    | '/dashboard/$organizationSlug/roles'
+    | '/dashboard/$organizationSlug/settings'
+    | '/dashboard/$organizationSlug/users'
+    | '/dashboard/$organizationSlug/webhooks'
+    | '/dashboard/$organizationSlug/'
+    | '/dashboard/$organizationSlug/devices/$id'
+    | '/dashboard/$organizationSlug/flows/$flowId'
+    | '/dashboard/$organizationSlug/flows/new'
+    | '/dashboard/$organizationSlug/flows/'
+    | '/dashboard/$organizationSlug/flows/$flowId/logs'
+    | '/dashboard/$organizationSlug/flows/$flowId/sessions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -337,213 +378,264 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof DashboardRoute
     }
-    '/dashboard/webhooks': {
-      id: '/dashboard/webhooks'
-      path: '/webhooks'
-      fullPath: '/dashboard/webhooks'
-      preLoaderRoute: typeof DashboardWebhooksRouteImport
+    '/dashboard/$organizationSlug': {
+      id: '/dashboard/$organizationSlug'
+      path: '/$organizationSlug'
+      fullPath: '/dashboard/$organizationSlug'
+      preLoaderRoute: typeof DashboardOrganizationSlugRouteImport
       parentRoute: typeof DashboardRoute
     }
-    '/dashboard/users': {
-      id: '/dashboard/users'
-      path: '/users'
-      fullPath: '/dashboard/users'
-      preLoaderRoute: typeof DashboardUsersRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/settings': {
-      id: '/dashboard/settings'
-      path: '/settings'
-      fullPath: '/dashboard/settings'
-      preLoaderRoute: typeof DashboardSettingsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/roles': {
-      id: '/dashboard/roles'
-      path: '/roles'
-      fullPath: '/dashboard/roles'
-      preLoaderRoute: typeof DashboardRolesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/newsletters': {
-      id: '/dashboard/newsletters'
-      path: '/newsletters'
-      fullPath: '/dashboard/newsletters'
-      preLoaderRoute: typeof DashboardNewslettersRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/logs': {
-      id: '/dashboard/logs'
-      path: '/logs'
-      fullPath: '/dashboard/logs'
-      preLoaderRoute: typeof DashboardLogsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/inbox': {
-      id: '/dashboard/inbox'
-      path: '/inbox'
-      fullPath: '/dashboard/inbox'
-      preLoaderRoute: typeof DashboardInboxRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/groups': {
-      id: '/dashboard/groups'
-      path: '/groups'
-      fullPath: '/dashboard/groups'
-      preLoaderRoute: typeof DashboardGroupsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/flows': {
-      id: '/dashboard/flows'
-      path: '/flows'
-      fullPath: '/dashboard/flows'
-      preLoaderRoute: typeof DashboardFlowsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/devices': {
-      id: '/dashboard/devices'
-      path: '/devices'
-      fullPath: '/dashboard/devices'
-      preLoaderRoute: typeof DashboardDevicesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/contacts': {
-      id: '/dashboard/contacts'
-      path: '/contacts'
-      fullPath: '/dashboard/contacts'
-      preLoaderRoute: typeof DashboardContactsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/audit': {
-      id: '/dashboard/audit'
-      path: '/audit'
-      fullPath: '/dashboard/audit'
-      preLoaderRoute: typeof DashboardAuditRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/account': {
-      id: '/dashboard/account'
-      path: '/account'
-      fullPath: '/dashboard/account'
-      preLoaderRoute: typeof DashboardAccountRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/flows/': {
-      id: '/dashboard/flows/'
+    '/dashboard/$organizationSlug/': {
+      id: '/dashboard/$organizationSlug/'
       path: '/'
-      fullPath: '/dashboard/flows/'
-      preLoaderRoute: typeof DashboardFlowsIndexRouteImport
-      parentRoute: typeof DashboardFlowsRoute
+      fullPath: '/dashboard/$organizationSlug/'
+      preLoaderRoute: typeof DashboardOrganizationSlugIndexRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
     }
-    '/dashboard/flows/new': {
-      id: '/dashboard/flows/new'
-      path: '/new'
-      fullPath: '/dashboard/flows/new'
-      preLoaderRoute: typeof DashboardFlowsNewRouteImport
-      parentRoute: typeof DashboardFlowsRoute
+    '/dashboard/$organizationSlug/webhooks': {
+      id: '/dashboard/$organizationSlug/webhooks'
+      path: '/webhooks'
+      fullPath: '/dashboard/$organizationSlug/webhooks'
+      preLoaderRoute: typeof DashboardOrganizationSlugWebhooksRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
     }
-    '/dashboard/flows/$flowId': {
-      id: '/dashboard/flows/$flowId'
-      path: '/$flowId'
-      fullPath: '/dashboard/flows/$flowId'
-      preLoaderRoute: typeof DashboardFlowsFlowIdRouteImport
-      parentRoute: typeof DashboardFlowsRoute
+    '/dashboard/$organizationSlug/users': {
+      id: '/dashboard/$organizationSlug/users'
+      path: '/users'
+      fullPath: '/dashboard/$organizationSlug/users'
+      preLoaderRoute: typeof DashboardOrganizationSlugUsersRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
     }
-    '/dashboard/devices/$id': {
-      id: '/dashboard/devices/$id'
-      path: '/$id'
-      fullPath: '/dashboard/devices/$id'
-      preLoaderRoute: typeof DashboardDevicesIdRouteImport
-      parentRoute: typeof DashboardDevicesRoute
+    '/dashboard/$organizationSlug/settings': {
+      id: '/dashboard/$organizationSlug/settings'
+      path: '/settings'
+      fullPath: '/dashboard/$organizationSlug/settings'
+      preLoaderRoute: typeof DashboardOrganizationSlugSettingsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
     }
-    '/dashboard/flows/$flowId/sessions': {
-      id: '/dashboard/flows/$flowId/sessions'
-      path: '/sessions'
-      fullPath: '/dashboard/flows/$flowId/sessions'
-      preLoaderRoute: typeof DashboardFlowsFlowIdSessionsRouteImport
-      parentRoute: typeof DashboardFlowsFlowIdRoute
+    '/dashboard/$organizationSlug/roles': {
+      id: '/dashboard/$organizationSlug/roles'
+      path: '/roles'
+      fullPath: '/dashboard/$organizationSlug/roles'
+      preLoaderRoute: typeof DashboardOrganizationSlugRolesRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
     }
-    '/dashboard/flows/$flowId/logs': {
-      id: '/dashboard/flows/$flowId/logs'
+    '/dashboard/$organizationSlug/newsletters': {
+      id: '/dashboard/$organizationSlug/newsletters'
+      path: '/newsletters'
+      fullPath: '/dashboard/$organizationSlug/newsletters'
+      preLoaderRoute: typeof DashboardOrganizationSlugNewslettersRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/logs': {
+      id: '/dashboard/$organizationSlug/logs'
       path: '/logs'
-      fullPath: '/dashboard/flows/$flowId/logs'
-      preLoaderRoute: typeof DashboardFlowsFlowIdLogsRouteImport
-      parentRoute: typeof DashboardFlowsFlowIdRoute
+      fullPath: '/dashboard/$organizationSlug/logs'
+      preLoaderRoute: typeof DashboardOrganizationSlugLogsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/inbox': {
+      id: '/dashboard/$organizationSlug/inbox'
+      path: '/inbox'
+      fullPath: '/dashboard/$organizationSlug/inbox'
+      preLoaderRoute: typeof DashboardOrganizationSlugInboxRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/groups': {
+      id: '/dashboard/$organizationSlug/groups'
+      path: '/groups'
+      fullPath: '/dashboard/$organizationSlug/groups'
+      preLoaderRoute: typeof DashboardOrganizationSlugGroupsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/flows': {
+      id: '/dashboard/$organizationSlug/flows'
+      path: '/flows'
+      fullPath: '/dashboard/$organizationSlug/flows'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/devices': {
+      id: '/dashboard/$organizationSlug/devices'
+      path: '/devices'
+      fullPath: '/dashboard/$organizationSlug/devices'
+      preLoaderRoute: typeof DashboardOrganizationSlugDevicesRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/contacts': {
+      id: '/dashboard/$organizationSlug/contacts'
+      path: '/contacts'
+      fullPath: '/dashboard/$organizationSlug/contacts'
+      preLoaderRoute: typeof DashboardOrganizationSlugContactsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/audit': {
+      id: '/dashboard/$organizationSlug/audit'
+      path: '/audit'
+      fullPath: '/dashboard/$organizationSlug/audit'
+      preLoaderRoute: typeof DashboardOrganizationSlugAuditRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/account': {
+      id: '/dashboard/$organizationSlug/account'
+      path: '/account'
+      fullPath: '/dashboard/$organizationSlug/account'
+      preLoaderRoute: typeof DashboardOrganizationSlugAccountRouteImport
+      parentRoute: typeof DashboardOrganizationSlugRoute
+    }
+    '/dashboard/$organizationSlug/flows/': {
+      id: '/dashboard/$organizationSlug/flows/'
+      path: '/'
+      fullPath: '/dashboard/$organizationSlug/flows/'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsIndexRouteImport
+      parentRoute: typeof DashboardOrganizationSlugFlowsRoute
+    }
+    '/dashboard/$organizationSlug/flows/new': {
+      id: '/dashboard/$organizationSlug/flows/new'
+      path: '/new'
+      fullPath: '/dashboard/$organizationSlug/flows/new'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsNewRouteImport
+      parentRoute: typeof DashboardOrganizationSlugFlowsRoute
+    }
+    '/dashboard/$organizationSlug/flows/$flowId': {
+      id: '/dashboard/$organizationSlug/flows/$flowId'
+      path: '/$flowId'
+      fullPath: '/dashboard/$organizationSlug/flows/$flowId'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsFlowIdRouteImport
+      parentRoute: typeof DashboardOrganizationSlugFlowsRoute
+    }
+    '/dashboard/$organizationSlug/devices/$id': {
+      id: '/dashboard/$organizationSlug/devices/$id'
+      path: '/$id'
+      fullPath: '/dashboard/$organizationSlug/devices/$id'
+      preLoaderRoute: typeof DashboardOrganizationSlugDevicesIdRouteImport
+      parentRoute: typeof DashboardOrganizationSlugDevicesRoute
+    }
+    '/dashboard/$organizationSlug/flows/$flowId/sessions': {
+      id: '/dashboard/$organizationSlug/flows/$flowId/sessions'
+      path: '/sessions'
+      fullPath: '/dashboard/$organizationSlug/flows/$flowId/sessions'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsFlowIdSessionsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugFlowsFlowIdRoute
+    }
+    '/dashboard/$organizationSlug/flows/$flowId/logs': {
+      id: '/dashboard/$organizationSlug/flows/$flowId/logs'
+      path: '/logs'
+      fullPath: '/dashboard/$organizationSlug/flows/$flowId/logs'
+      preLoaderRoute: typeof DashboardOrganizationSlugFlowsFlowIdLogsRouteImport
+      parentRoute: typeof DashboardOrganizationSlugFlowsFlowIdRoute
     }
   }
 }
 
-interface DashboardDevicesRouteChildren {
-  DashboardDevicesIdRoute: typeof DashboardDevicesIdRoute
+interface DashboardOrganizationSlugDevicesRouteChildren {
+  DashboardOrganizationSlugDevicesIdRoute: typeof DashboardOrganizationSlugDevicesIdRoute
 }
 
-const DashboardDevicesRouteChildren: DashboardDevicesRouteChildren = {
-  DashboardDevicesIdRoute: DashboardDevicesIdRoute,
+const DashboardOrganizationSlugDevicesRouteChildren: DashboardOrganizationSlugDevicesRouteChildren =
+  {
+    DashboardOrganizationSlugDevicesIdRoute:
+      DashboardOrganizationSlugDevicesIdRoute,
+  }
+
+const DashboardOrganizationSlugDevicesRouteWithChildren =
+  DashboardOrganizationSlugDevicesRoute._addFileChildren(
+    DashboardOrganizationSlugDevicesRouteChildren,
+  )
+
+interface DashboardOrganizationSlugFlowsFlowIdRouteChildren {
+  DashboardOrganizationSlugFlowsFlowIdLogsRoute: typeof DashboardOrganizationSlugFlowsFlowIdLogsRoute
+  DashboardOrganizationSlugFlowsFlowIdSessionsRoute: typeof DashboardOrganizationSlugFlowsFlowIdSessionsRoute
 }
 
-const DashboardDevicesRouteWithChildren =
-  DashboardDevicesRoute._addFileChildren(DashboardDevicesRouteChildren)
+const DashboardOrganizationSlugFlowsFlowIdRouteChildren: DashboardOrganizationSlugFlowsFlowIdRouteChildren =
+  {
+    DashboardOrganizationSlugFlowsFlowIdLogsRoute:
+      DashboardOrganizationSlugFlowsFlowIdLogsRoute,
+    DashboardOrganizationSlugFlowsFlowIdSessionsRoute:
+      DashboardOrganizationSlugFlowsFlowIdSessionsRoute,
+  }
 
-interface DashboardFlowsFlowIdRouteChildren {
-  DashboardFlowsFlowIdLogsRoute: typeof DashboardFlowsFlowIdLogsRoute
-  DashboardFlowsFlowIdSessionsRoute: typeof DashboardFlowsFlowIdSessionsRoute
+const DashboardOrganizationSlugFlowsFlowIdRouteWithChildren =
+  DashboardOrganizationSlugFlowsFlowIdRoute._addFileChildren(
+    DashboardOrganizationSlugFlowsFlowIdRouteChildren,
+  )
+
+interface DashboardOrganizationSlugFlowsRouteChildren {
+  DashboardOrganizationSlugFlowsFlowIdRoute: typeof DashboardOrganizationSlugFlowsFlowIdRouteWithChildren
+  DashboardOrganizationSlugFlowsNewRoute: typeof DashboardOrganizationSlugFlowsNewRoute
+  DashboardOrganizationSlugFlowsIndexRoute: typeof DashboardOrganizationSlugFlowsIndexRoute
 }
 
-const DashboardFlowsFlowIdRouteChildren: DashboardFlowsFlowIdRouteChildren = {
-  DashboardFlowsFlowIdLogsRoute: DashboardFlowsFlowIdLogsRoute,
-  DashboardFlowsFlowIdSessionsRoute: DashboardFlowsFlowIdSessionsRoute,
+const DashboardOrganizationSlugFlowsRouteChildren: DashboardOrganizationSlugFlowsRouteChildren =
+  {
+    DashboardOrganizationSlugFlowsFlowIdRoute:
+      DashboardOrganizationSlugFlowsFlowIdRouteWithChildren,
+    DashboardOrganizationSlugFlowsNewRoute:
+      DashboardOrganizationSlugFlowsNewRoute,
+    DashboardOrganizationSlugFlowsIndexRoute:
+      DashboardOrganizationSlugFlowsIndexRoute,
+  }
+
+const DashboardOrganizationSlugFlowsRouteWithChildren =
+  DashboardOrganizationSlugFlowsRoute._addFileChildren(
+    DashboardOrganizationSlugFlowsRouteChildren,
+  )
+
+interface DashboardOrganizationSlugRouteChildren {
+  DashboardOrganizationSlugAccountRoute: typeof DashboardOrganizationSlugAccountRoute
+  DashboardOrganizationSlugAuditRoute: typeof DashboardOrganizationSlugAuditRoute
+  DashboardOrganizationSlugContactsRoute: typeof DashboardOrganizationSlugContactsRoute
+  DashboardOrganizationSlugDevicesRoute: typeof DashboardOrganizationSlugDevicesRouteWithChildren
+  DashboardOrganizationSlugFlowsRoute: typeof DashboardOrganizationSlugFlowsRouteWithChildren
+  DashboardOrganizationSlugGroupsRoute: typeof DashboardOrganizationSlugGroupsRoute
+  DashboardOrganizationSlugInboxRoute: typeof DashboardOrganizationSlugInboxRoute
+  DashboardOrganizationSlugLogsRoute: typeof DashboardOrganizationSlugLogsRoute
+  DashboardOrganizationSlugNewslettersRoute: typeof DashboardOrganizationSlugNewslettersRoute
+  DashboardOrganizationSlugRolesRoute: typeof DashboardOrganizationSlugRolesRoute
+  DashboardOrganizationSlugSettingsRoute: typeof DashboardOrganizationSlugSettingsRoute
+  DashboardOrganizationSlugUsersRoute: typeof DashboardOrganizationSlugUsersRoute
+  DashboardOrganizationSlugWebhooksRoute: typeof DashboardOrganizationSlugWebhooksRoute
+  DashboardOrganizationSlugIndexRoute: typeof DashboardOrganizationSlugIndexRoute
 }
 
-const DashboardFlowsFlowIdRouteWithChildren =
-  DashboardFlowsFlowIdRoute._addFileChildren(DashboardFlowsFlowIdRouteChildren)
+const DashboardOrganizationSlugRouteChildren: DashboardOrganizationSlugRouteChildren =
+  {
+    DashboardOrganizationSlugAccountRoute:
+      DashboardOrganizationSlugAccountRoute,
+    DashboardOrganizationSlugAuditRoute: DashboardOrganizationSlugAuditRoute,
+    DashboardOrganizationSlugContactsRoute:
+      DashboardOrganizationSlugContactsRoute,
+    DashboardOrganizationSlugDevicesRoute:
+      DashboardOrganizationSlugDevicesRouteWithChildren,
+    DashboardOrganizationSlugFlowsRoute:
+      DashboardOrganizationSlugFlowsRouteWithChildren,
+    DashboardOrganizationSlugGroupsRoute: DashboardOrganizationSlugGroupsRoute,
+    DashboardOrganizationSlugInboxRoute: DashboardOrganizationSlugInboxRoute,
+    DashboardOrganizationSlugLogsRoute: DashboardOrganizationSlugLogsRoute,
+    DashboardOrganizationSlugNewslettersRoute:
+      DashboardOrganizationSlugNewslettersRoute,
+    DashboardOrganizationSlugRolesRoute: DashboardOrganizationSlugRolesRoute,
+    DashboardOrganizationSlugSettingsRoute:
+      DashboardOrganizationSlugSettingsRoute,
+    DashboardOrganizationSlugUsersRoute: DashboardOrganizationSlugUsersRoute,
+    DashboardOrganizationSlugWebhooksRoute:
+      DashboardOrganizationSlugWebhooksRoute,
+    DashboardOrganizationSlugIndexRoute: DashboardOrganizationSlugIndexRoute,
+  }
 
-interface DashboardFlowsRouteChildren {
-  DashboardFlowsFlowIdRoute: typeof DashboardFlowsFlowIdRouteWithChildren
-  DashboardFlowsNewRoute: typeof DashboardFlowsNewRoute
-  DashboardFlowsIndexRoute: typeof DashboardFlowsIndexRoute
-}
-
-const DashboardFlowsRouteChildren: DashboardFlowsRouteChildren = {
-  DashboardFlowsFlowIdRoute: DashboardFlowsFlowIdRouteWithChildren,
-  DashboardFlowsNewRoute: DashboardFlowsNewRoute,
-  DashboardFlowsIndexRoute: DashboardFlowsIndexRoute,
-}
-
-const DashboardFlowsRouteWithChildren = DashboardFlowsRoute._addFileChildren(
-  DashboardFlowsRouteChildren,
-)
+const DashboardOrganizationSlugRouteWithChildren =
+  DashboardOrganizationSlugRoute._addFileChildren(
+    DashboardOrganizationSlugRouteChildren,
+  )
 
 interface DashboardRouteChildren {
-  DashboardAccountRoute: typeof DashboardAccountRoute
-  DashboardAuditRoute: typeof DashboardAuditRoute
-  DashboardContactsRoute: typeof DashboardContactsRoute
-  DashboardDevicesRoute: typeof DashboardDevicesRouteWithChildren
-  DashboardFlowsRoute: typeof DashboardFlowsRouteWithChildren
-  DashboardGroupsRoute: typeof DashboardGroupsRoute
-  DashboardInboxRoute: typeof DashboardInboxRoute
-  DashboardLogsRoute: typeof DashboardLogsRoute
-  DashboardNewslettersRoute: typeof DashboardNewslettersRoute
-  DashboardRolesRoute: typeof DashboardRolesRoute
-  DashboardSettingsRoute: typeof DashboardSettingsRoute
-  DashboardUsersRoute: typeof DashboardUsersRoute
-  DashboardWebhooksRoute: typeof DashboardWebhooksRoute
+  DashboardOrganizationSlugRoute: typeof DashboardOrganizationSlugRouteWithChildren
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
 const DashboardRouteChildren: DashboardRouteChildren = {
-  DashboardAccountRoute: DashboardAccountRoute,
-  DashboardAuditRoute: DashboardAuditRoute,
-  DashboardContactsRoute: DashboardContactsRoute,
-  DashboardDevicesRoute: DashboardDevicesRouteWithChildren,
-  DashboardFlowsRoute: DashboardFlowsRouteWithChildren,
-  DashboardGroupsRoute: DashboardGroupsRoute,
-  DashboardInboxRoute: DashboardInboxRoute,
-  DashboardLogsRoute: DashboardLogsRoute,
-  DashboardNewslettersRoute: DashboardNewslettersRoute,
-  DashboardRolesRoute: DashboardRolesRoute,
-  DashboardSettingsRoute: DashboardSettingsRoute,
-  DashboardUsersRoute: DashboardUsersRoute,
-  DashboardWebhooksRoute: DashboardWebhooksRoute,
+  DashboardOrganizationSlugRoute: DashboardOrganizationSlugRouteWithChildren,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 

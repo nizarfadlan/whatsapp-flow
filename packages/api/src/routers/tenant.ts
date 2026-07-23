@@ -17,7 +17,12 @@ import { and, count, desc, eq, gt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { writeAuditLog } from "../audit-log";
 import { sendInviteEmail } from "../email";
-import { protectedProcedure, publicProcedure, router } from "../index";
+import {
+	organizationPermissionProcedure,
+	protectedProcedure,
+	publicProcedure,
+	router,
+} from "../index";
 
 const inviteTokenBytes = 32;
 const inviteExpiresInMs = 1000 * 60 * 60 * 24 * 7;
@@ -78,10 +83,13 @@ async function requireActiveTenantMember(
 		})
 		.from(tenantMember)
 		.innerJoin(user, eq(user.id, tenantMember.userId))
+		.innerJoin(tenant, eq(tenant.id, tenantMember.tenantId))
 		.where(
 			and(
 				eq(tenantMember.tenantId, tenantId),
 				eq(tenantMember.userId, userId),
+				eq(tenantMember.status, "active"),
+				eq(tenant.status, "active"),
 				eq(user.status, "active"),
 			),
 		)
@@ -92,56 +100,6 @@ async function requireActiveTenantMember(
 	}
 
 	return member;
-}
-
-async function requireFlowOwnership(
-	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
-	flowId: string,
-	userId: string,
-) {
-	const [found] = await db
-		.select({ id: flow.id, name: flow.name, tenantId: flow.tenantId })
-		.from(flow)
-		.innerJoin(
-			tenantMember,
-			and(
-				eq(tenantMember.tenantId, flow.tenantId),
-				eq(tenantMember.userId, userId),
-			),
-		)
-		.where(and(eq(flow.id, flowId), eq(flow.userId, userId)))
-		.limit(1);
-
-	if (!found) {
-		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
-	}
-
-	return found;
-}
-
-async function requireDeviceOwnership(
-	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
-	deviceId: string,
-	userId: string,
-) {
-	const [found] = await db
-		.select({ id: device.id, name: device.name, tenantId: device.tenantId })
-		.from(device)
-		.innerJoin(
-			tenantMember,
-			and(
-				eq(tenantMember.tenantId, device.tenantId),
-				eq(tenantMember.userId, userId),
-			),
-		)
-		.where(and(eq(device.id, deviceId), eq(device.userId, userId)))
-		.limit(1);
-
-	if (!found) {
-		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
-	}
-
-	return found;
 }
 
 export const tenantRouter = router({
@@ -480,14 +438,21 @@ export const tenantRouter = router({
 			return { success: true };
 		}),
 
-	listFlowGrants: protectedProcedure
-		.input(z.object({ flowId: z.string().min(1) }))
+	listFlowGrants: organizationPermissionProcedure("organization.flows.manage")
+		.input(z.object({ tenantId: z.string().min(1), flowId: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
-				ctx.db,
-				input.flowId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: flow.id })
+				.from(flow)
+				.where(
+					and(
+						eq(flow.id, input.flowId),
+						eq(flow.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
 			return ctx.db
 				.select({
 					userId: flowAccessGrant.userId,
@@ -503,30 +468,38 @@ export const tenantRouter = router({
 				.where(
 					and(
 						eq(flowAccessGrant.flowId, found.id),
-						eq(flowAccessGrant.tenantId, found.tenantId),
+						eq(flowAccessGrant.tenantId, ctx.organization.id),
 						eq(user.status, "active"),
 					),
 				)
 				.orderBy(desc(flowAccessGrant.createdAt));
 		}),
 
-	grantFlowAccess: protectedProcedure
+	grantFlowAccess: organizationPermissionProcedure("organization.flows.manage")
 		.input(
 			z.object({
+				tenantId: z.string().min(1),
 				flowId: z.string().min(1),
 				userId: z.string().min(1),
 				capability: z.enum(["viewer", "editor"]),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
-				ctx.db,
-				input.flowId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: flow.id })
+				.from(flow)
+				.where(
+					and(
+						eq(flow.id, input.flowId),
+						eq(flow.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
 			const member = await requireActiveTenantMember(
 				ctx.db,
-				found.tenantId,
+				ctx.organization.id,
 				input.userId,
 			);
 			const [grant] = await ctx.db
@@ -534,7 +507,7 @@ export const tenantRouter = router({
 				.values({
 					id: crypto.randomUUID(),
 					flowId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					userId: member.id,
 					capability: input.capability,
 					grantedByUserId: ctx.currentUser.id,
@@ -548,13 +521,11 @@ export const tenantRouter = router({
 					},
 				})
 				.returning();
-			if (!grant) {
+			if (!grant)
 				throw new TRPCError({
 					code: "INTERNAL_SERVER_ERROR",
 					message: "Flow grant was not created",
 				});
-			}
-
 			await writeAuditLog(ctx, {
 				action: "flow.access_granted",
 				targetType: "flow_access_grant",
@@ -562,45 +533,56 @@ export const tenantRouter = router({
 				targetDisplay: member.email,
 				after: {
 					flowId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					capability: grant.capability,
 				},
 			});
 			return grant;
 		}),
 
-	revokeFlowAccess: protectedProcedure
-		.input(z.object({ flowId: z.string().min(1), userId: z.string().min(1) }))
+	revokeFlowAccess: organizationPermissionProcedure("organization.flows.manage")
+		.input(
+			z.object({
+				tenantId: z.string().min(1),
+				flowId: z.string().min(1),
+				userId: z.string().min(1),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwnership(
-				ctx.db,
-				input.flowId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: flow.id })
+				.from(flow)
+				.where(
+					and(
+						eq(flow.id, input.flowId),
+						eq(flow.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
 			const [revoked] = await ctx.db
 				.delete(flowAccessGrant)
 				.where(
 					and(
 						eq(flowAccessGrant.flowId, found.id),
-						eq(flowAccessGrant.tenantId, found.tenantId),
+						eq(flowAccessGrant.tenantId, ctx.organization.id),
 						eq(flowAccessGrant.userId, input.userId),
 					),
 				)
 				.returning();
-			if (!revoked) {
+			if (!revoked)
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "Flow grant not found",
 				});
-			}
-
 			await writeAuditLog(ctx, {
 				action: "flow.access_revoked",
 				targetType: "flow_access_grant",
 				targetId: revoked.id,
 				before: {
 					flowId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					userId: revoked.userId,
 					capability: revoked.capability,
 				},
@@ -608,14 +590,25 @@ export const tenantRouter = router({
 			return { success: true };
 		}),
 
-	listDeviceGrants: protectedProcedure
-		.input(z.object({ deviceId: z.string().min(1) }))
+	listDeviceGrants: organizationPermissionProcedure(
+		"organization.devices.manage",
+	)
+		.input(
+			z.object({ tenantId: z.string().min(1), deviceId: z.string().min(1) }),
+		)
 		.query(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
-				ctx.db,
-				input.deviceId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: device.id })
+				.from(device)
+				.where(
+					and(
+						eq(device.id, input.deviceId),
+						eq(device.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 			return ctx.db
 				.select({
 					userId: deviceAccessGrant.userId,
@@ -631,24 +624,39 @@ export const tenantRouter = router({
 				.where(
 					and(
 						eq(deviceAccessGrant.deviceId, found.id),
-						eq(deviceAccessGrant.tenantId, found.tenantId),
+						eq(deviceAccessGrant.tenantId, ctx.organization.id),
 						eq(user.status, "active"),
 					),
 				)
 				.orderBy(desc(deviceAccessGrant.createdAt));
 		}),
 
-	grantDeviceAccess: protectedProcedure
-		.input(z.object({ deviceId: z.string().min(1), userId: z.string().min(1) }))
+	grantDeviceAccess: organizationPermissionProcedure(
+		"organization.devices.manage",
+	)
+		.input(
+			z.object({
+				tenantId: z.string().min(1),
+				deviceId: z.string().min(1),
+				userId: z.string().min(1),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
-				ctx.db,
-				input.deviceId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: device.id })
+				.from(device)
+				.where(
+					and(
+						eq(device.id, input.deviceId),
+						eq(device.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 			const member = await requireActiveTenantMember(
 				ctx.db,
-				found.tenantId,
+				ctx.organization.id,
 				input.userId,
 			);
 			const [grant] = await ctx.db
@@ -656,26 +664,21 @@ export const tenantRouter = router({
 				.values({
 					id: crypto.randomUUID(),
 					deviceId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					userId: member.id,
 					capability: "deploy",
 					grantedByUserId: ctx.currentUser.id,
 				})
 				.onConflictDoUpdate({
 					target: [deviceAccessGrant.deviceId, deviceAccessGrant.userId],
-					set: {
-						grantedByUserId: ctx.currentUser.id,
-						updatedAt: new Date(),
-					},
+					set: { grantedByUserId: ctx.currentUser.id, updatedAt: new Date() },
 				})
 				.returning();
-			if (!grant) {
+			if (!grant)
 				throw new TRPCError({
 					code: "INTERNAL_SERVER_ERROR",
 					message: "Device grant was not created",
 				});
-			}
-
 			await writeAuditLog(ctx, {
 				action: "device.access_granted",
 				targetType: "device_access_grant",
@@ -683,45 +686,58 @@ export const tenantRouter = router({
 				targetDisplay: member.email,
 				after: {
 					deviceId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					capability: "deploy",
 				},
 			});
 			return grant;
 		}),
 
-	revokeDeviceAccess: protectedProcedure
-		.input(z.object({ deviceId: z.string().min(1), userId: z.string().min(1) }))
+	revokeDeviceAccess: organizationPermissionProcedure(
+		"organization.devices.manage",
+	)
+		.input(
+			z.object({
+				tenantId: z.string().min(1),
+				deviceId: z.string().min(1),
+				userId: z.string().min(1),
+			}),
+		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireDeviceOwnership(
-				ctx.db,
-				input.deviceId,
-				ctx.currentUser.id,
-			);
+			const [found] = await ctx.db
+				.select({ id: device.id })
+				.from(device)
+				.where(
+					and(
+						eq(device.id, input.deviceId),
+						eq(device.tenantId, ctx.organization.id),
+					),
+				)
+				.limit(1);
+			if (!found)
+				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
 			const [revoked] = await ctx.db
 				.delete(deviceAccessGrant)
 				.where(
 					and(
 						eq(deviceAccessGrant.deviceId, found.id),
-						eq(deviceAccessGrant.tenantId, found.tenantId),
+						eq(deviceAccessGrant.tenantId, ctx.organization.id),
 						eq(deviceAccessGrant.userId, input.userId),
 					),
 				)
 				.returning();
-			if (!revoked) {
+			if (!revoked)
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "Device grant not found",
 				});
-			}
-
 			await writeAuditLog(ctx, {
 				action: "device.access_revoked",
 				targetType: "device_access_grant",
 				targetId: revoked.id,
 				before: {
 					deviceId: found.id,
-					tenantId: found.tenantId,
+					tenantId: ctx.organization.id,
 					userId: revoked.userId,
 					capability: revoked.capability,
 				},

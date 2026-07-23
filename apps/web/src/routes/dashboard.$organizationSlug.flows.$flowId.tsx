@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useActiveOrganization } from "@/components/active-organization";
 import {
 	categoryAccents,
 	createNode,
@@ -71,7 +72,9 @@ import { NodeConfigPanel } from "@/components/node-config-panel";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/flows/$flowId")({
+export const Route = createFileRoute(
+	"/dashboard/$organizationSlug/flows/$flowId",
+)({
 	component: FlowRoute,
 });
 
@@ -231,7 +234,7 @@ function ShareFlowDialog({
 		enabled: open,
 	});
 	const grantsQuery = useQuery({
-		...trpc.tenant.listFlowGrants.queryOptions({ flowId }),
+		...trpc.tenant.listFlowGrants.queryOptions({ tenantId, flowId }),
 		enabled: open,
 	});
 	const refetchSharing = () => {
@@ -339,7 +342,12 @@ function ShareFlowDialog({
 								type="button"
 								disabled={!memberId || grantAccess.isPending}
 								onClick={() =>
-									grantAccess.mutate({ flowId, userId: memberId, capability })
+									grantAccess.mutate({
+										tenantId,
+										flowId,
+										userId: memberId,
+										capability,
+									})
 								}
 							>
 								{grantAccess.isPending ? "Sharing..." : "Share"}
@@ -369,6 +377,7 @@ function ShareFlowDialog({
 											disabled={grantAccess.isPending || revokeAccess.isPending}
 											onChange={(event) =>
 												grantAccess.mutate({
+													tenantId,
 													flowId,
 													userId: grant.userId,
 													capability: event.target.value as "viewer" | "editor",
@@ -388,7 +397,11 @@ function ShareFlowDialog({
 											size="icon-sm"
 											disabled={grantAccess.isPending || revokeAccess.isPending}
 											onClick={() =>
-												revokeAccess.mutate({ flowId, userId: grant.userId })
+												revokeAccess.mutate({
+													tenantId,
+													flowId,
+													userId: grant.userId,
+												})
 											}
 											title={`Revoke access for ${grant.name || grant.email}`}
 										>
@@ -416,13 +429,14 @@ function ShareFlowDialog({
 }
 
 function FlowEditor() {
+	const organization = useActiveOrganization();
 	const { flowId } = Route.useParams();
 	const trpc = useTRPC();
 	const { data: flow, refetch } = useSuspenseQuery(
-		trpc.flow.getById.queryOptions({ id: flowId }),
+		trpc.flow.getById.queryOptions({ id: flowId, tenantId: organization.id }),
 	);
 	const isOwner = flow.accessCapability === "owner";
-	const canEdit = isOwner || flow.accessCapability === "editor";
+	const canEdit = isOwner;
 
 	const [nodes, setNodes, onNodesChange] = useNodesState(
 		ensureTriggerNode((flow.nodes as Node[]) ?? []),
@@ -497,7 +511,12 @@ function FlowEditor() {
 				edges: Record<string, unknown>[];
 			};
 			validateGraph(
-				{ id: flowId, nodes: graph.nodes, edges: graph.edges },
+				{
+					id: flowId,
+					tenantId: organization.id,
+					nodes: graph.nodes,
+					edges: graph.edges,
+				},
 				{
 					onSuccess: (diagnostics) => {
 						if (requestId === validationRequest.current) {
@@ -508,7 +527,7 @@ function FlowEditor() {
 			);
 		}, 250);
 		return () => window.clearTimeout(timeout);
-	}, [flowId, validateGraph, validationGraph]);
+	}, [flowId, organization.id, validateGraph, validationGraph]);
 
 	useEffect(() => {
 		if (initialized.current) return;
@@ -701,7 +720,7 @@ function FlowEditor() {
 	const handleRename = () => {
 		const name = renameValue.trim();
 		if (!name || name === flow.name) return;
-		renameMut.mutate({ id: flowId, name });
+		renameMut.mutate({ id: flowId, name, tenantId: organization.id });
 	};
 
 	const handleSave = () => {
@@ -709,6 +728,7 @@ function FlowEditor() {
 
 		saveMut.mutate({
 			id: flowId,
+			tenantId: organization.id,
 			nodes: nodes as unknown as Record<string, unknown>[],
 			edges: edges as unknown as Record<string, unknown>[],
 			...(triggerPayload && {
@@ -817,7 +837,8 @@ function FlowEditor() {
 			<div className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4">
 				<div className="flex items-center gap-3">
 					<Link
-						to="/dashboard/flows"
+						to="/dashboard/$organizationSlug/flows"
+						params={{ organizationSlug: organization.slug }}
 						className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
 					>
 						<ArrowLeft className="size-3.5" />
@@ -913,16 +934,16 @@ function FlowEditor() {
 					)}
 
 					<Link
-						to="/dashboard/flows/$flowId/sessions"
-						params={{ flowId }}
+						to="/dashboard/$organizationSlug/flows/$flowId/sessions"
+						params={{ organizationSlug: organization.slug, flowId }}
 						className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
 					>
 						<Users className="size-3.5" />
 						Sessions
 					</Link>
 					<Link
-						to="/dashboard/flows/$flowId/logs"
-						params={{ flowId }}
+						to="/dashboard/$organizationSlug/flows/$flowId/logs"
+						params={{ organizationSlug: organization.slug, flowId }}
 						className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
 					>
 						<ScrollText className="size-3.5" />
@@ -1138,12 +1159,16 @@ function DeployDialog({
 	flowName: string;
 	disabled: boolean;
 }) {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const [open, setOpen] = useState(false);
 	const [deviceId, setDeviceId] = useState("");
 
 	const { data: devices } = useSuspenseQuery(
-		trpc.device.listForDeploy.queryOptions({ flowId }),
+		trpc.device.listForDeploy.queryOptions({
+			flowId,
+			tenantId: organization.id,
+		}),
 	);
 
 	const deployMut = useMutation(
@@ -1216,7 +1241,13 @@ function DeployDialog({
 					<Button
 						size="sm"
 						disabled={!deviceId || deployMut.isPending}
-						onClick={() => deployMut.mutate({ id: flowId, deviceId })}
+						onClick={() =>
+							deployMut.mutate({
+								id: flowId,
+								deviceId,
+								tenantId: organization.id,
+							})
+						}
 					>
 						{deployMut.isPending ? "Deploying..." : "Deploy"}
 					</Button>

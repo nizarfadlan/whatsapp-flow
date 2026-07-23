@@ -60,6 +60,18 @@ const {
 	validateFlowGraphDiagnostics,
 } = await import("./flow");
 
+const organizationMembership = {
+	tenantId: "tenant-1",
+	userId: "user-1",
+	role: "member",
+	organization: {
+		id: "tenant-1",
+		name: "Organization",
+		slug: "organization",
+		status: "active",
+	},
+};
+
 type Selection = Record<string, unknown> | undefined;
 
 function createMockDb(selects: unknown[][]) {
@@ -93,7 +105,13 @@ function createMockDb(selects: unknown[][]) {
 }
 
 function createCaller(selects: unknown[][]) {
-	const mockDb = createMockDb(selects);
+	const mockDb = createMockDb([
+		selects[0] ?? [],
+		[organizationMembership],
+		[organizationMembership],
+		[{ key: "organization.flows.read" }],
+		...selects.slice(1),
+	]);
 	return {
 		caller: flowRouter.createCaller({
 			auth: null,
@@ -124,12 +142,12 @@ describe("flow ownership provenance", () => {
 					name: "Support",
 					ownerName: "Flow Owner",
 					ownerEmail: "owner@example.com",
-					accessCapability: "viewer",
+					accessCapability: "owner",
 				},
 			],
 		]);
 
-		const flows = await caller.list();
+		const flows = await caller.list({ tenantId: "tenant-1" });
 		expect(
 			flows.map(({ id, name, accessCapability, owner }) => ({
 				id,
@@ -141,11 +159,11 @@ describe("flow ownership provenance", () => {
 			{
 				id: "flow-1",
 				name: "Support",
-				accessCapability: "viewer",
+				accessCapability: "owner",
 				owner: { name: "Flow Owner", email: "owner@example.com" },
 			},
 		]);
-		expect(Object.keys(selections[1] ?? {}).sort()).toEqual([
+		expect(Object.keys(selections[4] ?? {}).sort()).toEqual([
 			"accessCapability",
 			"createdAt",
 			"description",
@@ -166,24 +184,24 @@ describe("flow ownership provenance", () => {
 			[makeCurrentUser()],
 			[
 				{
-					flow: {
-						id: "flow-1",
-						userId: "owner-1",
-						nodes: [],
-						edges: [],
-					},
-					grantCapability: "viewer",
+					id: "flow-1",
+					userId: "owner-1",
+					tenantId: "tenant-1",
+					nodes: [],
+					edges: [],
 				},
 			],
 			[{ name: "Flow Owner", email: "owner@example.com" }],
 		]);
 
-		await expect(caller.getById({ id: "flow-1" })).resolves.toMatchObject({
+		await expect(
+			caller.getById({ tenantId: "tenant-1", id: "flow-1" }),
+		).resolves.toMatchObject({
 			id: "flow-1",
-			accessCapability: "viewer",
+			accessCapability: "owner",
 			owner: { name: "Flow Owner", email: "owner@example.com" },
 		});
-		expect(Object.keys(selections[2] ?? {}).sort()).toEqual(["email", "name"]);
+		expect(Object.keys(selections[5] ?? {}).sort()).toEqual(["email", "name"]);
 	});
 });
 

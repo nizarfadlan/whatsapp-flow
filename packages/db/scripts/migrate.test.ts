@@ -64,14 +64,14 @@ describe("isKnownMigrationLedgerPrefix", () => {
 });
 
 describe("requiredApplicationTablesForAppliedMigrations", () => {
-	test("allows the baseline prefix to upgrade into tenant sharing", () => {
-		expect(requiredApplicationTablesForAppliedMigrations(1)).not.toContain(
+	test("allows a prefix before tenant sharing to upgrade", () => {
+		expect(requiredApplicationTablesForAppliedMigrations(3)).not.toContain(
 			"flow_access_grant",
 		);
 	});
 
 	test("requires tenant sharing tables after their migration is recorded", () => {
-		expect(requiredApplicationTablesForAppliedMigrations(2)).toEqual(
+		expect(requiredApplicationTablesForAppliedMigrations(4)).toEqual(
 			expect.arrayContaining([
 				"device_access_grant",
 				"flow_access_grant",
@@ -79,6 +79,18 @@ describe("requiredApplicationTablesForAppliedMigrations", () => {
 				"tenant",
 				"tenant_invitation",
 				"tenant_member",
+			]),
+		);
+	});
+
+	test("requires organization foundation tables after their migration is recorded", () => {
+		expect(requiredApplicationTablesForAppliedMigrations(6)).toEqual(
+			expect.arrayContaining([
+				"tenant_member_provenance",
+				"tenant_permission",
+				"tenant_role",
+				"tenant_role_assignment",
+				"tenant_role_permission",
 			]),
 		);
 	});

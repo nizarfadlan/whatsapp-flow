@@ -28,7 +28,7 @@ import { z } from "zod";
 import { useInboxSSE } from "@/hooks/use-inbox-sse";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/inbox")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/inbox")({
 	validateSearch: z.object({
 		thread: z.string().optional(),
 	}),

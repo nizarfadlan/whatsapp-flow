@@ -8,16 +8,10 @@ import {
 	flowAccessGrant,
 	flowTriggerSecret,
 } from "@whatsapp-flow/db/schema/device";
-import { tenantMember } from "@whatsapp-flow/db/schema/tenant";
 import { connectionManager } from "@whatsapp-flow/whatsapp";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-	requireDeviceDeployAccess,
-	requireFlowAccess,
-	requireFlowOwner,
-	requireTenantMembership,
-} from "../authorization/tenant-access";
+import { requireOrganizationPermission } from "../authorization/organization";
 import { validateCronExpression } from "../engine/cron";
 import {
 	deleteFlowNodeSecret,
@@ -26,7 +20,7 @@ import {
 	upsertFlowNodeSecret,
 	WEBHOOK_AUTH_SECRET_KEY,
 } from "../engine/flow-node-secrets";
-import { protectedProcedure, router } from "../index";
+import { organizationPermissionProcedure, router } from "../index";
 
 const jsonSchema = z.unknown();
 
@@ -951,80 +945,110 @@ export function validateFlowGraph(nodes: FlowNode[], edges: FlowEdge[]) {
 	return null;
 }
 
+async function requireOrganizationFlow(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	flowId: string,
+	tenantId: string,
+) {
+	const [found] = await db
+		.select()
+		.from(flow)
+		.where(and(eq(flow.id, flowId), eq(flow.tenantId, tenantId)))
+		.limit(1);
+
+	if (!found) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
+	}
+
+	return found;
+}
+
+async function requireOrganizationDevice(
+	db: ReturnType<typeof import("@whatsapp-flow/db").createDb>,
+	deviceId: string,
+	tenantId: string,
+) {
+	const [found] = await db
+		.select({
+			id: device.id,
+			tenantId: device.tenantId,
+			provider: device.provider,
+			status: device.status,
+		})
+		.from(device)
+		.where(and(eq(device.id, deviceId), eq(device.tenantId, tenantId)))
+		.limit(1);
+
+	if (!found) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
+	}
+
+	return found;
+}
+
 export const flowRouter = router({
-	list: protectedProcedure.query(async ({ ctx }) => {
-		const flows = await ctx.db
-			.select({
-				id: flow.id,
-				name: flow.name,
-				description: flow.description,
-				status: flow.status,
-				triggerType: flow.triggerType,
-				deviceId: flow.deviceId,
-				deviceName: device.name,
-				ownerName: user.name,
-				ownerEmail: user.email,
-				accessCapability: sql<
-					"owner" | "editor" | "viewer"
-				>`case when ${flow.userId} = ${ctx.session.user.id} then 'owner' else ${flowAccessGrant.capability} end`,
-				createdAt: flow.createdAt,
-				updatedAt: flow.updatedAt,
-			})
-			.from(flow)
-			.innerJoin(user, eq(user.id, flow.userId))
-			.innerJoin(
-				tenantMember,
-				and(
-					eq(tenantMember.tenantId, flow.tenantId),
-					eq(tenantMember.userId, ctx.session.user.id),
-				),
-			)
-			.leftJoin(
-				flowAccessGrant,
-				and(
-					eq(flowAccessGrant.flowId, flow.id),
-					eq(flowAccessGrant.tenantId, flow.tenantId),
-					eq(flowAccessGrant.userId, ctx.session.user.id),
-				),
-			)
-			.leftJoin(device, eq(flow.deviceId, device.id))
-			.where(
-				or(
-					eq(flow.userId, ctx.session.user.id),
-					eq(flowAccessGrant.userId, ctx.session.user.id),
-				),
-			)
-			.orderBy(desc(flow.updatedAt));
+	list: organizationPermissionProcedure("organization.flows.read").query(
+		async ({ ctx }) => {
+			const flows = await ctx.db
+				.select({
+					id: flow.id,
+					name: flow.name,
+					description: flow.description,
+					status: flow.status,
+					triggerType: flow.triggerType,
+					deviceId: flow.deviceId,
+					deviceName: device.name,
+					ownerName: user.name,
+					ownerEmail: user.email,
+					accessCapability: sql<
+						"owner" | "editor" | "viewer"
+					>`coalesce(${flowAccessGrant.capability}, 'owner')`,
+					createdAt: flow.createdAt,
+					updatedAt: flow.updatedAt,
+				})
+				.from(flow)
+				.innerJoin(user, eq(user.id, flow.userId))
+				.leftJoin(
+					flowAccessGrant,
+					and(
+						eq(flowAccessGrant.flowId, flow.id),
+						eq(flowAccessGrant.tenantId, flow.tenantId),
+						eq(flowAccessGrant.userId, ctx.currentUser.id),
+					),
+				)
+				.leftJoin(device, eq(flow.deviceId, device.id))
+				.where(eq(flow.tenantId, ctx.organization.id))
+				.orderBy(desc(flow.updatedAt));
 
-		return flows.map(({ ownerName, ownerEmail, ...flow }) => ({
-			...flow,
-			owner: { name: ownerName, email: ownerEmail },
-		}));
-	}),
+			return flows.map(({ ownerName, ownerEmail, ...flow }) => ({
+				...flow,
+				owner: { name: ownerName, email: ownerEmail },
+			}));
+		},
+	),
 
-	getById: protectedProcedure
+	getById: organizationPermissionProcedure("organization.flows.read")
 		.input(z.object({ id: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const access = await requireFlowAccess(
+			const found = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
-				"viewer",
+				ctx.organization.id,
 			);
 			const [owner] = await ctx.db
 				.select({ name: user.name, email: user.email })
 				.from(user)
-				.where(eq(user.id, access.flow.userId))
+				.where(eq(user.id, found.userId))
 				.limit(1);
 
 			return {
-				...sanitizeFlowForClient(access.flow),
-				accessCapability: access.capability,
+				...sanitizeFlowForClient(found),
+				accessCapability: "owner" as const,
 				owner: owner ?? null,
 			};
 		}),
 
-	validateGraph: protectedProcedure
+	validateGraph: organizationPermissionProcedure("organization.flows.manage")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -1033,7 +1057,7 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			await requireFlowAccess(ctx.db, input.id, ctx.session.user.id, "editor");
+			await requireOrganizationFlow(ctx.db, input.id, ctx.organization.id);
 			const nodes = Array.isArray(input.nodes)
 				? (input.nodes as FlowNode[])
 				: [];
@@ -1043,11 +1067,11 @@ export const flowRouter = router({
 			return validateFlowGraphDiagnostics(nodes, edges);
 		}),
 
-	create: protectedProcedure
+	create: organizationPermissionProcedure("organization.flows.manage")
 		.input(
 			z.object({
 				name: z.string().min(1),
-				tenantId: z.string().min(1).optional(),
+				tenantId: z.string().min(1),
 				description: z.string().optional(),
 				triggerType: z
 					.enum(["keyword", "any_message", "webhook", "schedule"])
@@ -1056,8 +1080,6 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const tenantId = input.tenantId ?? ctx.session.user.id;
-			await requireTenantMembership(ctx.db, tenantId, ctx.session.user.id);
 			await requireTriggerTagOwnership(
 				ctx.db,
 				input.triggerConfig,
@@ -1068,8 +1090,8 @@ export const flowRouter = router({
 				.insert(flow)
 				.values({
 					id,
-					userId: ctx.session.user.id,
-					tenantId,
+					userId: ctx.currentUser.id,
+					tenantId: ctx.organization.id,
 					name: input.name,
 					description: input.description ?? null,
 					triggerType: (input.triggerType ?? "keyword") as
@@ -1092,13 +1114,15 @@ export const flowRouter = router({
 			return rows[0];
 		}),
 
-	rotateWebhookToken: protectedProcedure
+	rotateWebhookToken: organizationPermissionProcedure(
+		"organization.flows.manage",
+	)
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwner(
+			const found = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			if (found.triggerType !== "webhook") {
 				throw new TRPCError({
@@ -1127,7 +1151,7 @@ export const flowRouter = router({
 			return { token };
 		}),
 
-	update: protectedProcedure
+	update: organizationPermissionProcedure("organization.flows.manage")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -1143,30 +1167,23 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const access = await requireFlowAccess(
+			const found = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
-				"editor",
+				ctx.organization.id,
 			);
-			const found = access.flow;
-			if (input.deviceId !== undefined) {
-				if (access.capability !== "owner") {
-					throw new TRPCError({ code: "NOT_FOUND", message: "Flow not found" });
-				}
-				if (input.deviceId) {
-					const targetDevice = await requireDeviceDeployAccess(
-						ctx.db,
-						input.deviceId,
-						ctx.session.user.id,
-					);
-					if (targetDevice.tenantId !== found.tenantId) {
-						throw new TRPCError({
-							code: "NOT_FOUND",
-							message: "Device not found",
-						});
-					}
-				}
+			if (input.deviceId) {
+				await requireOrganizationPermission(
+					ctx.db,
+					ctx.organization.id,
+					ctx.currentUser.id,
+					"organization.devices.read",
+				);
+				await requireOrganizationDevice(
+					ctx.db,
+					input.deviceId,
+					ctx.organization.id,
+				);
 			}
 			const persistUpdates = async (db: typeof ctx.db) => {
 				const { id, ...updates } = input;
@@ -1223,15 +1240,15 @@ export const flowRouter = router({
 				: persistUpdates(ctx.db);
 		}),
 
-	delete: protectedProcedure
+	delete: organizationPermissionProcedure("organization.flows.manage")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			await requireFlowOwner(ctx.db, input.id, ctx.session.user.id);
+			await requireOrganizationFlow(ctx.db, input.id, ctx.organization.id);
 			await ctx.db.delete(flow).where(eq(flow.id, input.id));
 			return { success: true };
 		}),
 
-	toggleStatus: protectedProcedure
+	toggleStatus: organizationPermissionProcedure("organization.flows.execute")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -1239,10 +1256,10 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const found = await requireFlowOwner(
+			const found = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 
 			if (input.status === "active") {
@@ -1267,10 +1284,16 @@ export const flowRouter = router({
 					});
 				}
 
-				const targetDevice = await requireDeviceDeployAccess(
+				await requireOrganizationPermission(
+					ctx.db,
+					ctx.organization.id,
+					ctx.currentUser.id,
+					"organization.devices.read",
+				);
+				const targetDevice = await requireOrganizationDevice(
 					ctx.db,
 					found.deviceId,
-					ctx.session.user.id,
+					ctx.organization.id,
 				);
 				if (targetDevice.tenantId !== found.tenantId) {
 					throw new TRPCError({
@@ -1299,7 +1322,7 @@ export const flowRouter = router({
 			return { success: true };
 		}),
 
-	deploy: protectedProcedure
+	deploy: organizationPermissionProcedure("organization.flows.execute")
 		.input(
 			z.object({
 				id: z.string().min(1),
@@ -1307,13 +1330,11 @@ export const flowRouter = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const access = await requireFlowAccess(
+			const found = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
-				"editor",
+				ctx.organization.id,
 			);
-			const found = access.flow;
 
 			const nodes = Array.isArray(found.nodes)
 				? (found.nodes as FlowNode[])
@@ -1326,10 +1347,16 @@ export const flowRouter = router({
 				throw new TRPCError({ code: "BAD_REQUEST", message: validationError });
 			}
 
-			const targetDevice = await requireDeviceDeployAccess(
+			await requireOrganizationPermission(
+				ctx.db,
+				ctx.organization.id,
+				ctx.currentUser.id,
+				"organization.devices.read",
+			);
+			const targetDevice = await requireOrganizationDevice(
 				ctx.db,
 				input.deviceId,
-				ctx.session.user.id,
+				ctx.organization.id,
 			);
 			if (targetDevice.tenantId !== found.tenantId) {
 				throw new TRPCError({ code: "NOT_FOUND", message: "Device not found" });
@@ -1367,16 +1394,14 @@ export const flowRouter = router({
 			return { success: true };
 		}),
 
-	duplicate: protectedProcedure
+	duplicate: organizationPermissionProcedure("organization.flows.manage")
 		.input(z.object({ id: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
-			const access = await requireFlowAccess(
+			const original = await requireOrganizationFlow(
 				ctx.db,
 				input.id,
-				ctx.session.user.id,
-				"editor",
+				ctx.organization.id,
 			);
-			const original = access.flow;
 
 			const newId = crypto.randomUUID();
 			const rows = await ctx.db

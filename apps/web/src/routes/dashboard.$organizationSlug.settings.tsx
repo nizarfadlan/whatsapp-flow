@@ -77,7 +77,7 @@ import { toast } from "sonner";
 import { MediaUpload } from "@/components/media-upload";
 import { useTRPC } from "@/utils/trpc";
 
-export const Route = createFileRoute("/dashboard/settings")({
+export const Route = createFileRoute("/dashboard/$organizationSlug/settings")({
 	component: SettingsPage,
 });
 

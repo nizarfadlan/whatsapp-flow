@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { useActiveOrganization } from "@/components/active-organization";
 import { useTRPC } from "@/utils/trpc";
 
 type DeviceListItem = {
@@ -19,12 +20,13 @@ type DeviceStatusEvent = {
 };
 
 export function useDeviceStatusSSE() {
+	const organization = useActiveOrganization();
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 
 	useEffect(() => {
 		const es = new EventSource(
-			`${import.meta.env.VITE_SERVER_URL}/api/events`,
+			`${import.meta.env.VITE_SERVER_URL}/api/events?tenantId=${encodeURIComponent(organization.id)}`,
 			{
 				withCredentials: true,
 			},
@@ -35,7 +37,7 @@ export function useDeviceStatusSSE() {
 
 			if (data.type === "status") {
 				queryClient.setQueryData<DeviceListItem[]>(
-					trpc.device.list.queryKey(),
+					trpc.device.list.queryKey({ tenantId: organization.id }),
 					(old) => {
 						if (!old) return old;
 						return old.map((device) =>
@@ -55,5 +57,5 @@ export function useDeviceStatusSSE() {
 		return () => {
 			es.close();
 		};
-	}, [queryClient, trpc]);
+	}, [organization.id, queryClient, trpc]);
 }
